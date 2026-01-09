@@ -37,7 +37,11 @@ A native macOS app for batch transcribing audio files to markdown using OpenAI W
 
 **This is a fully self-contained app** - no additional installation required.
 
-### Option 2: Build from Source
+### Option 2: Run Locally (Development)
+
+**Prerequisites:**
+- Python 3.10+
+- ffmpeg (`brew install ffmpeg`)
 
 ```bash
 # Clone the repository
@@ -48,7 +52,17 @@ cd bulk-transcribe
 python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 
-# Build the app
+# Run the app
+./venv/bin/python app.py
+```
+
+**Advantage of running locally:** When running from source, you get live transcription snippets displayed during processing, showing the latest transcribed text in real-time. This feature is not available in the DMG version because the bundled Whisper Python library doesn't support streaming text output during transcription.
+
+### Option 3: Build from Source
+
+```bash
+# After completing Option 2 setup, build the standalone app
+./venv/bin/pip install pyinstaller
 ./venv/bin/python -m PyInstaller --clean --noconfirm whisper_app.spec
 
 # Create DMG (optional)
