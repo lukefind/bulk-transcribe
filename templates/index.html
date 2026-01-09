@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bulk Transcribe</title>
+    <link rel="icon" type="image/png" href="/static/favicon-32x32.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: { 50: '#eef2ff', 100: '#e0e7ff', 200: '#c7d2fe', 300: '#a5b4fc', 400: '#818cf8', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 800: '#3730a3', 900: '#312e81' },
+                        surface: { 50: '#f8fafc', 100: '#f1f5f9', 200: '#e2e8f0', 700: '#1e293b', 800: '#0f172a', 900: '#020617' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%); }
+        .glass { background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(99, 102, 241, 0.1); }
+        .glass-light { background: rgba(30, 41, 59, 0.5); backdrop-filter: blur(8px); }
+        .spinner { border: 2px solid rgba(99, 102, 241, 0.2); border-top: 2px solid #818cf8; border-radius: 50%; width: 18px; height: 18px; animation: spin 0.8s linear infinite; display: inline-block; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .input-field { transition: all 0.2s ease; }
+        .input-field:focus { box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2); }
+        .btn-primary { background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); transition: all 0.2s ease; }
+        .btn-primary:hover { background: linear-gradient(135deg, #818cf8 0%, #6366f1 100%); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3); }
+        .btn-primary:disabled { background: #374151; transform: none; box-shadow: none; }
+        .card { transition: all 0.2s ease; }
+        .card:hover { border-color: rgba(99, 102, 241, 0.3); }
+    </style>
+</head>
+<body class="text-gray-100 min-h-screen">
+    <!-- Header -->
+    <header class="border-b border-primary-900/30">
+        <div class="max-w-4xl mx-auto px-6 py-6">
+            <div class="flex items-center gap-4">
+                <img src="/static/apple-icon-60x60.png" alt="Bulk Transcribe" class="w-14 h-14 rounded-2xl shadow-lg shadow-primary-500/20">
+                <div>
+                    <h1 class="text-2xl font-bold bg-gradient-to-r from-white to-primary-200 bg-clip-text text-transparent">Bulk Transcribe</h1>
+                    <p class="text-sm text-gray-400">Audio to markdown using OpenAI Whisper</p>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-4xl mx-auto px-6 py-8">
+        <form id="transcribeForm" class="space-y-6">
+            <!-- Two Column Layout for Folders -->
+            <div class="grid md:grid-cols-2 gap-4">
+                <!-- Input Folder -->
+                <div class="glass rounded-2xl p-5 card">
+                    <label class="flex items-center gap-2 text-sm font-medium text-gray-300 mb-3">
+                        <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+                        </svg>
+                        Input Folder
+                    </label>
+                    <div class="flex gap-2">
+                        <input type="text" id="inputFolder" 
+                               class="input-field flex-1 px-4 py-2.5 bg-surface-800/50 border border-gray-700/50 rounded-xl text-white placeholder-gray-500 text-sm"
+                               placeholder="Select audio folder" readonly>
+                        <button type="button" onclick="browseInput()" 
+                                class="px-4 py-2.5 bg-surface-700/80 hover:bg-surface-700 text-white text-sm font-medium rounded-xl transition-all border border-gray-600/30">
+                            Browse
+                        </button>
+                    </div>
+                    <div id="filePreview" class="mt-2 text-xs text-primary-300 hidden"></div>
+                </div>
+
+                <!-- Output Folder -->
+                <div class="glass rounded-2xl p-5 card">
+                    <label class="flex items-center gap-2 text-sm font-medium text-gray-300 mb-3">
+                        <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                        </svg>
+                        Output Folder
+                    </label>
+                    <div class="flex gap-2">
+                        <input type="text" id="outputFolder" 
+                               class="input-field flex-1 px-4 py-2.5 bg-surface-800/50 border border-gray-700/50 rounded-xl text-white placeholder-gray-500 text-sm"
+                               placeholder="Select output folder" readonly>
+                        <button type="button" onclick="browseOutput()" 
+                                class="px-4 py-2.5 bg-surface-700/80 hover:bg-surface-700 text-white text-sm font-medium rounded-xl transition-all border border-gray-600/30">
+                            Browse
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings Row -->
+            <div class="grid md:grid-cols-2 gap-4">
+                <!-- Model Selection -->
+                <div class="glass rounded-2xl p-5 card">
+                    <div class="flex items-center justify-between mb-3">
+                        <label class="flex items-center gap-2 text-sm font-medium text-gray-300">
+                            <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                            </svg>
+                            Model
+                        </label>
+                        <button type="button" onclick="toggleModelManager()" 
+                                class="text-xs text-primary-400 hover:text-primary-300 font-medium">
+                            Manage
+                        </button>
+                    </div>
+                    <select id="model" 
+                            class="input-field w-full px-4 py-2.5 bg-surface-800/50 border border-gray-700/50 rounded-xl text-white text-sm">
+                    </select>
+                    <div id="modelWarning" class="mt-2 text-xs text-amber-400 hidden">
+                        Model will be downloaded on first use
+                    </div>
+                </div>
+
+                <!-- Language Selection -->
+                <div class="glass rounded-2xl p-5 card">
+                    <label class="flex items-center gap-2 text-sm font-medium text-gray-300 mb-3">
+                        <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129"></path>
+                        </svg>
+                        Language
+                    </label>
+                    <select id="language" 
+                            class="input-field w-full px-4 py-2.5 bg-surface-800/50 border border-gray-700/50 rounded-xl text-white text-sm">
+                        {% for code, name in languages %}
+                        <option value="{{ code }}">{{ name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            
+            <!-- Model Manager (hidden by default) -->
+            <div id="modelManager" class="glass rounded-2xl p-5 hidden">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-sm font-semibold text-white flex items-center gap-2">
+                        <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                        </svg>
+                        Model Manager
+                    </h3>
+                    <button type="button" onclick="toggleModelManager()" class="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-surface-700/50">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                <div id="modelList" class="space-y-2"></div>
+                <div id="downloadProgress" class="mt-4 hidden">
+                    <div class="flex items-center gap-2 text-sm text-primary-300 bg-primary-900/20 rounded-xl p-3">
+                        <span class="spinner"></span>
+                        <span id="downloadProgressText">Downloading...</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Output Options -->
+            <div class="glass rounded-2xl p-5 card">
+                <label class="flex items-center gap-2 text-sm font-semibold text-white mb-4">
+                    <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path>
+                    </svg>
+                    Output Options
+                </label>
+                
+                <div class="grid md:grid-cols-2 gap-4">
+                    <div class="space-y-3">
+                        <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="includeSegments" checked
+                                   class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0">
+                            <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Segmented transcription</span>
+                        </label>
+                        <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="includeFull"
+                                   class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0">
+                            <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Full transcription</span>
+                        </label>
+                    </div>
+                    <div class="space-y-3">
+                        <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="includeTimestamps" checked
+                                   class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0">
+                            <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Include timestamps</span>
+                        </label>
+                        <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="wordTimestamps"
+                                   class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0">
+                            <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Word-level timestamps</span>
+                        </label>
+                        <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="overwriteExisting" 
+                                   class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0">
+                            <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Overwrite existing files</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Submit Button -->
+            <div class="flex gap-3">
+                <button type="submit" id="submitBtn"
+                        class="btn-primary flex-1 py-3.5 px-6 text-white font-semibold rounded-xl disabled:cursor-not-allowed">
+                    <span class="flex items-center justify-center gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        Start Transcription
+                    </span>
+                </button>
+                <button type="button" id="cancelBtn" onclick="cancelJob()"
+                        class="py-3.5 px-6 bg-red-600/80 hover:bg-red-600 text-white font-semibold rounded-xl transition-all hidden">
+                    Cancel
+                </button>
+            </div>
+        </form>
+
+        <!-- Progress Section -->
+        <div id="progressSection" class="mt-8 hidden">
+            <div class="glass rounded-2xl p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                        <svg class="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                        </svg>
+                        Progress
+                    </h2>
+                    <span id="progressCount" class="text-sm text-gray-400 bg-surface-700/50 px-3 py-1 rounded-full">0 / 0</span>
+                </div>
+                
+                <div class="w-full bg-surface-700/50 rounded-full h-2 mb-4 overflow-hidden">
+                    <div id="progressBar" class="bg-gradient-to-r from-primary-500 to-primary-400 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+                
+                <div id="currentFile" class="text-sm text-gray-300 flex items-center gap-2">
+                    <span class="spinner"></span>
+                    <span>Starting...</span>
+                </div>
+                
+                <!-- Per-file progress bar -->
+                <div id="fileProgressSection" class="mt-4 hidden">
+                    <div class="flex items-center justify-between text-xs text-gray-400 mb-1">
+                        <span>Current file progress</span>
+                        <span id="fileProgressPercent">0%</span>
+                    </div>
+                    <div class="w-full bg-surface-700/50 rounded-full h-1.5 overflow-hidden">
+                        <div id="fileProgressBar" class="bg-gradient-to-r from-green-500 to-emerald-400 h-1.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+                    </div>
+                </div>
+                
+                <!-- Live transcription preview -->
+                <div id="livePreview" class="mt-4 hidden">
+                    <div class="text-xs text-gray-400 mb-2">Latest transcribed text:</div>
+                    <div id="livePreviewText" class="text-sm text-gray-300 bg-surface-800/50 rounded-lg p-3 italic border-l-2 border-primary-500/50"></div>
+                </div>
+                
+                <div id="fileProgress" class="mt-3 text-xs text-gray-500 font-mono bg-surface-800/50 rounded-lg p-2 hidden"></div>
+                
+                <div id="modelDownload" class="mt-4 p-4 bg-amber-900/20 border border-amber-700/30 rounded-xl hidden">
+                    <div class="flex items-center gap-2 text-amber-300 text-sm">
+                        <span class="spinner"></span>
+                        <span>Downloading model (first time only)...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="resultsSection" class="mt-6 hidden">
+            <div class="glass rounded-2xl p-6">
+                <h2 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                    <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    Results
+                </h2>
+                <div id="resultsList" class="space-y-2"></div>
+            </div>
+        </div>
+
+        <!-- Error Display -->
+        <div id="errorSection" class="mt-6 hidden">
+            <div class="bg-red-900/30 border border-red-700/50 rounded-2xl p-5">
+                <div class="flex items-start gap-3">
+                    <svg class="w-5 h-5 text-red-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <p id="errorMessage" class="text-red-300 text-sm"></p>
+                </div>
+            </div>
+        </div>
+    </main>
+    
+    <!-- Footer -->
+    <footer class="border-t border-primary-900/20 mt-12">
+        <div class="max-w-4xl mx-auto px-6 py-4">
+            <p class="text-xs text-gray-500 text-center">Powered by OpenAI Whisper</p>
+        </div>
+    </footer>
+
+    <script>
+        const form = document.getElementById('transcribeForm');
+        const submitBtn = document.getElementById('submitBtn');
+        const progressSection = document.getElementById('progressSection');
+        const resultsSection = document.getElementById('resultsSection');
+        const errorSection = document.getElementById('errorSection');
+        
+        let statusInterval = null;
+        let downloadInterval = null;
+        let modelsData = [];
+        const cancelBtn = document.getElementById('cancelBtn');
+
+        // Load models on page load (handled in restoreSavedSettings section below)
+
+        let recommendedModel = 'base';
+        let userDefaultModel = null;
+
+        async function loadModels() {
+            try {
+                const response = await fetch('/models');
+                const data = await response.json();
+                modelsData = data.models || [];
+                recommendedModel = data.recommended || 'base';
+                userDefaultModel = data.user_default || null;
+                updateModelSelect();
+                updateModelList();
+            } catch (e) {
+                console.error('Failed to load models:', e);
+            }
+        }
+
+        function updateModelSelect() {
+            const select = document.getElementById('model');
+            const warning = document.getElementById('modelWarning');
+            select.innerHTML = '';
+            
+            modelsData.forEach(model => {
+                const option = document.createElement('option');
+                option.value = model.name;
+                let label = model.name;
+                if (model.name === userDefaultModel) label += ' (your default)';
+                else if (model.name === 'turbo') label += ' (recommended - fast + good)';
+                else if (model.name === 'tiny') label += ' (fastest)';
+                else if (model.name === 'base') label += ' (fast)';
+                else if (model.name === 'small') label += ' (balanced)';
+                else if (model.name === 'medium') label += ' (slow, better quality)';
+                else if (model.name === 'large') label += ' (slowest, best quality)';
+                if (model.downloaded) label += ' [downloaded]';
+                option.textContent = label;
+                // Select the recommended model (user default or best downloaded)
+                if (model.name === recommendedModel) option.selected = true;
+                select.appendChild(option);
+            });
+            
+            select.addEventListener('change', () => {
+                const selected = modelsData.find(m => m.name === select.value);
+                if (selected && !selected.downloaded) {
+                    warning.classList.remove('hidden');
+                } else {
+                    warning.classList.add('hidden');
+                }
+            });
+            
+            // Trigger initial check
+            select.dispatchEvent(new Event('change'));
+        }
+
+        function updateModelList() {
+            const list = document.getElementById('modelList');
+            list.innerHTML = '';
+            
+            modelsData.forEach(model => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center justify-between p-4 bg-surface-800/50 rounded-xl border border-gray-700/30 hover:border-primary-500/30 transition-all';
+                
+                const info = document.createElement('div');
+                info.innerHTML = `
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="font-semibold text-white">${model.name}</span>
+                        ${model.name === 'turbo' ? '<span class="text-xs bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-500/30">Recommended</span>' : ''}
+                        ${model.downloaded 
+                            ? '<span class="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full border border-green-500/30">Downloaded</span>' 
+                            : '<span class="text-xs bg-gray-600/30 text-gray-400 px-2 py-0.5 rounded-full border border-gray-600/30">Not Downloaded</span>'}
+                        ${model.name === userDefaultModel ? '<span class="text-xs bg-primary-500/20 text-primary-300 px-2 py-0.5 rounded-full border border-primary-500/30">Your Default</span>' : ''}
+                    </div>
+                    <div class="text-xs text-gray-500">
+                        <span class="text-gray-400">${model.size}</span> · RAM: ${model.ram} · ${model.speed} · ${model.accuracy}
+                    </div>
+                `;
+                
+                const actions = document.createElement('div');
+                actions.className = 'flex gap-2 flex-shrink-0';
+                if (model.downloaded) {
+                    const isDefault = model.name === userDefaultModel;
+                    actions.innerHTML = `
+                        ${!isDefault ? `<button onclick="setDefaultModel('${model.name}')" 
+                                class="text-xs px-3 py-1.5 bg-primary-600/20 hover:bg-primary-600/40 text-primary-300 rounded-lg transition-all border border-primary-500/30">
+                            Set Default
+                        </button>` : ''}
+                        <button onclick="deleteModel('${model.name}')" 
+                                class="text-xs px-3 py-1.5 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded-lg transition-all border border-red-500/30">
+                            Delete
+                        </button>
+                    `;
+                } else {
+                    actions.innerHTML = `
+                        <button onclick="downloadModel('${model.name}')" 
+                                class="text-xs px-4 py-1.5 bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-all font-medium">
+                            Download
+                        </button>
+                    `;
+                }
+                
+                div.appendChild(info);
+                div.appendChild(actions);
+                list.appendChild(div);
+            });
+        }
+
+        function toggleModelManager() {
+            const manager = document.getElementById('modelManager');
+            manager.classList.toggle('hidden');
+            if (!manager.classList.contains('hidden')) {
+                loadModels();
+            }
+        }
+
+        async function downloadModel(modelName) {
+            try {
+                const response = await fetch('/models/download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: modelName })
+                });
+                const data = await response.json();
+                
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+                
+                document.getElementById('downloadProgress').classList.remove('hidden');
+                startDownloadPolling();
+            } catch (e) {
+                showError('Failed to start download: ' + e.message);
+            }
+        }
+
+        function startDownloadPolling() {
+            downloadInterval = setInterval(checkDownloadStatus, 1000);
+        }
+
+        async function checkDownloadStatus() {
+            try {
+                const response = await fetch('/models/download/status');
+                const status = await response.json();
+                
+                document.getElementById('downloadProgressText').textContent = status.progress || 'Downloading...';
+                
+                if (!status.downloading) {
+                    clearInterval(downloadInterval);
+                    downloadInterval = null;
+                    document.getElementById('downloadProgress').classList.add('hidden');
+                    loadModels();
+                }
+            } catch (e) {
+                console.error('Download status check failed:', e);
+            }
+        }
+
+        async function deleteModel(modelName) {
+            if (!confirm(`Delete the ${modelName} model? You can re-download it later.`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/models/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: modelName })
+                });
+                const data = await response.json();
+                
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+                
+                loadModels();
+            } catch (e) {
+                showError('Failed to delete model: ' + e.message);
+            }
+        }
+
+        async function setDefaultModel(modelName) {
+            try {
+                const response = await fetch('/models/set-default', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: modelName })
+                });
+                const data = await response.json();
+                
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+                
+                loadModels();
+            } catch (e) {
+                showError('Failed to set default: ' + e.message);
+            }
+        }
+
+        async function cancelJob() {
+            try {
+                cancelBtn.disabled = true;
+                cancelBtn.textContent = 'Cancelling...';
+                const response = await fetch('/cancel', { method: 'POST' });
+                const data = await response.json();
+                if (data.error) {
+                    console.error('Cancel failed:', data.error);
+                }
+            } catch (e) {
+                console.error('Cancel failed:', e);
+            }
+        }
+
+        // LocalStorage keys
+        const STORAGE_KEYS = {
+            inputFolder: 'bulk_transcribe_input_folder',
+            outputFolder: 'bulk_transcribe_output_folder',
+            lastModel: 'bulk_transcribe_last_model',
+            lastLanguage: 'bulk_transcribe_last_language'
+        };
+
+        function saveToStorage(key, value) {
+            try { localStorage.setItem(key, value); } catch(e) {}
+        }
+
+        function loadFromStorage(key) {
+            try { return localStorage.getItem(key); } catch(e) { return null; }
+        }
+
+        // Restore saved folders on page load
+        function restoreSavedSettings() {
+            const savedInput = loadFromStorage(STORAGE_KEYS.inputFolder);
+            const savedOutput = loadFromStorage(STORAGE_KEYS.outputFolder);
+            const savedLanguage = loadFromStorage(STORAGE_KEYS.lastLanguage);
+            
+            if (savedInput) {
+                document.getElementById('inputFolder').value = savedInput;
+                previewFiles();
+            }
+            if (savedOutput) {
+                document.getElementById('outputFolder').value = savedOutput;
+            }
+            if (savedLanguage) {
+                document.getElementById('language').value = savedLanguage;
+            }
+        }
+
+        // Call restore after models are loaded
+        document.addEventListener('DOMContentLoaded', () => {
+            loadModels().then(() => {
+                restoreSavedSettings();
+            });
+            
+            // Save language when changed
+            document.getElementById('language').addEventListener('change', (e) => {
+                saveToStorage(STORAGE_KEYS.lastLanguage, e.target.value);
+            });
+        });
+
+        async function browseInput() {
+            try {
+                const response = await fetch('/browse', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: 'Select folder containing audio files' })
+                });
+                const data = await response.json();
+                if (data.folder) {
+                    document.getElementById('inputFolder').value = data.folder;
+                    saveToStorage(STORAGE_KEYS.inputFolder, data.folder);
+                    previewFiles();
+                }
+            } catch (e) {
+                console.error('Browse failed:', e);
+            }
+        }
+
+        async function browseOutput() {
+            try {
+                const response = await fetch('/browse', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: 'Select folder to save transcriptions' })
+                });
+                const data = await response.json();
+                if (data.folder) {
+                    document.getElementById('outputFolder').value = data.folder;
+                    saveToStorage(STORAGE_KEYS.outputFolder, data.folder);
+                }
+            } catch (e) {
+                console.error('Browse failed:', e);
+            }
+        }
+
+        async function previewFiles() {
+            const folder = document.getElementById('inputFolder').value;
+            const preview = document.getElementById('filePreview');
+            
+            if (!folder) {
+                preview.textContent = 'Enter a folder path first';
+                preview.classList.remove('hidden');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/preview?folder=${encodeURIComponent(folder)}`);
+                const data = await response.json();
+                
+                if (data.count > 0) {
+                    preview.innerHTML = `<strong>${data.count} audio files found:</strong><br>` + 
+                        data.files.slice(0, 10).join(', ') + 
+                        (data.count > 10 ? `... and ${data.count - 10} more` : '');
+                } else {
+                    preview.textContent = 'No audio files found in this folder';
+                }
+                preview.classList.remove('hidden');
+            } catch (e) {
+                preview.textContent = 'Error checking folder';
+                preview.classList.remove('hidden');
+            }
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const inputFolder = document.getElementById('inputFolder').value;
+            const outputFolder = document.getElementById('outputFolder').value;
+            const model = document.getElementById('model').value;
+            const language = document.getElementById('language').value;
+            const includeSegments = document.getElementById('includeSegments').checked;
+            const includeFull = document.getElementById('includeFull').checked;
+            const includeTimestamps = document.getElementById('includeTimestamps').checked;
+            const wordTimestamps = document.getElementById('wordTimestamps').checked;
+            
+            if (!inputFolder || !outputFolder) {
+                showError('Please fill in both input and output folders');
+                return;
+            }
+            
+            if (!includeSegments && !includeFull) {
+                showError('Please select at least one output format (segments or full)');
+                return;
+            }
+            
+            hideError();
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Transcribing...';
+            progressSection.classList.remove('hidden');
+            resultsSection.classList.add('hidden');
+            document.getElementById('resultsList').innerHTML = '';
+            
+            try {
+                const response = await fetch('/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        input_folder: inputFolder, 
+                        output_folder: outputFolder, 
+                        model, 
+                        language,
+                        include_segments: includeSegments,
+                        include_full: includeFull,
+                        include_timestamps: includeTimestamps,
+                        word_timestamps: wordTimestamps,
+                        overwrite_existing: document.getElementById('overwriteExisting').checked
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    showError(data.error);
+                    resetForm();
+                    return;
+                }
+                
+                // Show cancel button
+                cancelBtn.classList.remove('hidden');
+                cancelBtn.disabled = false;
+                cancelBtn.textContent = 'Cancel';
+                
+                startStatusPolling();
+                
+            } catch (e) {
+                showError('Failed to start transcription: ' + e.message);
+                resetForm();
+            }
+        });
+
+        function startStatusPolling() {
+            statusInterval = setInterval(checkStatus, 1000);
+        }
+
+        async function checkStatus() {
+            try {
+                const response = await fetch('/status');
+                const status = await response.json();
+                
+                updateProgress(status);
+                
+                if (!status.running) {
+                    clearInterval(statusInterval);
+                    statusInterval = null;
+                    onComplete(status);
+                }
+            } catch (e) {
+                console.error('Status check failed:', e);
+            }
+        }
+
+        function updateProgress(status) {
+            const percent = status.total > 0 ? (status.completed / status.total) * 100 : 0;
+            document.getElementById('progressBar').style.width = percent + '%';
+            document.getElementById('progressCount').textContent = `${status.completed} / ${status.total}`;
+            
+            if (status.current_file) {
+                document.getElementById('currentFile').innerHTML = 
+                    `<span class="spinner"></span><span>Processing: ${status.current_file}</span>`;
+            }
+            
+            // Per-file progress bar
+            const fileProgressSection = document.getElementById('fileProgressSection');
+            const fileProgressBar = document.getElementById('fileProgressBar');
+            const fileProgressPercent = document.getElementById('fileProgressPercent');
+            if (status.current_file_percent > 0) {
+                fileProgressSection.classList.remove('hidden');
+                fileProgressBar.style.width = status.current_file_percent + '%';
+                fileProgressPercent.textContent = status.current_file_percent + '%';
+            } else {
+                fileProgressSection.classList.add('hidden');
+            }
+            
+            // Live transcription preview
+            const livePreview = document.getElementById('livePreview');
+            const livePreviewText = document.getElementById('livePreviewText');
+            if (status.last_transcribed_text && status.last_transcribed_text.length > 0) {
+                livePreview.classList.remove('hidden');
+                livePreviewText.textContent = '"' + status.last_transcribed_text + '"';
+            } else {
+                livePreview.classList.add('hidden');
+            }
+            
+            // Per-file progress text
+            const fileProgress = document.getElementById('fileProgress');
+            if (status.current_file_progress) {
+                fileProgress.textContent = status.current_file_progress;
+                fileProgress.classList.remove('hidden');
+            } else {
+                fileProgress.classList.add('hidden');
+            }
+            
+            // Model download indicator
+            const modelDownload = document.getElementById('modelDownload');
+            if (status.downloading_model) {
+                modelDownload.classList.remove('hidden');
+            } else {
+                modelDownload.classList.add('hidden');
+            }
+        }
+
+        function onComplete(status) {
+            if (status.error) {
+                showError(status.error);
+            }
+            
+            document.getElementById('currentFile').innerHTML = '<span class="text-green-400">Complete</span>';
+            
+            if (status.results && status.results.length > 0) {
+                resultsSection.classList.remove('hidden');
+                const list = document.getElementById('resultsList');
+                
+                status.results.forEach(result => {
+                    const div = document.createElement('div');
+                    div.className = 'flex items-center justify-between p-3 bg-gray-800 rounded-lg';
+                    
+                    if (result.status === 'success') {
+                        div.innerHTML = `
+                            <span class="text-gray-300">${result.file}</span>
+                            <span class="text-green-400 text-sm">${result.output}</span>
+                        `;
+                    } else if (result.status === 'skipped') {
+                        div.innerHTML = `
+                            <span class="text-gray-300">${result.file}</span>
+                            <span class="text-yellow-400 text-sm">Skipped: ${result.message}</span>
+                        `;
+                    } else {
+                        div.innerHTML = `
+                            <span class="text-gray-300">${result.file}</span>
+                            <span class="text-red-400 text-sm">Error: ${result.message}</span>
+                        `;
+                    }
+                    list.appendChild(div);
+                });
+            }
+            
+            resetForm();
+        }
+
+        function resetForm() {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Start Transcription';
+            cancelBtn.classList.add('hidden');
+            cancelBtn.disabled = false;
+            cancelBtn.textContent = 'Cancel';
+        }
+
+        function showError(message) {
+            errorSection.classList.remove('hidden');
+            document.getElementById('errorMessage').textContent = message;
+        }
+
+        function hideError() {
+            errorSection.classList.add('hidden');
+        }
+    </script>
+</body>
+</html>

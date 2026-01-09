@@ -1,0 +1,4 @@
+flask>=2.0.0
+openai-whisper>=20231117
+pyinstaller>=6.0.0
+pywebview>=5.0.0
