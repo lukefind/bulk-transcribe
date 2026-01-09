@@ -71,9 +71,12 @@ COMMON_LANGUAGES = [
 transcription_status = {
     'running': False,
     'cancelled': False,
+    'cancel_after_file': False,  # Stop after current file(s) complete
     'current_file': '',
     'current_file_progress': '',
     'current_file_percent': 0,
+    'current_file_start': None,  # Timestamp when current file started
+    'current_file_elapsed': 0,  # Seconds elapsed on current file
     'last_transcribed_text': '',
     'completed': 0,
     'total': 0,
@@ -241,6 +244,7 @@ def transcribe_file(audio_file: Path, model: str, language: str, output_folder: 
         if whisper_model is None:
             transcription_status['current_file_progress'] = f'Loading {model} model...'
             transcription_status['current_file_percent'] = 5
+            # MPS has bugs with some audio files, use CPU for stability
             whisper_model = whisper.load_model(model)
         
         transcription_status['current_file_progress'] = 'Transcribing audio...'
@@ -267,10 +271,10 @@ def transcribe_file(audio_file: Path, model: str, language: str, output_folder: 
                 elapsed_str = f"{int(elapsed // 60)}m {int(elapsed % 60)}s" if elapsed >= 60 else f"{int(elapsed)}s"
                 
                 # Estimate progress based on audio duration
-                # Turbo model processes roughly 10-30x realtime depending on hardware
-                # Use conservative 5x estimate for progress bar
+                # CPU on Apple Silicon with turbo: ~0.5-1x realtime
+                # With parallel workers, each file is slower due to CPU contention
                 if audio_duration > 0:
-                    estimated_total_time = audio_duration / 5.0  # Assume 5x realtime
+                    estimated_total_time = audio_duration * 1.5  # Assume 0.67x realtime on CPU
                     estimated_pct = min(95, int(10 + (elapsed / estimated_total_time) * 85))
                 else:
                     # Fallback: assume 30 seconds per percent after initial 10%
@@ -310,9 +314,12 @@ def transcribe_file(audio_file: Path, model: str, language: str, output_folder: 
         if result.get('segments') and len(result['segments']) > 0:
             last_segment = result['segments'][-1]
             snippet = last_segment.get('text', '').strip()[:150]
+            print(f"[DEBUG] Setting snippet: '{snippet[:50]}...' from {len(result['segments'])} segments")
             if snippet:
                 with status_lock:
                     transcription_status['last_transcribed_text'] = snippet
+        else:
+            print(f"[DEBUG] No segments in result: {result.keys() if isinstance(result, dict) else type(result)}")
         
         # Save JSON output
         json_output_path = output_folder / (audio_file.stem + '.json')
@@ -405,13 +412,15 @@ def run_transcription(input_folder: str, output_folder: str, model: str, languag
     if options is None:
         options = {}
     
-    num_workers = max(1, min(4, options.get('workers', 1)))
+    processing_mode = options.get('processing_mode', 'metal')
+    num_workers = max(1, min(2, options.get('workers', 1)))  # Max 2 workers for CPU mode
     
     import time as time_module
     transcription_status['running'] = True
     transcription_status['active_jobs'] = 1
     transcription_status['active_workers'] = 0
     transcription_status['cancelled'] = False
+    transcription_status['cancel_after_file'] = False
     transcription_status['start_time'] = time_module.time()
     transcription_status['elapsed_seconds'] = 0
     transcription_status['last_transcribed_text'] = ''
@@ -465,16 +474,16 @@ def run_transcription(input_folder: str, output_folder: str, model: str, languag
                 return None
             
             # Track this file as being processed
+            import time
+            file_start_time = time.time()
             with status_lock:
                 transcription_status['current_files'].append(audio_file.name)
                 transcription_status['active_workers'] = len(transcription_status['current_files'])
                 if len(transcription_status['current_files']) == 1:
                     transcription_status['current_file'] = audio_file.name
+                    transcription_status['current_file_start'] = file_start_time
                 else:
                     transcription_status['current_file'] = f"{len(transcription_status['current_files'])} files"
-            
-            import time
-            file_start_time = time.time()
             
             try:
                 result = transcribe_file(
@@ -543,16 +552,25 @@ def run_transcription(input_folder: str, output_folder: str, model: str, languag
                         transcription_status['current_file'] = f"{len(transcription_status['current_files'])} files"
                 else:
                     transcription_status['current_file'] = ''
+                    transcription_status['current_file_start'] = None
             
             return result
         
-        if num_workers == 1:
-            # Single-threaded mode (original behavior, reuse one model)
+        if processing_mode == 'metal' or num_workers == 1:
+            # Single-threaded mode with Metal GPU (fastest on Apple Silicon)
             transcription_status['current_file_progress'] = f'Loading {model} model...'
             transcription_status['current_file_percent'] = 1
             try:
                 import whisper
-                whisper_model = whisper.load_model(model)
+                import torch
+                # Use MPS (Metal GPU) for Metal mode, CPU otherwise
+                if processing_mode == 'metal' and torch.backends.mps.is_available():
+                    device = "mps"
+                    transcription_status['current_file_progress'] = f'Loading {model} model (Metal GPU)...'
+                else:
+                    device = "cpu"
+                    transcription_status['current_file_progress'] = f'Loading {model} model (CPU)...'
+                whisper_model = whisper.load_model(model, device=device)
             except Exception as e:
                 transcription_status['error'] = f'Failed to load model: {str(e)[:200]}'
                 return
@@ -560,6 +578,9 @@ def run_transcription(input_folder: str, output_folder: str, model: str, languag
             for audio_file in files_to_process:
                 if transcription_status['cancelled']:
                     transcription_status['error'] = 'Cancelled by user'
+                    break
+                if transcription_status['cancel_after_file']:
+                    transcription_status['error'] = 'Stopped after completing file'
                     break
                 process_file(audio_file, whisper_model)
         else:
@@ -577,7 +598,8 @@ def run_transcription(input_folder: str, output_folder: str, model: str, languag
                     if transcription_status['cancelled']:
                         break
                     transcription_status['current_file_progress'] = f'Loading model {i+1}/{num_workers}...'
-                    worker_models.append(whisper.load_model(model))
+                    # Use CPU for parallel workers - MPS has issues with multiple models
+                    worker_models.append(whisper.load_model(model, device='cpu'))
             except Exception as e:
                 transcription_status['error'] = f'Failed to load models: {str(e)[:200]}'
                 return
@@ -594,6 +616,8 @@ def run_transcription(input_folder: str, output_folder: str, model: str, languag
                 for audio_file in files_to_process:
                     if transcription_status['cancelled']:
                         break
+                    if transcription_status['cancel_after_file']:
+                        break
                     # Round-robin assign models to workers
                     worker_model = worker_models[model_idx % len(worker_models)]
                     model_idx += 1
@@ -609,9 +633,14 @@ def run_transcription(input_folder: str, output_folder: str, model: str, languag
                         future.result()
                     except Exception:
                         pass
+                    # Check cancel_after_file after each file completes
+                    if transcription_status['cancel_after_file']:
+                        break
             
             if transcription_status['cancelled']:
                 transcription_status['error'] = 'Cancelled by user'
+            elif transcription_status['cancel_after_file']:
+                transcription_status['error'] = 'Stopped after completing file(s)'
         
     except Exception as e:
         transcription_status['error'] = str(e)
@@ -649,6 +678,7 @@ def start_transcription():
         'include_timestamps': data.get('include_timestamps', True),
         'word_timestamps': data.get('word_timestamps', False),
         'overwrite_existing': data.get('overwrite_existing', False),
+        'processing_mode': data.get('processing_mode', 'metal'),
         'workers': data.get('workers', 1),
     }
     
@@ -676,19 +706,43 @@ def get_status():
     # Update elapsed time if running
     if transcription_status['running'] and transcription_status.get('start_time'):
         transcription_status['elapsed_seconds'] = time_module.time() - transcription_status['start_time']
+    # Update current file elapsed time
+    if transcription_status.get('current_file_start'):
+        transcription_status['current_file_elapsed'] = time_module.time() - transcription_status['current_file_start']
+    else:
+        transcription_status['current_file_elapsed'] = 0
     return jsonify(transcription_status)
 
 
 @app.route('/cancel', methods=['POST'])
 def cancel_transcription():
-    """Cancel the current transcription job."""
+    """Cancel the current transcription job.
+    
+    Modes:
+    - 'force': Stop immediately (current file may be incomplete)
+    - 'after_file': Complete current file(s), then stop
+    """
     global transcription_status
     
     if not transcription_status['running']:
         return jsonify({'error': 'No transcription in progress'}), 400
     
-    transcription_status['cancelled'] = True
-    return jsonify({'status': 'cancelling'})
+    data = request.get_json() or {}
+    mode = data.get('mode', 'force')
+    
+    if mode == 'after_file':
+        transcription_status['cancel_after_file'] = True
+        return jsonify({'status': 'cancelling_after_file'})
+    else:
+        # Force stop - set cancelled and immediately mark as not running
+        # The background thread will clean up when it checks the flag
+        transcription_status['cancelled'] = True
+        transcription_status['running'] = False
+        transcription_status['error'] = 'Force stopped by user'
+        transcription_status['current_file'] = ''
+        transcription_status['current_file_progress'] = ''
+        transcription_status['current_file_percent'] = 0
+        return jsonify({'status': 'stopped'})
 
 
 @app.route('/preview')

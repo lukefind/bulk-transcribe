@@ -80,6 +80,22 @@ By default, files that already have output are **skipped**. This allows you to:
 
 Check this option to re-transcribe all files, even if output already exists.
 
+## Processing Modes
+
+### Metal GPU (Recommended)
+- **Speed**: ~5-6x realtime (20 min audio in ~3-4 min)
+- **Workers**: Single worker only
+- **Best for**: Apple Silicon Macs (M1/M2/M3)
+
+Metal GPU uses Apple's Metal Performance Shaders for hardware-accelerated transcription. This is the fastest option on Apple Silicon and is selected by default.
+
+### CPU Mode
+- **Speed**: ~0.5-1x realtime (20 min audio in ~20-40 min)
+- **Workers**: 1-2 parallel workers
+- **Best for**: Compatibility, older Intel Macs
+
+CPU mode is slower but more compatible. Use this if you experience errors with Metal GPU mode. With 2 workers, you can process 2 files simultaneously.
+
 ## During Transcription
 
 ### Progress Indicators
@@ -87,12 +103,18 @@ Check this option to re-transcribe all files, even if output already exists.
 - **Overall progress bar**: Shows how many files have been completed (e.g., "3/47")
 - **Current file**: Shows which file is being processed
 - **Per-file progress bar**: Shows percentage completion for the current file
+- **Elapsed time**: Shows how long the job has been running
+- **ETA**: Estimated time remaining based on completed files
 - **Status messages**: Shows current activity (loading model, transcribing)
 - **Skipped files**: Shown in yellow if output already exists
+- **Completed files**: Shows processing time and speed (e.g., "3m 27s · 5.8x")
 
 ### Cancelling
 
-Click the **Cancel** button to immediately stop transcription. Files already processed will be saved.
+Two cancel options are available:
+
+- **Cancel After File** (yellow button) - Completes the current file, then stops. Use this to safely stop without losing progress on the current file.
+- **Force Stop** (red button) - Stops immediately. The current file may be incomplete, but all previously completed files are saved.
 
 ### Persistent Settings
 
@@ -162,9 +184,10 @@ Each transcription is saved as a markdown file with the following structure:
 - Ensure clear speech without heavy accents or background noise
 
 ### Slow Performance
-- Use a smaller model
+- **Use Metal GPU mode** (default) - ~5-6x faster than CPU on Apple Silicon
+- Use a smaller model (tiny or base for quick drafts)
 - Close other applications to free RAM
-- Process fewer files at once
+- For CPU mode, try 2 workers for parallel processing
 
 ## Privacy
 
@@ -175,6 +198,6 @@ Each transcription is saved as a markdown file with the following structure:
 ## System Requirements
 
 - **macOS**: 10.15 (Catalina) or later
-- **RAM**: 4GB minimum, 8GB+ recommended for larger models
-- **Storage**: ~500MB for app, plus model cache (~150MB-3GB depending on models used)
-- **Processor**: Apple Silicon (M1/M2/M3) or Intel
+- **Processor**: Apple Silicon (M1/M2/M3) recommended for Metal GPU acceleration
+- **RAM**: 8GB minimum, 16GB+ recommended for turbo model
+- **Storage**: ~500MB for app, plus model cache (~6GB for turbo model)

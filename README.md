@@ -9,16 +9,17 @@ A native macOS app for batch transcribing audio files to markdown using OpenAI W
 ## Features
 
 - **Native macOS App** - Runs in its own window, no browser required
+- **Metal GPU Acceleration** - ~5-6x realtime on Apple Silicon (M1/M2/M3)
 - **Batch Processing** - Transcribe entire folders of audio files
 - **Skip Existing Files** - Resume interrupted jobs without re-transcribing
 - **Multiple Formats** - MP3, WAV, M4A, FLAC, OGG, WebM, MP4, MOV, AVI
 - **Model Management** - Download, delete, and switch between Whisper models
-- **Smart Defaults** - Turbo model recommended for best speed/quality balance
+- **Smart Defaults** - Turbo model with Metal GPU for best speed/quality
 - **Language Support** - Auto-detect or specify from 12+ languages
 - **Flexible Output** - Segmented, full text, or both with optional timestamps
-- **Real-time Progress** - Per-file progress bar with percentage
+- **Real-time Progress** - Per-file progress bar, ETA, and elapsed time
 - **Persistent Settings** - Folder selections and preferences saved across sessions
-- **Cancel Support** - Immediately stops transcription
+- **Cancel Options** - Force stop or cancel after current file
 
 ## Screenshots
 
@@ -55,8 +56,6 @@ python3 -m venv venv
 # Run the app
 ./venv/bin/python app.py
 ```
-
-**Advantage of running locally:** When running from source, you get live transcription snippets displayed during processing, showing the latest transcribed text in real-time. This feature is not available in the DMG version because the bundled Whisper Python library doesn't support streaming text output during transcription.
 
 ### Option 3: Build from Source
 
@@ -100,15 +99,27 @@ By default, files that already have a `_transcription.md` output are skipped. Th
 - **Word-level Timestamps** - Detailed per-word timing (slower)
 - **Overwrite existing files** - Re-transcribe files that already have output
 
+## Processing Modes
+
+| Mode | Speed | Workers | Best For |
+|------|-------|---------|----------|
+| **Metal GPU** | ~5-6x realtime | 1 | Apple Silicon Macs (recommended) |
+| CPU | ~0.5-1x realtime | 1-2 | Compatibility, older Macs |
+
+- **Metal GPU (default)** - Uses Apple's Metal Performance Shaders for GPU acceleration. Single worker only, but very fast (~5-6x realtime means a 20 min file takes ~3-4 min).
+- **CPU** - Falls back to CPU processing. Slower but more compatible. Supports up to 2 parallel workers for batch processing.
+
 ## System Requirements
 
 - **macOS** 10.15 (Catalina) or later
-- **RAM** 4GB minimum, 8GB+ recommended
-- **Storage** ~500MB for app, plus model cache
+- **Apple Silicon** (M1/M2/M3) recommended for Metal GPU acceleration
+- **RAM** 8GB minimum, 16GB+ recommended for turbo model
+- **Storage** ~500MB for app, plus model cache (~6GB for turbo model)
 
 ## Documentation
 
 - [User Guide](USER_GUIDE.md) - Detailed usage instructions and tips
+- [Changelog](CHANGELOG.md) - Version history and release notes
 
 ## Privacy
 

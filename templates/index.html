@@ -197,23 +197,35 @@
                     </div>
                 </div>
                 
-                <!-- Parallel Workers -->
+                <!-- Processing Mode -->
                 <div class="mt-4 pt-4 border-t border-gray-700/30">
-                    <div class="flex items-center justify-between">
+                    <div class="flex items-center justify-between mb-3">
                         <label class="flex items-center gap-2 text-sm text-gray-300">
                             <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path>
+                            </svg>
+                            Processing mode
+                        </label>
+                        <select id="processingMode" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm" onchange="updateWorkerOptions()">
+                            <option value="metal" selected>Metal GPU (fastest)</option>
+                            <option value="cpu">CPU (compatibility)</option>
+                        </select>
+                    </div>
+                    
+                    <!-- Parallel Workers (CPU only) -->
+                    <div id="workersSection" class="flex items-center justify-between opacity-50 pointer-events-none">
+                        <label class="flex items-center gap-2 text-sm text-gray-300">
+                            <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"></path>
                             </svg>
                             Parallel workers
                         </label>
-                        <select id="workers" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
-                            <option value="1">1 (default)</option>
+                        <select id="workers" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm" disabled>
+                            <option value="1">1</option>
                             <option value="2">2</option>
-                            <option value="3">3</option>
-                            <option value="4">4</option>
                         </select>
                     </div>
-                    <p class="text-xs text-gray-500 mt-2">More workers = faster but uses more RAM. Each worker loads its own model.</p>
+                    <p id="modeDescription" class="text-xs text-gray-500 mt-2">Metal GPU: ~5-6x realtime on Apple Silicon. Single worker only.</p>
                 </div>
             </div>
 
@@ -229,9 +241,13 @@
                         Start Transcription
                     </span>
                 </button>
-                <button type="button" id="cancelBtn" onclick="cancelJob()"
-                        class="py-3.5 px-6 bg-red-600/80 hover:bg-red-600 text-white font-semibold rounded-xl transition-all hidden">
-                    Cancel
+                <button type="button" id="cancelAfterBtn" onclick="cancelAfterCurrentFile()"
+                        class="py-3.5 px-4 bg-yellow-600/80 hover:bg-yellow-600 text-white font-semibold rounded-xl transition-all hidden text-sm">
+                    Cancel After File
+                </button>
+                <button type="button" id="forceStopBtn" onclick="forceStopNow()"
+                        class="py-3.5 px-4 bg-red-600/80 hover:bg-red-600 text-white font-semibold rounded-xl transition-all hidden text-sm">
+                    Force Stop
                 </button>
             </div>
         </form>
@@ -337,7 +353,8 @@
         let statusInterval = null;
         let downloadInterval = null;
         let modelsData = [];
-        const cancelBtn = document.getElementById('cancelBtn');
+        const cancelAfterBtn = document.getElementById('cancelAfterBtn');
+        const forceStopBtn = document.getElementById('forceStopBtn');
 
         // Load models on page load (handled in restoreSavedSettings section below)
 
@@ -541,11 +558,36 @@
             }
         }
 
-        async function cancelJob() {
+        async function cancelAfterCurrentFile() {
             try {
-                cancelBtn.disabled = true;
-                cancelBtn.textContent = 'Cancelling...';
-                const response = await fetch('/cancel', { method: 'POST' });
+                const btn = document.getElementById('cancelAfterBtn');
+                btn.disabled = true;
+                btn.textContent = 'Stopping after file...';
+                const response = await fetch('/cancel', { 
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: 'after_file' })
+                });
+                const data = await response.json();
+                if (data.error) {
+                    console.error('Cancel failed:', data.error);
+                }
+            } catch (e) {
+                console.error('Cancel failed:', e);
+            }
+        }
+
+        async function forceStopNow() {
+            try {
+                const btn = document.getElementById('forceStopBtn');
+                btn.disabled = true;
+                btn.textContent = 'Stopping...';
+                document.getElementById('cancelAfterBtn').disabled = true;
+                const response = await fetch('/cancel', { 
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: 'force' })
+                });
                 const data = await response.json();
                 if (data.error) {
                     console.error('Cancel failed:', data.error);
@@ -589,6 +631,25 @@
             }
         }
 
+        // Toggle worker options based on processing mode
+        function updateWorkerOptions() {
+            const mode = document.getElementById('processingMode').value;
+            const workersSection = document.getElementById('workersSection');
+            const workersSelect = document.getElementById('workers');
+            const modeDescription = document.getElementById('modeDescription');
+            
+            if (mode === 'metal') {
+                workersSection.classList.add('opacity-50', 'pointer-events-none');
+                workersSelect.disabled = true;
+                workersSelect.value = '1';
+                modeDescription.textContent = 'Metal GPU: ~5-6x realtime on Apple Silicon. Single worker only.';
+            } else {
+                workersSection.classList.remove('opacity-50', 'pointer-events-none');
+                workersSelect.disabled = false;
+                modeDescription.textContent = 'CPU mode: Slower but compatible. Use 2 workers for parallel processing.';
+            }
+        }
+
         // Call restore after models are loaded
         document.addEventListener('DOMContentLoaded', () => {
             loadModels().then(() => {
@@ -599,6 +660,9 @@
             document.getElementById('language').addEventListener('change', (e) => {
                 saveToStorage(STORAGE_KEYS.lastLanguage, e.target.value);
             });
+            
+            // Initialize worker options
+            updateWorkerOptions();
         });
 
         async function browseInput() {
@@ -707,7 +771,8 @@
                         include_timestamps: includeTimestamps,
                         word_timestamps: wordTimestamps,
                         overwrite_existing: document.getElementById('overwriteExisting').checked,
-                        workers: parseInt(document.getElementById('workers').value) || 1
+                        processing_mode: document.getElementById('processingMode').value,
+                        workers: document.getElementById('processingMode').value === 'metal' ? 1 : parseInt(document.getElementById('workers').value) || 1
                     })
                 });
                 
@@ -719,10 +784,13 @@
                     return;
                 }
                 
-                // Show cancel button
-                cancelBtn.classList.remove('hidden');
-                cancelBtn.disabled = false;
-                cancelBtn.textContent = 'Cancel';
+                // Show cancel buttons
+                document.getElementById('cancelAfterBtn').classList.remove('hidden');
+                document.getElementById('cancelAfterBtn').disabled = false;
+                document.getElementById('cancelAfterBtn').textContent = 'Cancel After File';
+                document.getElementById('forceStopBtn').classList.remove('hidden');
+                document.getElementById('forceStopBtn').disabled = false;
+                document.getElementById('forceStopBtn').textContent = 'Force Stop';
                 
                 startStatusPolling();
                 
@@ -768,21 +836,34 @@
                 const elapsed = formatDuration(status.elapsed_seconds);
                 timeInfo = elapsed;
                 
-                // Calculate ETA if we have progress
-                if (status.completed > 0 && status.total > status.completed) {
-                    const avgPerFile = status.elapsed_seconds / status.completed;
-                    const remaining = (status.total - status.completed) * avgPerFile;
+                // Calculate ETA based on actually processed files (not skipped)
+                const processedFiles = (status.results || []).filter(r => r.status === 'success' || r.status === 'error');
+                const skippedCount = (status.results || []).filter(r => r.status === 'skipped').length;
+                const remainingToProcess = status.total - status.completed;
+                
+                if (processedFiles.length > 0 && remainingToProcess > 0) {
+                    // Use actual processing time from completed files
+                    const totalProcessTime = processedFiles.reduce((sum, r) => sum + (r.elapsed_seconds || 0), 0);
+                    const avgPerFile = totalProcessTime / processedFiles.length;
+                    const remaining = remainingToProcess * avgPerFile;
                     // Adjust for parallel workers
                     const adjustedRemaining = workers > 1 ? remaining / workers : remaining;
-                    timeInfo += ` | ETA: ${formatDuration(adjustedRemaining)}`;
+                    if (adjustedRemaining > 5) {
+                        timeInfo += ` | ETA: ${formatDuration(adjustedRemaining)}`;
+                    }
                 }
+                // No rough estimate before first file completes - wait for actual data
             }
             
             document.getElementById('activeJobs').textContent = `${workers > 1 ? `${workers} workers` : 'Running'}${timeInfo ? ` | ${timeInfo}` : ''}`;
             
             if (status.current_file) {
+                let fileTimeInfo = '';
+                if (status.current_file_elapsed && status.current_file_elapsed > 0) {
+                    fileTimeInfo = ` (${formatDuration(status.current_file_elapsed)})`;
+                }
                 document.getElementById('currentFile').innerHTML = 
-                    `<span class="spinner"></span><span>Processing: ${status.current_file}</span>`;
+                    `<span class="spinner"></span><span>Processing: ${status.current_file}${fileTimeInfo}</span>`;
             }
             
             // Per-file progress bar
@@ -828,10 +909,14 @@
         function formatDuration(seconds) {
             if (seconds === null || seconds === undefined) return '';
             if (!Number.isFinite(seconds)) return '';
-            if (seconds < 60) return `${seconds.toFixed(1)}s`;
-            const m = Math.floor(seconds / 60);
-            const s = seconds - (m * 60);
-            return `${m}m ${s.toFixed(0)}s`;
+            if (seconds < 60) return `${Math.round(seconds)}s`;
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.round(seconds % 60);
+            if (h > 0) {
+                return `${h}h ${m}m`;
+            }
+            return `${m}m ${s}s`;
         }
 
         function updateLiveResults(status) {
@@ -847,46 +932,45 @@
             container.classList.remove('hidden');
             list.innerHTML = '';
 
-            const results = status.results.slice(-50).reverse();
-            results.forEach((result) => {
+            // Separate skipped from processed for better display
+            const processed = status.results.filter(r => r.status !== 'skipped');
+            const skipped = status.results.filter(r => r.status === 'skipped');
+            
+            // Show processed files first (most recent at top)
+            processed.slice(-20).reverse().forEach((result) => {
                 const div = document.createElement('div');
                 div.className = 'flex items-start justify-between gap-3 p-3 bg-gray-800 rounded-lg';
 
-                const elapsed = formatDuration(result.elapsed_seconds);
-                const audio = formatDuration(result.audio_seconds);
-                const speed = (result.speed_x && Number.isFinite(result.speed_x)) ? `${result.speed_x.toFixed(2)}x` : '';
-                const segments = (result.segments_count !== null && result.segments_count !== undefined) ? `${result.segments_count} seg` : '';
-                const metaParts = [elapsed && `time ${elapsed}`, audio && `audio ${audio}`, speed && `speed ${speed}`, segments].filter(Boolean);
-                const meta = metaParts.length ? metaParts.join(' • ') : '';
+                const elapsed = result.elapsed_seconds > 0 ? formatDuration(result.elapsed_seconds) : '';
+                const speed = (result.speed_x && Number.isFinite(result.speed_x)) ? `${result.speed_x.toFixed(1)}x` : '';
+                const rightText = [elapsed, speed].filter(Boolean).join(' · ');
 
                 if (result.status === 'success') {
                     div.innerHTML = `
-                        <div class="min-w-0">
-                            <div class="text-gray-200 truncate">${result.file}</div>
-                            ${meta ? `<div class=\"text-xs text-gray-500 mt-1\">${meta}</div>` : ''}
+                        <div class="min-w-0 flex-1">
+                            <div class="text-gray-200 truncate text-sm">${result.file}</div>
                         </div>
-                        <div class="text-green-400 text-xs whitespace-nowrap">${result.output}</div>
-                    `;
-                } else if (result.status === 'skipped') {
-                    div.innerHTML = `
-                        <div class="min-w-0">
-                            <div class="text-gray-200 truncate">${result.file}</div>
-                            <div class="text-xs text-yellow-400 mt-1">Skipped: ${result.message || ''}</div>
-                        </div>
-                        ${meta ? `<div class=\"text-gray-500 text-xs whitespace-nowrap\">${meta}</div>` : ''}
+                        <div class="text-green-400 text-xs whitespace-nowrap">${rightText || 'done'}</div>
                     `;
                 } else {
                     div.innerHTML = `
-                        <div class="min-w-0">
-                            <div class="text-gray-200 truncate">${result.file}</div>
-                            <div class="text-xs text-red-400 mt-1">Error: ${result.message || ''}</div>
-                            ${meta ? `<div class=\"text-xs text-gray-500 mt-1\">${meta}</div>` : ''}
+                        <div class="min-w-0 flex-1">
+                            <div class="text-gray-200 truncate text-sm">${result.file}</div>
+                            <div class="text-xs text-red-400 mt-0.5">${result.message || 'Error'}</div>
                         </div>
                         <div class="text-red-400 text-xs whitespace-nowrap">failed</div>
                     `;
                 }
                 list.appendChild(div);
             });
+            
+            // Show skipped count as a single compact line if any
+            if (skipped.length > 0) {
+                const skipDiv = document.createElement('div');
+                skipDiv.className = 'text-xs text-yellow-500/70 py-2 px-3';
+                skipDiv.textContent = `${skipped.length} file${skipped.length > 1 ? 's' : ''} skipped (already exist)`;
+                list.appendChild(skipDiv);
+            }
         }
 
         function onComplete(status) {
@@ -930,9 +1014,12 @@
         function resetForm() {
             submitBtn.disabled = false;
             submitBtn.textContent = 'Start Transcription';
-            cancelBtn.classList.add('hidden');
-            cancelBtn.disabled = false;
-            cancelBtn.textContent = 'Cancel';
+            document.getElementById('cancelAfterBtn').classList.add('hidden');
+            document.getElementById('cancelAfterBtn').disabled = false;
+            document.getElementById('cancelAfterBtn').textContent = 'Cancel After File';
+            document.getElementById('forceStopBtn').classList.add('hidden');
+            document.getElementById('forceStopBtn').disabled = false;
+            document.getElementById('forceStopBtn').textContent = 'Force Stop';
         }
 
         function showError(message) {
