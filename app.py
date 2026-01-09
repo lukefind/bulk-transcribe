@@ -79,8 +79,17 @@ transcription_status = {
     'total': 0,
     'results': [],
     'error': None,
-    'downloading_model': False
+    'downloading_model': False,
+    'active_jobs': 0,
+    'active_workers': 0,
+    'current_files': [],  # List of files currently being processed (for parallel mode)
+    'start_time': None,  # Job start timestamp
+    'elapsed_seconds': 0,  # Total elapsed time
 }
+
+# Thread-safe lock for updating transcription_status
+import threading
+status_lock = threading.Lock()
 
 
 def choose_folder_dialog(prompt="Select a folder"):
@@ -219,16 +228,20 @@ def transcribe_file(audio_file: Path, model: str, language: str, output_folder: 
     
     transcription_status['current_file_progress'] = f'Loading model ({model})...'
     transcription_status['current_file_percent'] = 0
-    transcription_status['last_transcribed_text'] = ''
+    # Do not clear last_transcribed_text here; keep the last snippet visible during processing
+    # and update it when we have new text.
     
     try:
         import whisper
         
-        # Load the model
-        transcription_status['current_file_progress'] = f'Loading {model} model...'
-        transcription_status['current_file_percent'] = 5
-        
-        whisper_model = whisper.load_model(model)
+        whisper_model = None
+        if status_callback is not None and isinstance(status_callback, dict):
+            whisper_model = status_callback.get('whisper_model')
+
+        if whisper_model is None:
+            transcription_status['current_file_progress'] = f'Loading {model} model...'
+            transcription_status['current_file_percent'] = 5
+            whisper_model = whisper.load_model(model)
         
         transcription_status['current_file_progress'] = 'Transcribing audio...'
         transcription_status['current_file_percent'] = 10
@@ -253,19 +266,24 @@ def transcribe_file(audio_file: Path, model: str, language: str, output_folder: 
                 elapsed = time.time() - start_time
                 elapsed_str = f"{int(elapsed // 60)}m {int(elapsed % 60)}s" if elapsed >= 60 else f"{int(elapsed)}s"
                 
-                # Calculate progress based on segments if available
-                if segments_received:
-                    last_seg = segments_received[-1]
-                    if 'end' in last_seg and audio_duration > 0:
-                        pct = min(95, int(10 + (last_seg['end'] / audio_duration) * 85))
-                        transcription_status['current_file_percent'] = pct
+                # Estimate progress based on audio duration
+                # Turbo model processes roughly 10-30x realtime depending on hardware
+                # Use conservative 5x estimate for progress bar
+                if audio_duration > 0:
+                    estimated_total_time = audio_duration / 5.0  # Assume 5x realtime
+                    estimated_pct = min(95, int(10 + (elapsed / estimated_total_time) * 85))
                 else:
-                    # Estimate based on time
-                    estimated_pct = min(95, 10 + int(elapsed / 2))
-                    transcription_status['current_file_percent'] = estimated_pct
+                    # Fallback: assume 30 seconds per percent after initial 10%
+                    estimated_pct = min(95, 10 + int(elapsed / 30))
                 
-                transcription_status['current_file_progress'] = f'Transcribing... ({elapsed_str} elapsed)'
-                stop_progress.wait(0.5)
+                # Only update if we're the current/only file being processed
+                # In parallel mode, don't fight over the progress bar
+                with status_lock:
+                    if len(transcription_status.get('current_files', [])) <= 1:
+                        transcription_status['current_file_percent'] = estimated_pct
+                        transcription_status['current_file_progress'] = f'Transcribing... ({elapsed_str} elapsed)'
+                
+                stop_progress.wait(1.0)  # Check less frequently
         
         progress_thread = threading.Thread(target=progress_update, daemon=True)
         progress_thread.start()
@@ -288,10 +306,13 @@ def transcribe_file(audio_file: Path, model: str, language: str, output_folder: 
         transcription_status['current_file_progress'] = 'Saving results...'
         transcription_status['current_file_percent'] = 98
         
-        # Update last transcribed text with final segment
+        # Update last transcribed text with final segment (thread-safe)
         if result.get('segments') and len(result['segments']) > 0:
             last_segment = result['segments'][-1]
-            transcription_status['last_transcribed_text'] = last_segment.get('text', '').strip()[:150]
+            snippet = last_segment.get('text', '').strip()[:150]
+            if snippet:
+                with status_lock:
+                    transcription_status['last_transcribed_text'] = snippet
         
         # Save JSON output
         json_output_path = output_folder / (audio_file.stem + '.json')
@@ -378,17 +399,26 @@ def create_markdown(audio_file: Path, transcription_data: dict, model: str,
 
 
 def run_transcription(input_folder: str, output_folder: str, model: str, language: str, options: dict = None):
-    """Background task to run transcription."""
+    """Background task to run transcription with optional parallel workers."""
     global transcription_status
     
     if options is None:
         options = {}
     
+    num_workers = max(1, min(4, options.get('workers', 1)))
+    
+    import time as time_module
     transcription_status['running'] = True
+    transcription_status['active_jobs'] = 1
+    transcription_status['active_workers'] = 0
     transcription_status['cancelled'] = False
+    transcription_status['start_time'] = time_module.time()
+    transcription_status['elapsed_seconds'] = 0
+    transcription_status['last_transcribed_text'] = ''
     transcription_status['completed'] = 0
     transcription_status['results'] = []
     transcription_status['error'] = None
+    transcription_status['current_files'] = []
     
     try:
         output_path = Path(output_folder)
@@ -405,53 +435,192 @@ def run_transcription(input_folder: str, output_folder: str, model: str, languag
         word_timestamps = options.get('word_timestamps', False)
         overwrite_existing = options.get('overwrite_existing', False)
         
+        # Filter out files that already have output (if not overwriting)
+        files_to_process = []
         for audio_file in audio_files:
-            # Check if cancelled
-            if transcription_status['cancelled']:
-                transcription_status['error'] = 'Cancelled by user'
-                break
-            
-            transcription_status['current_file'] = audio_file.name
-            
-            # Check if output file already exists
             expected_output = output_path / f"{audio_file.stem}_transcription.md"
             if expected_output.exists() and not overwrite_existing:
-                transcription_status['results'].append({
-                    'file': audio_file.name,
-                    'status': 'skipped',
-                    'message': 'Output file already exists'
-                })
+                with status_lock:
+                    transcription_status['results'].append({
+                        'file': audio_file.name,
+                        'status': 'skipped',
+                        'message': 'Output file already exists',
+                        'elapsed_seconds': 0.0,
+                        'audio_seconds': None,
+                        'speed_x': None,
+                        'segments_count': None,
+                    })
+                    transcription_status['completed'] += 1
+            else:
+                files_to_process.append(audio_file)
+        
+        if not files_to_process:
+            # All files were skipped
+            return
+        
+        # Worker function for parallel processing
+        def process_file(audio_file, worker_model):
+            """Process a single file with the given model instance."""
+            if transcription_status.get('cancelled'):
+                return None
+            
+            # Track this file as being processed
+            with status_lock:
+                transcription_status['current_files'].append(audio_file.name)
+                transcription_status['active_workers'] = len(transcription_status['current_files'])
+                if len(transcription_status['current_files']) == 1:
+                    transcription_status['current_file'] = audio_file.name
+                else:
+                    transcription_status['current_file'] = f"{len(transcription_status['current_files'])} files"
+            
+            import time
+            file_start_time = time.time()
+            
+            try:
+                result = transcribe_file(
+                    audio_file,
+                    model,
+                    language,
+                    output_path,
+                    word_timestamps,
+                    status_callback={'whisper_model': worker_model},
+                )
+            except Exception as e:
+                result = {'error': str(e)[:200]}
+            
+            file_elapsed_seconds = max(0.0, time.time() - file_start_time)
+            audio_seconds = None
+            segments_count = None
+            speed_x = None
+            
+            try:
+                segments = result.get('segments') if isinstance(result, dict) else None
+                if segments:
+                    segments_count = len(segments)
+                    last_end = segments[-1].get('end')
+                    if isinstance(last_end, (int, float)):
+                        audio_seconds = float(last_end)
+            except Exception:
+                pass
+            
+            if audio_seconds and file_elapsed_seconds > 0:
+                speed_x = audio_seconds / file_elapsed_seconds
+            
+            # Record result
+            with status_lock:
+                if 'error' in result:
+                    transcription_status['results'].append({
+                        'file': audio_file.name,
+                        'status': 'error',
+                        'message': result['error'],
+                        'elapsed_seconds': file_elapsed_seconds,
+                        'audio_seconds': audio_seconds,
+                        'speed_x': speed_x,
+                        'segments_count': segments_count,
+                    })
+                else:
+                    md_path = create_markdown(audio_file, result, model, language, output_path, options)
+                    transcription_status['results'].append({
+                        'file': audio_file.name,
+                        'status': 'success',
+                        'output': md_path.name,
+                        'elapsed_seconds': file_elapsed_seconds,
+                        'audio_seconds': audio_seconds,
+                        'speed_x': speed_x,
+                        'segments_count': segments_count,
+                    })
+                
                 transcription_status['completed'] += 1
-                continue
+                
+                # Remove from current files list
+                if audio_file.name in transcription_status['current_files']:
+                    transcription_status['current_files'].remove(audio_file.name)
+                transcription_status['active_workers'] = len(transcription_status['current_files'])
+                if transcription_status['current_files']:
+                    if len(transcription_status['current_files']) == 1:
+                        transcription_status['current_file'] = transcription_status['current_files'][0]
+                    else:
+                        transcription_status['current_file'] = f"{len(transcription_status['current_files'])} files"
+                else:
+                    transcription_status['current_file'] = ''
             
-            result = transcribe_file(audio_file, model, language, output_path, word_timestamps)
+            return result
+        
+        if num_workers == 1:
+            # Single-threaded mode (original behavior, reuse one model)
+            transcription_status['current_file_progress'] = f'Loading {model} model...'
+            transcription_status['current_file_percent'] = 1
+            try:
+                import whisper
+                whisper_model = whisper.load_model(model)
+            except Exception as e:
+                transcription_status['error'] = f'Failed to load model: {str(e)[:200]}'
+                return
             
-            # Check again after transcription (which can take a while)
+            for audio_file in files_to_process:
+                if transcription_status['cancelled']:
+                    transcription_status['error'] = 'Cancelled by user'
+                    break
+                process_file(audio_file, whisper_model)
+        else:
+            # Parallel mode: each worker loads its own model
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            import whisper
+            
+            transcription_status['current_file_progress'] = f'Loading {num_workers} model instances...'
+            transcription_status['current_file_percent'] = 1
+            
+            # Pre-load models for each worker
+            worker_models = []
+            try:
+                for i in range(num_workers):
+                    if transcription_status['cancelled']:
+                        break
+                    transcription_status['current_file_progress'] = f'Loading model {i+1}/{num_workers}...'
+                    worker_models.append(whisper.load_model(model))
+            except Exception as e:
+                transcription_status['error'] = f'Failed to load models: {str(e)[:200]}'
+                return
+            
             if transcription_status['cancelled']:
                 transcription_status['error'] = 'Cancelled by user'
-                break
+                return
             
-            if 'error' in result:
-                transcription_status['results'].append({
-                    'file': audio_file.name,
-                    'status': 'error',
-                    'message': result['error']
-                })
-            else:
-                md_path = create_markdown(audio_file, result, model, language, output_path, options)
-                transcription_status['results'].append({
-                    'file': audio_file.name,
-                    'status': 'success',
-                    'output': md_path.name
-                })
+            # Process files in parallel
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = {}
+                model_idx = 0
+                
+                for audio_file in files_to_process:
+                    if transcription_status['cancelled']:
+                        break
+                    # Round-robin assign models to workers
+                    worker_model = worker_models[model_idx % len(worker_models)]
+                    model_idx += 1
+                    future = executor.submit(process_file, audio_file, worker_model)
+                    futures[future] = audio_file
+                
+                # Wait for all to complete (or be cancelled)
+                for future in as_completed(futures):
+                    if transcription_status['cancelled']:
+                        # Don't wait for remaining futures
+                        break
+                    try:
+                        future.result()
+                    except Exception:
+                        pass
             
-            transcription_status['completed'] += 1
+            if transcription_status['cancelled']:
+                transcription_status['error'] = 'Cancelled by user'
         
     except Exception as e:
         transcription_status['error'] = str(e)
     finally:
         transcription_status['running'] = False
+        transcription_status['active_jobs'] = 0
+        transcription_status['active_workers'] = 0
         transcription_status['current_file'] = ''
+        transcription_status['current_files'] = []
 
 
 @app.route('/')
@@ -480,6 +649,7 @@ def start_transcription():
         'include_timestamps': data.get('include_timestamps', True),
         'word_timestamps': data.get('word_timestamps', False),
         'overwrite_existing': data.get('overwrite_existing', False),
+        'workers': data.get('workers', 1),
     }
     
     if not input_folder:
@@ -502,6 +672,10 @@ def start_transcription():
 
 @app.route('/status')
 def get_status():
+    import time as time_module
+    # Update elapsed time if running
+    if transcription_status['running'] and transcription_status.get('start_time'):
+        transcription_status['elapsed_seconds'] = time_module.time() - transcription_status['start_time']
     return jsonify(transcription_status)
 
 

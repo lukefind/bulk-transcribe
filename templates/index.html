@@ -196,6 +196,25 @@
                         </label>
                     </div>
                 </div>
+                
+                <!-- Parallel Workers -->
+                <div class="mt-4 pt-4 border-t border-gray-700/30">
+                    <div class="flex items-center justify-between">
+                        <label class="flex items-center gap-2 text-sm text-gray-300">
+                            <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"></path>
+                            </svg>
+                            Parallel workers
+                        </label>
+                        <select id="workers" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                            <option value="1">1 (default)</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                        </select>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-2">More workers = faster but uses more RAM. Each worker loads its own model.</p>
+                </div>
             </div>
 
             <!-- Submit Button -->
@@ -227,7 +246,10 @@
                         </svg>
                         Progress
                     </h2>
-                    <span id="progressCount" class="text-sm text-gray-400 bg-surface-700/50 px-3 py-1 rounded-full">0 / 0</span>
+                    <div class="flex items-center gap-2">
+                        <span id="activeJobs" class="text-sm text-gray-400 bg-surface-700/50 px-3 py-1 rounded-full">Jobs: 0</span>
+                        <span id="progressCount" class="text-sm text-gray-400 bg-surface-700/50 px-3 py-1 rounded-full">0 / 0</span>
+                    </div>
                 </div>
                 
                 <div class="w-full bg-surface-700/50 rounded-full h-2 mb-4 overflow-hidden">
@@ -257,6 +279,11 @@
                 </div>
                 
                 <div id="fileProgress" class="mt-3 text-xs text-gray-500 font-mono bg-surface-800/50 rounded-lg p-2 hidden"></div>
+
+                <div id="liveResults" class="mt-4 hidden">
+                    <div class="text-xs text-gray-400 mb-2">Completed files:</div>
+                    <div id="liveResultsList" class="space-y-2 max-h-64 overflow-auto"></div>
+                </div>
                 
                 <div id="modelDownload" class="mt-4 p-4 bg-amber-900/20 border border-amber-700/30 rounded-xl hidden">
                     <div class="flex items-center gap-2 text-amber-300 text-sm">
@@ -679,7 +706,8 @@
                         include_full: includeFull,
                         include_timestamps: includeTimestamps,
                         word_timestamps: wordTimestamps,
-                        overwrite_existing: document.getElementById('overwriteExisting').checked
+                        overwrite_existing: document.getElementById('overwriteExisting').checked,
+                        workers: parseInt(document.getElementById('workers').value) || 1
                     })
                 });
                 
@@ -714,6 +742,7 @@
                 const status = await response.json();
                 
                 updateProgress(status);
+                updateLiveResults(status);
                 
                 if (!status.running) {
                     clearInterval(statusInterval);
@@ -729,6 +758,27 @@
             const percent = status.total > 0 ? (status.completed / status.total) * 100 : 0;
             document.getElementById('progressBar').style.width = percent + '%';
             document.getElementById('progressCount').textContent = `${status.completed} / ${status.total}`;
+
+            const jobs = (status.active_jobs !== undefined && status.active_jobs !== null) ? status.active_jobs : (status.running ? 1 : 0);
+            const workers = (status.active_workers !== undefined && status.active_workers !== null) ? status.active_workers : jobs;
+            
+            // Format elapsed time and ETA
+            let timeInfo = '';
+            if (status.elapsed_seconds && status.elapsed_seconds > 0) {
+                const elapsed = formatDuration(status.elapsed_seconds);
+                timeInfo = elapsed;
+                
+                // Calculate ETA if we have progress
+                if (status.completed > 0 && status.total > status.completed) {
+                    const avgPerFile = status.elapsed_seconds / status.completed;
+                    const remaining = (status.total - status.completed) * avgPerFile;
+                    // Adjust for parallel workers
+                    const adjustedRemaining = workers > 1 ? remaining / workers : remaining;
+                    timeInfo += ` | ETA: ${formatDuration(adjustedRemaining)}`;
+                }
+            }
+            
+            document.getElementById('activeJobs').textContent = `${workers > 1 ? `${workers} workers` : 'Running'}${timeInfo ? ` | ${timeInfo}` : ''}`;
             
             if (status.current_file) {
                 document.getElementById('currentFile').innerHTML = 
@@ -773,6 +823,70 @@
             } else {
                 modelDownload.classList.add('hidden');
             }
+        }
+
+        function formatDuration(seconds) {
+            if (seconds === null || seconds === undefined) return '';
+            if (!Number.isFinite(seconds)) return '';
+            if (seconds < 60) return `${seconds.toFixed(1)}s`;
+            const m = Math.floor(seconds / 60);
+            const s = seconds - (m * 60);
+            return `${m}m ${s.toFixed(0)}s`;
+        }
+
+        function updateLiveResults(status) {
+            const container = document.getElementById('liveResults');
+            const list = document.getElementById('liveResultsList');
+
+            if (!status.results || status.results.length === 0) {
+                container.classList.add('hidden');
+                list.innerHTML = '';
+                return;
+            }
+
+            container.classList.remove('hidden');
+            list.innerHTML = '';
+
+            const results = status.results.slice(-50).reverse();
+            results.forEach((result) => {
+                const div = document.createElement('div');
+                div.className = 'flex items-start justify-between gap-3 p-3 bg-gray-800 rounded-lg';
+
+                const elapsed = formatDuration(result.elapsed_seconds);
+                const audio = formatDuration(result.audio_seconds);
+                const speed = (result.speed_x && Number.isFinite(result.speed_x)) ? `${result.speed_x.toFixed(2)}x` : '';
+                const segments = (result.segments_count !== null && result.segments_count !== undefined) ? `${result.segments_count} seg` : '';
+                const metaParts = [elapsed && `time ${elapsed}`, audio && `audio ${audio}`, speed && `speed ${speed}`, segments].filter(Boolean);
+                const meta = metaParts.length ? metaParts.join(' • ') : '';
+
+                if (result.status === 'success') {
+                    div.innerHTML = `
+                        <div class="min-w-0">
+                            <div class="text-gray-200 truncate">${result.file}</div>
+                            ${meta ? `<div class=\"text-xs text-gray-500 mt-1\">${meta}</div>` : ''}
+                        </div>
+                        <div class="text-green-400 text-xs whitespace-nowrap">${result.output}</div>
+                    `;
+                } else if (result.status === 'skipped') {
+                    div.innerHTML = `
+                        <div class="min-w-0">
+                            <div class="text-gray-200 truncate">${result.file}</div>
+                            <div class="text-xs text-yellow-400 mt-1">Skipped: ${result.message || ''}</div>
+                        </div>
+                        ${meta ? `<div class=\"text-gray-500 text-xs whitespace-nowrap\">${meta}</div>` : ''}
+                    `;
+                } else {
+                    div.innerHTML = `
+                        <div class="min-w-0">
+                            <div class="text-gray-200 truncate">${result.file}</div>
+                            <div class="text-xs text-red-400 mt-1">Error: ${result.message || ''}</div>
+                            ${meta ? `<div class=\"text-xs text-gray-500 mt-1\">${meta}</div>` : ''}
+                        </div>
+                        <div class="text-red-400 text-xs whitespace-nowrap">failed</div>
+                    `;
+                }
+                list.appendChild(div);
+            });
         }
 
         function onComplete(status) {
