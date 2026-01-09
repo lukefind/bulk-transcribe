@@ -20,6 +20,13 @@ A native macOS app for batch transcribing audio files to markdown using OpenAI W
 - **Persistent Settings** - Folder selections and preferences saved across sessions
 - **Cancel Support** - Immediately stops transcription
 
+## Screenshots
+
+### Main Interface
+<p align="center">
+  <img src="screenshots/main-interface.png" alt="Bulk Transcribe Main Interface" width="600">
+</p>
+
 ## Installation
 
 ### Option 1: Download DMG (Recommended)

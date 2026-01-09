@@ -5,6 +5,7 @@ Creates a fully self-contained macOS app bundle.
 """
 
 import sys
+import os
 from pathlib import Path
 
 block_cipher = None
@@ -12,10 +13,24 @@ block_cipher = None
 # Get the project directory
 project_dir = Path(SPECPATH)
 
+# Find ffmpeg binary if it exists
+ffmpeg_paths = [
+    '/usr/local/bin/ffmpeg',
+    '/opt/homebrew/bin/ffmpeg', 
+    '/usr/bin/ffmpeg',
+    '/opt/homebrew/bin/ffmpeg',
+]
+
+binaries = []
+for ffmpeg_path in ffmpeg_paths:
+    if os.path.exists(ffmpeg_path):
+        binaries.append((ffmpeg_path, 'bin'))
+        break
+
 a = Analysis(
     ['app.py'],
     pathex=[str(project_dir)],
-    binaries=[],
+    binaries=binaries,
     datas=[
         ('templates', 'templates'),
         ('static', 'static'),

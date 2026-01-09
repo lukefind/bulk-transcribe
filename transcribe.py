@@ -13,6 +13,19 @@ from typing import List, Optional
 import json
 
 
+def setup_ffmpeg_path():
+    """Set up PATH to include bundled ffmpeg if running in PyInstaller bundle."""
+    if getattr(sys, 'frozen', False):
+        # Running in PyInstaller bundle
+        base_path = Path(sys._MEIPASS)
+        ffmpeg_path = base_path / 'bin' / 'ffmpeg'
+        if ffmpeg_path.exists():
+            # Add the bin directory to PATH
+            os.environ['PATH'] = str(base_path / 'bin') + os.pathsep + os.environ.get('PATH', '')
+            return str(ffmpeg_path)
+    return None
+
+
 class AudioTranscriber:
     """Main class for handling audio transcription with Whisper."""
     
@@ -20,6 +33,9 @@ class AudioTranscriber:
     
     def __init__(self, input_folder: str, output_folder: str, model: str = "base", 
                  language: Optional[str] = None, verbose: bool = False):
+        # Set up ffmpeg path if bundled
+        setup_ffmpeg_path()
+        
         self.input_folder = Path(input_folder)
         self.output_folder = Path(output_folder)
         self.model = model

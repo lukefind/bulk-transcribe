@@ -26,6 +26,17 @@ def build_standalone():
         print("  ./venv/bin/pip install pyinstaller openai-whisper")
         return None
     
+    # Check for ffmpeg
+    ffmpeg_paths = ['/usr/local/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg', '/usr/bin/ffmpeg']
+    ffmpeg_found = any(Path(p).exists() for p in ffmpeg_paths)
+    
+    if not ffmpeg_found:
+        print("Warning: ffmpeg not found in common locations.")
+        print("  Please install ffmpeg for audio processing:")
+        print("    brew install ffmpeg")
+        print("  The app may not work correctly without it.")
+        print()
+    
     print("Building self-contained app with PyInstaller...")
     print("This may take several minutes due to bundling PyTorch and Whisper...")
     print()
@@ -200,11 +211,25 @@ def create_dmg(app_dir):
     if dmg_path.exists():
         dmg_path.unlink()
     
+    # Create a temporary directory for DMG contents
+    dmg_temp_dir = dist_dir / "dmg_temp"
+    if dmg_temp_dir.exists():
+        shutil.rmtree(dmg_temp_dir)
+    dmg_temp_dir.mkdir()
+    
+    # Copy app to temp directory
+    app_copy_dir = dmg_temp_dir / f"{APP_NAME}.app"
+    shutil.copytree(app_dir, app_copy_dir)
+    
+    # Create symlink to Applications folder
+    applications_link = dmg_temp_dir / "Applications"
+    applications_link.symlink_to(Path("/Applications"))
+    
     try:
         subprocess.run([
             "hdiutil", "create",
             "-volname", APP_NAME,
-            "-srcfolder", str(app_dir),
+            "-srcfolder", str(dmg_temp_dir),
             "-ov",
             "-format", "UDZO",
             str(dmg_path)
@@ -214,6 +239,10 @@ def create_dmg(app_dir):
         print(f"Warning: Could not create DMG: {e}")
     except FileNotFoundError:
         print("Warning: hdiutil not found, skipping DMG creation")
+    finally:
+        # Clean up temp directory
+        if dmg_temp_dir.exists():
+            shutil.rmtree(dmg_temp_dir)
 
 
 if __name__ == "__main__":

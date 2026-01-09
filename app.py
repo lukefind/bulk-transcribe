@@ -5,6 +5,24 @@ Web UI for Audio Transcription Tool using OpenAI Whisper
 
 # Prevent PyTorch from spawning subprocesses (causes duplicate dock icons on macOS)
 import os
+import sys
+from pathlib import Path
+
+# Set up ffmpeg path if running in PyInstaller bundle
+if getattr(sys, 'frozen', False):
+    base_path = Path(sys._MEIPASS)
+    # PyInstaller puts binaries in different locations depending on structure
+    possible_bin_paths = [
+        base_path / 'bin',
+        base_path / 'Frameworks' / 'bin',
+        Path(sys.executable).parent / 'bin',
+        Path(sys.executable).parent.parent / 'Frameworks' / 'bin',
+    ]
+    for bin_path in possible_bin_paths:
+        if bin_path.exists() and (bin_path / 'ffmpeg').exists():
+            os.environ['PATH'] = str(bin_path) + os.pathsep + os.environ.get('PATH', '')
+            break
+
 os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
@@ -19,7 +37,6 @@ multiprocessing.set_start_method('fork', force=True)
 import subprocess
 import threading
 import queue
-from pathlib import Path
 from flask import Flask, render_template, request, jsonify
 import json
 
