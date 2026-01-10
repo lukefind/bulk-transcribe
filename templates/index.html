@@ -168,7 +168,7 @@
                 <div class="grid md:grid-cols-2 gap-4">
                     <div class="space-y-3">
                         <label class="flex items-center gap-3 cursor-pointer group">
-                            <input type="checkbox" id="includeSegments" checked
+                            <input type="checkbox" id="includeSegments" checked onchange="updateOutputOptions()"
                                    class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0">
                             <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Segmented transcription</span>
                         </label>
@@ -179,13 +179,13 @@
                         </label>
                     </div>
                     <div class="space-y-3">
-                        <label class="flex items-center gap-3 cursor-pointer group">
+                        <label id="includeTimestampsLabel" class="flex items-center gap-3 cursor-pointer group">
                             <input type="checkbox" id="includeTimestamps" checked
                                    class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0">
                             <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Include timestamps</span>
                         </label>
-                        <label class="flex items-center gap-3 cursor-pointer group">
-                            <input type="checkbox" id="wordTimestamps" onchange="updateWordTimestampsWarning()"
+                        <label id="wordTimestampsLabel" class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="wordTimestamps" onchange="updateOutputOptions()"
                                    class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0">
                             <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Word-level timestamps</span>
                         </label>
@@ -689,7 +689,7 @@
                 workersSelect.disabled = false;
                 modeDescription.textContent = 'CPU mode: Slower but compatible. Use 2 workers for parallel processing.';
             }
-            updateWordTimestampsWarning();
+            updateOutputOptions();
         }
         
         // Toggle advanced options visibility
@@ -700,13 +700,44 @@
             chevron.classList.toggle('rotate-90');
         }
         
-        // Show/hide word timestamps CPU warning
-        function updateWordTimestampsWarning() {
-            const wordTimestamps = document.getElementById('wordTimestamps').checked;
-            const processingMode = document.getElementById('processingMode').value;
+        // Enforce output option interdependencies
+        function updateOutputOptions() {
+            const includeSegments = document.getElementById('includeSegments');
+            const includeTimestamps = document.getElementById('includeTimestamps');
+            const wordTimestamps = document.getElementById('wordTimestamps');
+            const includeTimestampsLabel = document.getElementById('includeTimestampsLabel');
+            const wordTimestampsLabel = document.getElementById('wordTimestampsLabel');
             const warning = document.getElementById('wordTimestampsWarning');
+            const processingMode = document.getElementById('processingMode').value;
             
-            if (wordTimestamps && processingMode === 'metal') {
+            // If word timestamps is ON, force segmented and include timestamps ON
+            if (wordTimestamps.checked) {
+                includeSegments.checked = true;
+                includeSegments.disabled = true;
+                includeTimestamps.checked = true;
+                includeTimestamps.disabled = true;
+                includeTimestampsLabel.classList.add('opacity-50');
+            } else {
+                includeSegments.disabled = false;
+                includeTimestamps.disabled = false;
+                includeTimestampsLabel.classList.remove('opacity-50');
+            }
+            
+            // If segmented is OFF, disable timestamp options
+            if (!includeSegments.checked) {
+                includeTimestamps.checked = false;
+                includeTimestamps.disabled = true;
+                includeTimestampsLabel.classList.add('opacity-50');
+                wordTimestamps.checked = false;
+                wordTimestamps.disabled = true;
+                wordTimestampsLabel.classList.add('opacity-50');
+            } else if (!wordTimestamps.checked) {
+                wordTimestamps.disabled = false;
+                wordTimestampsLabel.classList.remove('opacity-50');
+            }
+            
+            // Show CPU warning if word timestamps + Metal mode
+            if (wordTimestamps.checked && processingMode === 'metal') {
                 warning.classList.remove('hidden');
             } else {
                 warning.classList.add('hidden');
@@ -724,8 +755,9 @@
                 saveToStorage(STORAGE_KEYS.lastLanguage, e.target.value);
             });
             
-            // Initialize worker options
+            // Initialize worker options and output option states
             updateWorkerOptions();
+            updateOutputOptions();
         });
 
         async function browseInput() {
