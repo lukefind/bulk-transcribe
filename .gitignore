@@ -58,3 +58,8 @@ output/
 
 # Whisper models (large files)
 *.pt
+
+# Work-in-progress / future features (not ready for commit)
+AGENTS.md
+transcript_schema.py
+templates/review.html

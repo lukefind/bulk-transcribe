@@ -99,6 +99,17 @@ By default, files that already have a `_transcription.md` output are skipped. Th
 - **Word-level Timestamps** - Detailed per-word timing (slower)
 - **Overwrite existing files** - Re-transcribe files that already have output
 
+### JSON Output Format
+
+Each transcription produces a JSON file with segment-level data. Segments include:
+
+- **`id`** - App-assigned stable identifier (`seg_001`, `seg_002`, etc.) that remains contiguous after post-processing (merging/splitting)
+- **`index`** - Zero-based contiguous integer index (0, 1, 2, ...)
+- **`source_id`** - Original Whisper segment ID(s) as string, merged with `+` when segments are combined (e.g., `"0+1"`)
+- **`start`** / **`end`** - Timestamp boundaries in seconds
+- **`text`** - Transcribed text
+- **`words`** - Optional word-level timestamps (when enabled)
+
 ## Processing Modes
 
 | Mode | Speed | Workers | Best For |

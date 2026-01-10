@@ -227,6 +227,46 @@
                     </div>
                     <p id="modeDescription" class="text-xs text-gray-500 mt-2">Metal GPU: ~5-6x realtime on Apple Silicon. Single worker only.</p>
                 </div>
+                
+                <!-- Advanced Options (collapsible) -->
+                <div class="mt-4 pt-4 border-t border-gray-700/30">
+                    <button type="button" onclick="toggleAdvanced()" class="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors">
+                        <svg id="advancedChevron" class="w-4 h-4 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                        Advanced Options
+                    </button>
+                    <div id="advancedSection" class="hidden mt-3 space-y-3">
+                        <div class="flex items-center justify-between">
+                            <label class="text-sm text-gray-300">Quality preset</label>
+                            <select id="qualityPreset" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                                <option value="balanced" selected>Balanced (default)</option>
+                                <option value="conservative">Conservative (keeps more; stricter quality checks)</option>
+                                <option value="aggressive">Aggressive (skips more silence; looser quality checks)</option>
+                            </select>
+                        </div>
+                        <div class="flex items-center justify-between">
+                             <label class="text-sm text-gray-300" title="Higher = stricter (skips more potential non-speech)">Silence threshold</label>
+                             <select id="noSpeechThreshold" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                                 <option value="0.5">0.5 (most permissive; keeps more)</option>
+                                 <option value="0.6" selected>0.6 (default)</option>
+                                 <option value="0.7">0.7 (stricter; skips more)</option>
+                                 <option value="0.8">0.8 (strictest; skips most)</option>
+                             </select>
+                         </div>
+                         <div class="flex items-center justify-between">
+                            <label class="text-sm text-gray-300" title="Only works with word timestamps enabled">Max segment length</label>
+                            <select id="maxSegmentDuration" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                                <option value="">No limit</option>
+                                <option value="10">10 seconds</option>
+                                <option value="15">15 seconds</option>
+                                <option value="30" selected>30 seconds</option>
+                                <option value="60">60 seconds</option>
+                            </select>
+                        </div>
+                        <p class="text-xs text-gray-500">Max segment length only applies when word timestamps are enabled.</p>
+                    </div>
+                </div>
             </div>
 
             <!-- Submit Button -->
@@ -649,6 +689,14 @@
                 modeDescription.textContent = 'CPU mode: Slower but compatible. Use 2 workers for parallel processing.';
             }
         }
+        
+        // Toggle advanced options visibility
+        function toggleAdvanced() {
+            const section = document.getElementById('advancedSection');
+            const chevron = document.getElementById('advancedChevron');
+            section.classList.toggle('hidden');
+            chevron.classList.toggle('rotate-90');
+        }
 
         // Call restore after models are loaded
         document.addEventListener('DOMContentLoaded', () => {
@@ -758,6 +806,11 @@
             document.getElementById('resultsList').innerHTML = '';
             
             try {
+                // Collect advanced options
+                const qualityPreset = document.getElementById('qualityPreset').value;
+                const noSpeechThreshold = parseFloat(document.getElementById('noSpeechThreshold').value);
+                const maxSegmentDuration = document.getElementById('maxSegmentDuration').value;
+                
                 const response = await fetch('/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -772,7 +825,10 @@
                         word_timestamps: wordTimestamps,
                         overwrite_existing: document.getElementById('overwriteExisting').checked,
                         processing_mode: document.getElementById('processingMode').value,
-                        workers: document.getElementById('processingMode').value === 'metal' ? 1 : parseInt(document.getElementById('workers').value) || 1
+                        workers: document.getElementById('processingMode').value === 'metal' ? 1 : parseInt(document.getElementById('workers').value) || 1,
+                        quality_preset: qualityPreset,
+                        no_speech_threshold: noSpeechThreshold,
+                        max_segment_duration: maxSegmentDuration ? parseFloat(maxSegmentDuration) : null
                     })
                 });
                 
