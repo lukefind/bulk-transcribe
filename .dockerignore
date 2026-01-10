@@ -1,0 +1,56 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+.venv/
+*.egg-info/
+.eggs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+._*
+
+# Build artifacts
+build/
+dist/
+*.spec
+*.dmg
+*.app
+
+# Logs
+*.log
+
+# Local data (mounted as volume)
+data/
+
+# Documentation (not needed in image)
+screenshots/
+logo-assets/
+*.md
+!requirements*.txt
+
+# Test files
+tests/
+scripts/
+
+# PyInstaller
+*.manifest
+
+# Whisper models (downloaded at runtime)
+*.pt

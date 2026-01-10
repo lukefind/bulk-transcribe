@@ -1,0 +1,68 @@
+# Bulk Transcribe - NVIDIA GPU Docker Image
+# Requires NVIDIA Container Toolkit on host
+
+FROM nvidia/cuda:12.1-runtime-ubuntu22.04
+
+LABEL maintainer="Bulk Transcribe"
+LABEL description="Audio transcription using OpenAI Whisper with CUDA GPU support"
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Prevent Python from writing pyc files and buffering stdout/stderr
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-dev \
+    ffmpeg \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create symlinks for python
+RUN ln -sf /usr/bin/python3 /usr/bin/python
+
+# Create app user (non-root)
+RUN useradd --create-home --shell /bin/bash appuser
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements
+COPY requirements-server.txt ./
+
+# Install Python dependencies with CUDA-enabled PyTorch
+RUN pip install --no-cache-dir gunicorn && \
+    pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu121 && \
+    pip install --no-cache-dir -r requirements-server.txt
+
+# Copy application code
+COPY app.py transcribe_options.py ./
+COPY templates/ templates/
+COPY static/ static/
+
+# Create data directories
+RUN mkdir -p /data/input /data/output && \
+    chown -R appuser:appuser /data /app
+
+# Switch to non-root user
+USER appuser
+
+# Environment defaults
+ENV PORT=8476
+ENV INPUT_DIR=/data/input
+ENV OUTPUT_DIR=/data/output
+ENV DEVICE=cuda
+
+# Expose port
+EXPOSE 8476
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8476/healthz || exit 1
+
+# Run with Gunicorn
+CMD ["gunicorn", "--workers", "1", "--threads", "4", "--timeout", "0", "--bind", "0.0.0.0:8476", "app:app"]

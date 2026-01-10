@@ -1,0 +1,4 @@
+# Server dependencies (excludes desktop-only packages)
+flask>=2.0.0
+openai-whisper>=20231117
+gunicorn>=21.0.0

@@ -1,0 +1,21 @@
+# GPU override for NVIDIA CUDA support
+# Usage: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+
+version: "3.8"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    environment:
+      - DEVICE=cuda
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

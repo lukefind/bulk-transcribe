@@ -613,21 +613,24 @@ def run_transcription(input_folder: str, output_folder: str, model: str, languag
             
             return result
         
-        if processing_mode == 'metal' or num_workers == 1:
-            # Single-threaded mode with Metal GPU (fastest on Apple Silicon)
+        if processing_mode in ('metal', 'cuda') or num_workers == 1:
+            # Single-threaded mode with GPU (Metal on macOS, CUDA on Linux)
             transcription_status['current_file_progress'] = f'Loading {model} model...'
             transcription_status['current_file_percent'] = 1
             try:
                 import whisper
                 import torch
-                # Use MPS (Metal GPU) for Metal mode, CPU otherwise
-                # Note: MPS doesn't support float64 required by word timestamp alignment (DTW),
-                # so we must fall back to CPU when word timestamps are enabled.
-                if processing_mode == 'metal' and torch.backends.mps.is_available() and not word_timestamps:
+                
+                # Determine device based on processing_mode and availability
+                device = "cpu"
+                if processing_mode == 'cuda' and torch.cuda.is_available():
+                    device = "cuda"
+                    transcription_status['current_file_progress'] = f'Loading {model} model (CUDA GPU)...'
+                elif processing_mode == 'metal' and torch.backends.mps.is_available() and not word_timestamps:
+                    # MPS doesn't support float64 required by word timestamp alignment (DTW)
                     device = "mps"
                     transcription_status['current_file_progress'] = f'Loading {model} model (Metal GPU)...'
                 else:
-                    device = "cpu"
                     if word_timestamps and processing_mode == 'metal':
                         transcription_status['current_file_progress'] = f'Loading {model} model (CPU - required for word timestamps)...'
                     else:
@@ -808,6 +811,12 @@ def cancel_transcription():
         transcription_status['current_file_progress'] = ''
         transcription_status['current_file_percent'] = 0
         return jsonify({'status': 'stopped'})
+
+
+@app.route('/healthz')
+def healthz():
+    """Health check endpoint for Docker/orchestration."""
+    return jsonify({'ok': True})
 
 
 @app.route('/preview')
