@@ -35,7 +35,7 @@ RUN pip install --no-cache-dir gunicorn && \
     fi
 
 # Copy application code
-COPY app.py transcribe_options.py ./
+COPY app.py ./
 COPY templates/ templates/
 COPY static/ static/
 
