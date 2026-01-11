@@ -408,9 +408,12 @@ def get_job_ttl_days() -> int:
         return 7
 
 
-def cleanup_expired_sessions() -> Dict[str, int]:
+def cleanup_expired_sessions(exclude_session_id: Optional[str] = None) -> Dict[str, int]:
     """
     Remove expired sessions based on SESSION_TTL_HOURS.
+    
+    Args:
+        exclude_session_id: Session ID to exclude from cleanup (e.g., current request's session)
     
     Returns:
         Dict with 'checked' and 'deleted' counts
@@ -429,6 +432,10 @@ def cleanup_expired_sessions() -> Dict[str, int]:
     deleted = 0
     
     for session_id in os.listdir(sessions_root):
+        # Never delete the current session
+        if exclude_session_id and session_id == exclude_session_id:
+            continue
+        
         session_path = os.path.join(sessions_root, session_id)
         if not os.path.isdir(session_path):
             continue
