@@ -48,8 +48,50 @@
     </header>
 
     <main class="max-w-4xl mx-auto px-6 py-8">
+        <!-- Mode indicator -->
+        {% if is_server_mode %}
+        <div class="mb-4 text-xs text-gray-500 flex items-center gap-2">
+            <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+            Server Mode (session-isolated)
+        </div>
+        {% endif %}
+        
         <form id="transcribeForm" class="space-y-6">
-            <!-- Two Column Layout for Folders -->
+            {% if is_server_mode %}
+            <!-- SERVER MODE: Upload-based workflow -->
+            <div class="glass rounded-2xl p-5 card">
+                <label class="flex items-center gap-2 text-sm font-medium text-gray-300 mb-3">
+                    <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                    </svg>
+                    Upload Audio Files
+                </label>
+                
+                <!-- Upload Dropzone -->
+                <div id="uploadDropzone" 
+                     class="border-2 border-dashed border-gray-600/50 rounded-xl p-6 text-center cursor-pointer hover:border-primary-500/50 hover:bg-surface-700/30 transition-all"
+                     onclick="document.getElementById('fileUploadInput').click()">
+                    <input type="file" id="fileUploadInput" multiple accept=".mp3,.wav,.m4a,.flac,.ogg,.webm,.mp4,.mov,.avi" class="hidden" onchange="handleServerUpload(event)">
+                    <svg class="w-10 h-10 mx-auto text-gray-500 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                    </svg>
+                    <p class="text-sm text-gray-300">Drop audio files here or click to upload</p>
+                    <p class="text-xs text-gray-500 mt-2">Supports: MP3, WAV, M4A, FLAC, OGG, WebM, MP4, MOV, AVI</p>
+                </div>
+                
+                <!-- Upload Queue -->
+                <div id="uploadQueue" class="mt-4 hidden">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-sm text-gray-400">Files to transcribe:</span>
+                        <button type="button" onclick="clearUploadQueue()" class="text-xs text-red-400 hover:text-red-300">Clear all</button>
+                    </div>
+                    <div id="uploadQueueList" class="space-y-2 max-h-48 overflow-auto"></div>
+                </div>
+                
+                <div id="uploadStatus" class="mt-3 text-xs text-primary-300 hidden"></div>
+            </div>
+            {% else %}
+            <!-- LOCAL MODE: Folder-based workflow -->
             <div class="grid md:grid-cols-2 gap-4">
                 <!-- Input Folder -->
                 <div class="glass rounded-2xl p-5 card">
@@ -69,19 +111,6 @@
                         </button>
                     </div>
                     <div id="filePreview" class="mt-2 text-xs text-primary-300 hidden"></div>
-                    
-                    <!-- Upload Dropzone -->
-                    <div id="uploadDropzone" 
-                         class="mt-3 border-2 border-dashed border-gray-600/50 rounded-xl p-4 text-center cursor-pointer hover:border-primary-500/50 hover:bg-surface-700/30 transition-all"
-                         onclick="document.getElementById('fileUploadInput').click()">
-                        <input type="file" id="fileUploadInput" multiple accept=".mp3,.wav,.m4a,.flac,.ogg,.webm,.mp4,.mov,.avi" class="hidden" onchange="handleFileUpload(event)">
-                        <svg class="w-6 h-6 mx-auto text-gray-500 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
-                        </svg>
-                        <p class="text-xs text-gray-400">Drop audio files here or click to upload</p>
-                        <p class="text-xs text-gray-500 mt-1">Supports: MP3, WAV, M4A, FLAC, OGG, WebM, MP4, MOV, AVI</p>
-                    </div>
-                    <div id="uploadStatus" class="mt-2 text-xs text-primary-300 hidden"></div>
                 </div>
 
                 <!-- Output Folder -->
@@ -122,6 +151,7 @@
                     <div id="downloadStatus" class="mt-2 text-xs text-gray-400 hidden"></div>
                 </div>
             </div>
+            {% endif %}
 
             <!-- Settings Row -->
             <div class="grid md:grid-cols-2 gap-4">
@@ -417,6 +447,10 @@
     </footer>
 
     <script>
+        // App mode from server
+        const APP_MODE = '{{ app_mode }}';
+        const IS_SERVER_MODE = {{ 'true' if is_server_mode else 'false' }};
+        
         const form = document.getElementById('transcribeForm');
         const submitBtn = document.getElementById('submitBtn');
         const progressSection = document.getElementById('progressSection');
@@ -428,6 +462,11 @@
         let modelsData = [];
         const cancelAfterBtn = document.getElementById('cancelAfterBtn');
         const forceStopBtn = document.getElementById('forceStopBtn');
+        
+        // Server mode state
+        let uploadedFiles = [];  // Array of {id, filename, size}
+        let currentJobId = null;
+        let jobPollInterval = null;
 
         // Load models on page load (handled in restoreSavedSettings section below)
 
@@ -891,7 +930,294 @@
             }
         }
 
-        // File Upload handling
+        // =============================================================================
+        // SERVER MODE: Upload and Job Functions
+        // =============================================================================
+        
+        async function handleServerUpload(event) {
+            const files = event.target.files;
+            if (!files || files.length === 0) return;
+            await uploadToServer(files);
+        }
+        
+        async function uploadToServer(files) {
+            const uploadStatus = document.getElementById('uploadStatus');
+            uploadStatus.textContent = `Uploading ${files.length} file(s)...`;
+            uploadStatus.classList.remove('hidden');
+            uploadStatus.classList.remove('text-red-400');
+            
+            const formData = new FormData();
+            for (const file of files) {
+                formData.append('files', file);
+            }
+            
+            try {
+                const response = await fetch('/api/uploads', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                
+                if (data.error) {
+                    uploadStatus.textContent = `Error: ${data.error}`;
+                    uploadStatus.classList.add('text-red-400');
+                    return;
+                }
+                
+                // Add to upload queue
+                for (const upload of data.uploads) {
+                    uploadedFiles.push(upload);
+                }
+                
+                let msg = `Uploaded ${data.uploads.length} file(s)`;
+                if (data.skipped && data.skipped.length > 0) {
+                    msg += ` (${data.skipped.length} skipped)`;
+                }
+                uploadStatus.textContent = msg;
+                
+                updateUploadQueueUI();
+            } catch (e) {
+                uploadStatus.textContent = `Upload failed: ${e.message}`;
+                uploadStatus.classList.add('text-red-400');
+            }
+            
+            document.getElementById('fileUploadInput').value = '';
+        }
+        
+        function updateUploadQueueUI() {
+            const queue = document.getElementById('uploadQueue');
+            const list = document.getElementById('uploadQueueList');
+            
+            if (uploadedFiles.length === 0) {
+                queue.classList.add('hidden');
+                return;
+            }
+            
+            queue.classList.remove('hidden');
+            list.innerHTML = '';
+            
+            uploadedFiles.forEach((file, idx) => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center justify-between p-2 bg-surface-800/50 rounded-lg text-sm';
+                div.innerHTML = `
+                    <div class="flex items-center gap-2 truncate">
+                        <svg class="w-4 h-4 text-primary-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
+                        </svg>
+                        <span class="truncate text-gray-300">${file.filename}</span>
+                        <span class="text-xs text-gray-500">(${formatBytes(file.size)})</span>
+                    </div>
+                    <button type="button" onclick="removeFromQueue(${idx})" class="text-gray-500 hover:text-red-400 p-1">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                `;
+                list.appendChild(div);
+            });
+        }
+        
+        function removeFromQueue(idx) {
+            uploadedFiles.splice(idx, 1);
+            updateUploadQueueUI();
+        }
+        
+        function clearUploadQueue() {
+            uploadedFiles = [];
+            updateUploadQueueUI();
+        }
+        
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+        
+        async function startServerJob() {
+            if (uploadedFiles.length === 0) {
+                showError('No files uploaded. Please upload audio files first.');
+                return;
+            }
+            
+            const uploadIds = uploadedFiles.map(f => f.id);
+            const options = {
+                model: document.getElementById('model').value,
+                language: document.getElementById('language').value,
+                includeSegments: document.getElementById('includeSegments').checked,
+                includeFull: document.getElementById('includeFull').checked,
+                includeTimestamps: document.getElementById('includeTimestamps').checked,
+                wordTimestamps: document.getElementById('wordTimestamps').checked,
+                qualityPreset: document.getElementById('qualityPreset').value,
+            };
+            
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="spinner mr-2"></span> Starting...';
+            hideError();
+            
+            try {
+                const response = await fetch('/api/jobs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ uploadIds, options })
+                });
+                const data = await response.json();
+                
+                if (data.error) {
+                    showError(data.error);
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '<span class="flex items-center justify-center gap-2"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>Start Transcription</span>';
+                    return;
+                }
+                
+                currentJobId = data.jobId;
+                progressSection.classList.remove('hidden');
+                resultsSection.classList.add('hidden');
+                
+                // Start polling for job status
+                pollJobStatus();
+                
+            } catch (e) {
+                showError(`Failed to start job: ${e.message}`);
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<span class="flex items-center justify-center gap-2"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>Start Transcription</span>';
+            }
+        }
+        
+        function pollJobStatus() {
+            if (jobPollInterval) clearInterval(jobPollInterval);
+            
+            jobPollInterval = setInterval(async () => {
+                if (!currentJobId) {
+                    clearInterval(jobPollInterval);
+                    return;
+                }
+                
+                try {
+                    const response = await fetch(`/api/jobs/${currentJobId}`);
+                    const job = await response.json();
+                    
+                    if (job.error) {
+                        clearInterval(jobPollInterval);
+                        showError(job.error);
+                        resetSubmitButton();
+                        return;
+                    }
+                    
+                    updateJobProgress(job);
+                    
+                    if (job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled') {
+                        clearInterval(jobPollInterval);
+                        onJobComplete(job);
+                    }
+                } catch (e) {
+                    console.error('Failed to poll job status:', e);
+                }
+            }, 1000);
+        }
+        
+        function updateJobProgress(job) {
+            const progress = job.progress || {};
+            const percent = progress.percent || 0;
+            const completed = progress.completed || 0;
+            const total = progress.total || 0;
+            const currentFile = progress.currentFile || '';
+            
+            document.getElementById('progressBar').style.width = `${percent}%`;
+            document.getElementById('progressCount').textContent = `${completed} / ${total}`;
+            document.getElementById('currentFile').innerHTML = `<span class="spinner"></span><span>${currentFile || 'Processing...'}</span>`;
+        }
+        
+        function onJobComplete(job) {
+            progressSection.classList.add('hidden');
+            resetSubmitButton();
+            
+            if (job.status === 'failed') {
+                showError(job.error || 'Job failed');
+                return;
+            }
+            
+            if (job.status === 'cancelled') {
+                showError('Job was cancelled');
+                return;
+            }
+            
+            // Show results
+            resultsSection.classList.remove('hidden');
+            const resultsList = document.getElementById('resultsList');
+            resultsList.innerHTML = '';
+            
+            const outputs = job.outputs || [];
+            const successOutputs = outputs.filter(o => !o.error);
+            
+            if (successOutputs.length > 0) {
+                // Download all button
+                const downloadAllDiv = document.createElement('div');
+                downloadAllDiv.className = 'mb-4';
+                downloadAllDiv.innerHTML = `
+                    <a href="/api/jobs/${job.jobId}/download" 
+                       class="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-xl transition-all">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                        </svg>
+                        Download All (${successOutputs.length} files)
+                    </a>
+                `;
+                resultsList.appendChild(downloadAllDiv);
+                
+                // Individual files
+                for (const output of successOutputs) {
+                    const div = document.createElement('div');
+                    div.className = 'flex items-center justify-between p-3 bg-surface-800/50 rounded-lg';
+                    div.innerHTML = `
+                        <div class="flex items-center gap-2">
+                            <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <span class="text-sm text-gray-300">${output.filename}</span>
+                            <span class="text-xs text-gray-500">(${output.type})</span>
+                        </div>
+                        <a href="/api/jobs/${job.jobId}/outputs/${output.id}" 
+                           class="text-xs text-primary-400 hover:text-primary-300">Download</a>
+                    `;
+                    resultsList.appendChild(div);
+                }
+            }
+            
+            // Clear upload queue after successful job
+            uploadedFiles = [];
+            updateUploadQueueUI();
+        }
+        
+        async function cancelServerJob() {
+            if (!currentJobId) return;
+            
+            try {
+                await fetch(`/api/jobs/${currentJobId}/cancel`, { method: 'POST' });
+            } catch (e) {
+                console.error('Failed to cancel job:', e);
+            }
+        }
+        
+        function resetSubmitButton() {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<span class="flex items-center justify-center gap-2"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>Start Transcription</span>';
+        }
+        
+        function showError(msg) {
+            errorSection.classList.remove('hidden');
+            document.getElementById('errorMessage').textContent = msg;
+        }
+        
+        function hideError() {
+            errorSection.classList.add('hidden');
+        }
+        
+        // =============================================================================
+        // LOCAL MODE: Legacy Upload Functions
+        // =============================================================================
+        
         async function handleFileUpload(event) {
             const files = event.target.files;
             if (!files || files.length === 0) return;
@@ -929,13 +1255,11 @@
                     uploadStatus.textContent = msg;
                     uploadStatus.classList.remove('text-red-400');
                     
-                    // Update input folder if it was empty
                     if (!document.getElementById('inputFolder').value) {
                         document.getElementById('inputFolder').value = data.folder;
                         saveToStorage(STORAGE_KEYS.inputFolder, data.folder);
                     }
                     
-                    // Refresh file preview
                     previewFiles();
                 }
             } catch (e) {
@@ -943,32 +1267,36 @@
                 uploadStatus.classList.add('text-red-400');
             }
             
-            // Clear the file input
             document.getElementById('fileUploadInput').value = '';
         }
 
         // Drag and drop handling
         const dropzone = document.getElementById('uploadDropzone');
-        
-        dropzone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            dropzone.classList.add('border-primary-500', 'bg-surface-700/50');
-        });
-        
-        dropzone.addEventListener('dragleave', (e) => {
-            e.preventDefault();
-            dropzone.classList.remove('border-primary-500', 'bg-surface-700/50');
-        });
-        
-        dropzone.addEventListener('drop', async (e) => {
-            e.preventDefault();
-            dropzone.classList.remove('border-primary-500', 'bg-surface-700/50');
+        if (dropzone) {
+            dropzone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropzone.classList.add('border-primary-500', 'bg-surface-700/50');
+            });
             
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                await uploadFiles(files);
-            }
-        });
+            dropzone.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                dropzone.classList.remove('border-primary-500', 'bg-surface-700/50');
+            });
+            
+            dropzone.addEventListener('drop', async (e) => {
+                e.preventDefault();
+                dropzone.classList.remove('border-primary-500', 'bg-surface-700/50');
+                
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    if (IS_SERVER_MODE) {
+                        await uploadToServer(files);
+                    } else {
+                        await uploadFiles(files);
+                    }
+                }
+            });
+        }
 
         // Download handling
         async function downloadTranscriptions() {
@@ -1035,6 +1363,13 @@
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             
+            // Server mode uses job-based API
+            if (IS_SERVER_MODE) {
+                await startServerJob();
+                return;
+            }
+            
+            // Local mode uses folder-based API
             const inputFolder = document.getElementById('inputFolder').value;
             const outputFolder = document.getElementById('outputFolder').value;
             const model = document.getElementById('model').value;

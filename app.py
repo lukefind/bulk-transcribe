@@ -790,7 +790,9 @@ def run_transcription(input_folder: str, output_folder: str, model: str, languag
 def index():
     return render_template('index.html', 
                          models=AVAILABLE_MODELS, 
-                         languages=COMMON_LANGUAGES)
+                         languages=COMMON_LANGUAGES,
+                         app_mode=session_store.get_app_mode(),
+                         is_server_mode=session_store.is_server_mode())
 
 
 @app.route('/start', methods=['POST'])
