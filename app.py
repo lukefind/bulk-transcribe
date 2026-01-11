@@ -38,17 +38,22 @@ import subprocess
 import threading
 import queue
 from dataclasses import replace
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, g
 import zipfile
 import io
 import tempfile
 import shutil
 from werkzeug.utils import secure_filename
 import json
+from datetime import datetime, timezone
 
 from transcribe_options import TranscribeOptions, get_preset, postprocess_segments
+import session_store
 
 app = Flask(__name__)
+
+# Configure max upload size from environment
+app.config['MAX_CONTENT_LENGTH'] = session_store.get_max_upload_mb() * 1024 * 1024
 
 SUPPORTED_FORMATS = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.webm', '.mp4', '.mov', '.avi']
 AVAILABLE_MODELS = ['tiny', 'base', 'small', 'medium', 'large', 'turbo']
@@ -101,6 +106,54 @@ transcription_status = {
 # Thread-safe lock for updating transcription_status
 import threading
 status_lock = threading.Lock()
+
+# Request counter for periodic cleanup
+_request_counter = 0
+_cleanup_interval = 50  # Run cleanup every N requests
+
+
+# =============================================================================
+# Session Middleware
+# =============================================================================
+
+@app.before_request
+def before_request_session():
+    """Ensure session ID exists for all requests."""
+    global _request_counter
+    
+    # Get or generate session ID
+    session_id = request.cookies.get(session_store.COOKIE_NAME)
+    if not session_id:
+        session_id = session_store.new_id(32)
+        g._new_session_id = session_id
+    
+    g.session_id = session_id
+    
+    # Periodic cleanup
+    _request_counter += 1
+    if _request_counter >= _cleanup_interval:
+        _request_counter = 0
+        try:
+            session_store.cleanup_expired_sessions()
+        except Exception:
+            pass  # Don't fail requests due to cleanup errors
+
+
+@app.after_request
+def after_request_session(response):
+    """Set session cookie if new, and touch session metadata."""
+    # Set cookie for new sessions
+    if hasattr(g, '_new_session_id'):
+        session_store.set_new_session_cookie(request, response, g._new_session_id)
+    
+    # Touch session to update lastSeenAt (skip for static files and healthz)
+    if hasattr(g, 'session_id') and not request.path.startswith('/static') and request.path != '/healthz':
+        try:
+            session_store.touch_session(g.session_id)
+        except Exception:
+            pass  # Don't fail requests due to session touch errors
+    
+    return response
 
 
 def choose_folder_dialog(prompt="Select a folder"):
@@ -742,7 +795,11 @@ def index():
 
 @app.route('/start', methods=['POST'])
 def start_transcription():
+    """Start transcription with folder paths. Blocked in server mode."""
     global transcription_status
+    
+    if session_store.is_server_mode():
+        return jsonify({'error': 'Folder-based transcription not available in server mode. Use /api/jobs.'}), 400
     
     if transcription_status['running']:
         return jsonify({'error': 'Transcription already in progress'}), 400
@@ -837,6 +894,10 @@ def healthz():
 
 @app.route('/preview')
 def preview_files():
+    """Preview files in a folder. Blocked in server mode."""
+    if session_store.is_server_mode():
+        return jsonify({'error': 'Folder preview not available in server mode. Use /api/uploads.'}), 404
+    
     input_folder = request.args.get('folder', '')
     if not input_folder or not Path(input_folder).exists():
         return jsonify({'files': [], 'error': 'Folder not found'})
@@ -850,7 +911,10 @@ def preview_files():
 
 @app.route('/browse', methods=['POST'])
 def browse_folder():
-    """Open native folder picker and return selected path."""
+    """Open native folder picker. Blocked in server mode."""
+    if session_store.is_server_mode():
+        return jsonify({'error': 'Folder browser not available in server mode.'}), 404
+    
     data = request.json or {}
     prompt = data.get('prompt', 'Select a folder')
     folder = choose_folder_dialog(prompt)
@@ -1053,8 +1117,11 @@ def delete_model():
 
 
 @app.route('/upload', methods=['POST'])
-def upload_files():
-    """Upload multiple audio files to the input folder."""
+def upload_files_legacy():
+    """Upload files to a folder path. Blocked in server mode."""
+    if session_store.is_server_mode():
+        return jsonify({'error': 'Folder-based upload not available in server mode. Use /api/uploads.'}), 400
+    
     if 'files' not in request.files:
         return jsonify({'error': 'No files provided'}), 400
     
@@ -1104,8 +1171,11 @@ def upload_files():
 
 
 @app.route('/download', methods=['GET'])
-def download_transcriptions():
-    """Download all transcriptions from output folder as a zip file."""
+def download_transcriptions_legacy():
+    """Download from folder path. Blocked in server mode."""
+    if session_store.is_server_mode():
+        return jsonify({'error': 'Folder-based download not available in server mode. Use /api/jobs/<job_id>/download.'}), 404
+    
     output_folder = request.args.get('folder', os.environ.get('OUTPUT_DIR', '/data/output'))
     output_path = Path(output_folder)
     
@@ -1142,8 +1212,11 @@ def download_transcriptions():
 
 
 @app.route('/download/list', methods=['GET'])
-def list_transcriptions():
-    """List available transcription files for download."""
+def list_transcriptions_legacy():
+    """List files in folder. Blocked in server mode."""
+    if session_store.is_server_mode():
+        return jsonify({'error': 'Folder-based listing not available in server mode. Use /api/jobs/<job_id>/outputs.'}), 404
+    
     output_folder = request.args.get('folder', os.environ.get('OUTPUT_DIR', '/data/output'))
     output_path = Path(output_folder)
     
@@ -1168,6 +1241,462 @@ def list_transcriptions():
         'folder': str(output_path),
         'exists': True,
         'count': len(files)
+    })
+
+
+# =============================================================================
+# Session-Isolated API Endpoints (Server Mode)
+# =============================================================================
+
+# In-memory job runners keyed by (session_id, job_id) for cancellation
+_active_jobs = {}
+_active_jobs_lock = threading.Lock()
+
+
+@app.route('/api/uploads', methods=['POST'])
+def api_upload_files():
+    """Upload audio files to session-isolated storage."""
+    if 'files' not in request.files:
+        return jsonify({'error': 'No files provided'}), 400
+    
+    files = request.files.getlist('files')
+    if not files or all(f.filename == '' for f in files):
+        return jsonify({'error': 'No files selected'}), 400
+    
+    # Enforce file count limit
+    max_files = session_store.get_max_files_per_job()
+    if len(files) > max_files:
+        return jsonify({'error': f'Too many files. Maximum {max_files} per upload.'}), 400
+    
+    session_id = g.session_id
+    session_store.ensure_session_dirs(session_id)
+    uploads_path = Path(session_store.uploads_dir(session_id))
+    
+    uploaded = []
+    skipped = []
+    errors = []
+    
+    for file in files:
+        if file.filename == '':
+            continue
+        
+        original_name = file.filename
+        sanitized = session_store.sanitize_filename(original_name)
+        ext = Path(sanitized).suffix.lower()
+        
+        # Check supported format
+        if ext not in SUPPORTED_FORMATS:
+            skipped.append({'name': original_name, 'reason': f'Unsupported format: {ext}'})
+            continue
+        
+        try:
+            upload_id = session_store.new_id(8)
+            stored_name = f"{upload_id}_{sanitized}"
+            filepath = uploads_path / stored_name
+            file.save(str(filepath))
+            
+            uploaded.append({
+                'id': upload_id,
+                'filename': original_name,
+                'storedName': stored_name,
+                'size': filepath.stat().st_size
+            })
+        except Exception as e:
+            errors.append({'name': original_name, 'error': str(e)[:100]})
+    
+    return jsonify({
+        'uploads': uploaded,
+        'skipped': skipped,
+        'errors': errors
+    })
+
+
+@app.route('/api/uploads', methods=['GET'])
+def api_list_uploads():
+    """List uploaded files for current session."""
+    session_id = g.session_id
+    uploads = session_store.list_uploads(session_id)
+    return jsonify({'uploads': uploads})
+
+
+@app.route('/api/jobs', methods=['POST'])
+def api_create_job():
+    """Create and start a transcription job."""
+    session_id = g.session_id
+    
+    # Check for existing running job in this session
+    with _active_jobs_lock:
+        for key, job_info in _active_jobs.items():
+            if key[0] == session_id and job_info.get('running'):
+                return jsonify({'error': 'A job is already running in this session'}), 409
+    
+    data = request.json or {}
+    upload_ids = data.get('uploadIds', [])
+    options = data.get('options', {})
+    
+    if not upload_ids:
+        return jsonify({'error': 'No upload IDs provided'}), 400
+    
+    # Resolve upload IDs to file paths
+    inputs = []
+    for upload_id in upload_ids:
+        filepath = session_store.find_upload_by_id(session_id, upload_id)
+        if not filepath:
+            return jsonify({'error': f'Upload not found: {upload_id}'}), 404
+        
+        # Extract original filename from stored name
+        stored_name = os.path.basename(filepath)
+        parts = stored_name.split('_', 1)
+        original_name = parts[1] if len(parts) > 1 else stored_name
+        
+        inputs.append({
+            'uploadId': upload_id,
+            'path': filepath,
+            'originalFilename': original_name
+        })
+    
+    # Create job
+    job_id = session_store.new_id(12)
+    dirs = session_store.ensure_job_dirs(session_id, job_id)
+    
+    now = datetime.now(timezone.utc).isoformat()
+    manifest = {
+        'jobId': job_id,
+        'sessionId': session_id,
+        'createdAt': now,
+        'updatedAt': now,
+        'status': 'queued',
+        'options': {
+            'model': options.get('model', 'base'),
+            'language': options.get('language', ''),
+            'includeSegments': options.get('includeSegments', True),
+            'includeFull': options.get('includeFull', True),
+            'includeTimestamps': options.get('includeTimestamps', True),
+            'wordTimestamps': options.get('wordTimestamps', False),
+            'qualityPreset': options.get('qualityPreset', 'balanced'),
+        },
+        'inputs': inputs,
+        'outputs': [],
+        'progress': {
+            'total': len(inputs),
+            'completed': 0,
+            'currentFile': '',
+            'percent': 0
+        },
+        'error': None
+    }
+    
+    session_store.atomic_write_json(session_store.job_manifest_path(session_id, job_id), manifest)
+    
+    # Start job in background thread
+    def run_job():
+        _run_session_job(session_id, job_id, inputs, manifest['options'], dirs['outputs'])
+    
+    with _active_jobs_lock:
+        _active_jobs[(session_id, job_id)] = {'running': True, 'cancel_requested': False}
+    
+    job_thread = threading.Thread(target=run_job, daemon=True)
+    job_thread.start()
+    
+    return jsonify({'jobId': job_id})
+
+
+def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, outputs_dir: str):
+    """Run transcription job and update manifest with progress."""
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    
+    def update_manifest(**updates):
+        manifest = session_store.read_json(manifest_path) or {}
+        manifest['updatedAt'] = datetime.now(timezone.utc).isoformat()
+        for key, value in updates.items():
+            if key == 'progress':
+                manifest.setdefault('progress', {}).update(value)
+            else:
+                manifest[key] = value
+        session_store.atomic_write_json(manifest_path, manifest)
+        return manifest
+    
+    def is_cancelled():
+        with _active_jobs_lock:
+            job_info = _active_jobs.get((session_id, job_id), {})
+            return job_info.get('cancel_requested', False)
+    
+    try:
+        update_manifest(status='running')
+        
+        # Load whisper model
+        import whisper
+        model_name = options.get('model', 'base')
+        language = options.get('language', '') or None
+        
+        update_manifest(progress={'currentFile': f'Loading {model_name} model...'})
+        
+        # Determine device
+        import torch
+        device = 'cpu'
+        if torch.cuda.is_available():
+            device = 'cuda'
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            # MPS doesn't support word timestamps (float64 for DTW)
+            if not options.get('wordTimestamps', False):
+                device = 'mps'
+        
+        whisper_model = whisper.load_model(model_name, device=device)
+        
+        outputs = []
+        total = len(inputs)
+        
+        for idx, input_info in enumerate(inputs):
+            if is_cancelled():
+                update_manifest(status='cancelled')
+                return
+            
+            filepath = input_info['path']
+            original_name = input_info['originalFilename']
+            base_name = Path(original_name).stem
+            
+            update_manifest(progress={
+                'currentFile': original_name,
+                'completed': idx,
+                'percent': int((idx / total) * 100)
+            })
+            
+            try:
+                # Transcribe
+                result = whisper.transcribe(
+                    whisper_model,
+                    filepath,
+                    language=language,
+                    word_timestamps=options.get('wordTimestamps', False)
+                )
+                
+                # Generate output files
+                output_id = session_store.new_id(8)
+                
+                # Markdown output
+                md_filename = f"{base_name}.md"
+                md_path = os.path.join(outputs_dir, md_filename)
+                
+                content = f"# {original_name}\n\n"
+                if options.get('includeFull', True):
+                    content += f"## Full Transcript\n\n{result['text'].strip()}\n\n"
+                
+                if options.get('includeSegments', True) and result.get('segments'):
+                    content += "## Segments\n\n"
+                    for seg in result['segments']:
+                        if options.get('includeTimestamps', True):
+                            start = seg.get('start', 0)
+                            end = seg.get('end', 0)
+                            content += f"**[{start:.2f} - {end:.2f}]** "
+                        content += f"{seg.get('text', '').strip()}\n\n"
+                
+                with open(md_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                
+                outputs.append({
+                    'id': output_id,
+                    'inputFilename': original_name,
+                    'filename': md_filename,
+                    'path': md_path,
+                    'type': 'markdown',
+                    'size': os.path.getsize(md_path)
+                })
+                
+                # JSON output
+                json_filename = f"{base_name}.json"
+                json_path = os.path.join(outputs_dir, json_filename)
+                
+                json_output = {
+                    'source': original_name,
+                    'text': result['text'],
+                    'language': result.get('language', ''),
+                    'segments': result.get('segments', [])
+                }
+                
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(json_output, f, indent=2, ensure_ascii=False)
+                
+                outputs.append({
+                    'id': session_store.new_id(8),
+                    'inputFilename': original_name,
+                    'filename': json_filename,
+                    'path': json_path,
+                    'type': 'json',
+                    'size': os.path.getsize(json_path)
+                })
+                
+            except Exception as e:
+                # Record error but continue with other files
+                outputs.append({
+                    'id': session_store.new_id(8),
+                    'inputFilename': original_name,
+                    'error': str(e)[:200]
+                })
+        
+        update_manifest(
+            status='complete',
+            outputs=outputs,
+            progress={'completed': total, 'percent': 100, 'currentFile': ''}
+        )
+        
+    except Exception as e:
+        update_manifest(status='failed', error=str(e)[:500])
+    
+    finally:
+        with _active_jobs_lock:
+            if (session_id, job_id) in _active_jobs:
+                _active_jobs[(session_id, job_id)]['running'] = False
+
+
+@app.route('/api/jobs/<job_id>', methods=['GET'])
+def api_get_job(job_id):
+    """Get job status and details."""
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Don't expose internal paths
+    safe_manifest = {
+        'jobId': manifest.get('jobId'),
+        'createdAt': manifest.get('createdAt'),
+        'updatedAt': manifest.get('updatedAt'),
+        'status': manifest.get('status'),
+        'options': manifest.get('options'),
+        'inputs': [{'uploadId': i.get('uploadId'), 'filename': i.get('originalFilename')} for i in manifest.get('inputs', [])],
+        'outputs': [{'id': o.get('id'), 'filename': o.get('filename'), 'type': o.get('type'), 'size': o.get('size'), 'error': o.get('error')} for o in manifest.get('outputs', [])],
+        'progress': manifest.get('progress'),
+        'error': manifest.get('error')
+    }
+    
+    return jsonify(safe_manifest)
+
+
+@app.route('/api/jobs/<job_id>/cancel', methods=['POST'])
+def api_cancel_job(job_id):
+    """Cancel a running job."""
+    session_id = g.session_id
+    
+    with _active_jobs_lock:
+        job_info = _active_jobs.get((session_id, job_id))
+        if job_info and job_info.get('running'):
+            job_info['cancel_requested'] = True
+            return jsonify({'status': 'cancelling'})
+    
+    # Check if job exists
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    if manifest.get('status') in ('complete', 'failed', 'cancelled'):
+        return jsonify({'status': manifest.get('status'), 'message': 'Job already finished'})
+    
+    return jsonify({'status': 'not_running'})
+
+
+@app.route('/api/jobs/<job_id>/outputs', methods=['GET'])
+def api_list_job_outputs(job_id):
+    """List outputs for a job."""
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    outputs = [
+        {'id': o.get('id'), 'filename': o.get('filename'), 'type': o.get('type'), 'size': o.get('size')}
+        for o in manifest.get('outputs', [])
+        if not o.get('error')
+    ]
+    
+    return jsonify({'outputs': outputs})
+
+
+@app.route('/api/jobs/<job_id>/download', methods=['GET'])
+def api_download_job(job_id):
+    """Download all job outputs as a zip file."""
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    outputs = manifest.get('outputs', [])
+    files_to_zip = [o for o in outputs if o.get('path') and not o.get('error')]
+    
+    if not files_to_zip:
+        return jsonify({'error': 'No output files available'}), 404
+    
+    # Verify all files exist and are within job directory
+    job_outputs_path = session_store.job_outputs_dir(session_id, job_id)
+    
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for output in files_to_zip:
+            filepath = output.get('path')
+            if filepath and os.path.exists(filepath) and filepath.startswith(job_outputs_path):
+                zf.write(filepath, output.get('filename'))
+    
+    zip_buffer.seek(0)
+    
+    timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+    zip_filename = f'transcriptions_{job_id[:8]}_{timestamp}.zip'
+    
+    return send_file(
+        zip_buffer,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=zip_filename
+    )
+
+
+@app.route('/api/jobs/<job_id>/outputs/<output_id>', methods=['GET'])
+def api_download_output(job_id, output_id):
+    """Download a single output file."""
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Find output by ID
+    output = None
+    for o in manifest.get('outputs', []):
+        if o.get('id') == output_id:
+            output = o
+            break
+    
+    if not output or output.get('error'):
+        return jsonify({'error': 'Output not found'}), 404
+    
+    filepath = output.get('path')
+    job_outputs_path = session_store.job_outputs_dir(session_id, job_id)
+    
+    # Security: verify file is within job outputs directory
+    if not filepath or not os.path.exists(filepath) or not filepath.startswith(job_outputs_path):
+        return jsonify({'error': 'Output file not accessible'}), 404
+    
+    return send_file(
+        filepath,
+        as_attachment=True,
+        download_name=output.get('filename')
+    )
+
+
+@app.route('/api/mode', methods=['GET'])
+def api_get_mode():
+    """Get current application mode."""
+    return jsonify({
+        'mode': session_store.get_app_mode(),
+        'isServer': session_store.is_server_mode(),
+        'isLocal': session_store.is_local_mode()
     })
 
 
