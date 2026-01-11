@@ -69,6 +69,19 @@
                         </button>
                     </div>
                     <div id="filePreview" class="mt-2 text-xs text-primary-300 hidden"></div>
+                    
+                    <!-- Upload Dropzone -->
+                    <div id="uploadDropzone" 
+                         class="mt-3 border-2 border-dashed border-gray-600/50 rounded-xl p-4 text-center cursor-pointer hover:border-primary-500/50 hover:bg-surface-700/30 transition-all"
+                         onclick="document.getElementById('fileUploadInput').click()">
+                        <input type="file" id="fileUploadInput" multiple accept=".mp3,.wav,.m4a,.flac,.ogg,.webm,.mp4,.mov,.avi" class="hidden" onchange="handleFileUpload(event)">
+                        <svg class="w-6 h-6 mx-auto text-gray-500 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                        </svg>
+                        <p class="text-xs text-gray-400">Drop audio files here or click to upload</p>
+                        <p class="text-xs text-gray-500 mt-1">Supports: MP3, WAV, M4A, FLAC, OGG, WebM, MP4, MOV, AVI</p>
+                    </div>
+                    <div id="uploadStatus" class="mt-2 text-xs text-primary-300 hidden"></div>
                 </div>
 
                 <!-- Output Folder -->
@@ -88,6 +101,25 @@
                             Browse
                         </button>
                     </div>
+                    
+                    <!-- Download Button -->
+                    <div class="mt-3 flex gap-2">
+                        <button type="button" onclick="downloadTranscriptions()" 
+                                class="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-surface-700/80 hover:bg-surface-700 text-white text-sm font-medium rounded-xl transition-all border border-gray-600/30">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                            </svg>
+                            Download All
+                        </button>
+                        <button type="button" onclick="refreshDownloadList()" 
+                                class="px-3 py-2.5 bg-surface-700/80 hover:bg-surface-700 text-white text-sm font-medium rounded-xl transition-all border border-gray-600/30"
+                                title="Refresh file list">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div id="downloadStatus" class="mt-2 text-xs text-gray-400 hidden"></div>
                 </div>
             </div>
 
@@ -856,6 +888,147 @@
             } catch (e) {
                 preview.textContent = 'Error checking folder';
                 preview.classList.remove('hidden');
+            }
+        }
+
+        // File Upload handling
+        async function handleFileUpload(event) {
+            const files = event.target.files;
+            if (!files || files.length === 0) return;
+            await uploadFiles(files);
+        }
+
+        async function uploadFiles(files) {
+            const uploadStatus = document.getElementById('uploadStatus');
+            const inputFolder = document.getElementById('inputFolder').value || '/data/input';
+            
+            uploadStatus.textContent = `Uploading ${files.length} file(s)...`;
+            uploadStatus.classList.remove('hidden');
+            
+            const formData = new FormData();
+            for (const file of files) {
+                formData.append('files', file);
+            }
+            formData.append('folder', inputFolder);
+            
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                
+                if (data.error) {
+                    uploadStatus.textContent = `Error: ${data.error}`;
+                    uploadStatus.classList.add('text-red-400');
+                } else {
+                    let msg = `Uploaded ${data.total_uploaded} file(s) to ${data.folder}`;
+                    if (data.skipped.length > 0) {
+                        msg += ` (${data.skipped.length} skipped)`;
+                    }
+                    uploadStatus.textContent = msg;
+                    uploadStatus.classList.remove('text-red-400');
+                    
+                    // Update input folder if it was empty
+                    if (!document.getElementById('inputFolder').value) {
+                        document.getElementById('inputFolder').value = data.folder;
+                        saveToStorage(STORAGE_KEYS.inputFolder, data.folder);
+                    }
+                    
+                    // Refresh file preview
+                    previewFiles();
+                }
+            } catch (e) {
+                uploadStatus.textContent = `Upload failed: ${e.message}`;
+                uploadStatus.classList.add('text-red-400');
+            }
+            
+            // Clear the file input
+            document.getElementById('fileUploadInput').value = '';
+        }
+
+        // Drag and drop handling
+        const dropzone = document.getElementById('uploadDropzone');
+        
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.classList.add('border-primary-500', 'bg-surface-700/50');
+        });
+        
+        dropzone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('border-primary-500', 'bg-surface-700/50');
+        });
+        
+        dropzone.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('border-primary-500', 'bg-surface-700/50');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                await uploadFiles(files);
+            }
+        });
+
+        // Download handling
+        async function downloadTranscriptions() {
+            const outputFolder = document.getElementById('outputFolder').value || '/data/output';
+            const downloadStatus = document.getElementById('downloadStatus');
+            
+            downloadStatus.textContent = 'Preparing download...';
+            downloadStatus.classList.remove('hidden');
+            
+            try {
+                const response = await fetch(`/download?folder=${encodeURIComponent(outputFolder)}`);
+                
+                if (!response.ok) {
+                    const data = await response.json();
+                    downloadStatus.textContent = data.error || 'Download failed';
+                    return;
+                }
+                
+                // Get filename from Content-Disposition header or use default
+                const contentDisposition = response.headers.get('Content-Disposition');
+                let filename = 'transcriptions.zip';
+                if (contentDisposition) {
+                    const match = contentDisposition.match(/filename=(.+)/);
+                    if (match) filename = match[1];
+                }
+                
+                // Download the file
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                a.remove();
+                
+                downloadStatus.textContent = `Downloaded ${filename}`;
+            } catch (e) {
+                downloadStatus.textContent = `Download failed: ${e.message}`;
+            }
+        }
+
+        async function refreshDownloadList() {
+            const outputFolder = document.getElementById('outputFolder').value || '/data/output';
+            const downloadStatus = document.getElementById('downloadStatus');
+            
+            try {
+                const response = await fetch(`/download/list?folder=${encodeURIComponent(outputFolder)}`);
+                const data = await response.json();
+                
+                if (data.count > 0) {
+                    downloadStatus.textContent = `${data.count} transcription file(s) available`;
+                } else {
+                    downloadStatus.textContent = 'No transcription files found';
+                }
+                downloadStatus.classList.remove('hidden');
+            } catch (e) {
+                downloadStatus.textContent = 'Error checking files';
+                downloadStatus.classList.remove('hidden');
             }
         }
 

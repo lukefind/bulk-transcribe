@@ -38,7 +38,12 @@ import subprocess
 import threading
 import queue
 from dataclasses import replace
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
+import zipfile
+import io
+import tempfile
+import shutil
+from werkzeug.utils import secure_filename
 import json
 
 from transcribe_options import TranscribeOptions, get_preset, postprocess_segments
@@ -1045,6 +1050,125 @@ def delete_model():
         return jsonify({'status': 'deleted', 'model': model_name})
     except Exception as e:
         return jsonify({'error': f'Failed to delete: {str(e)}'}), 500
+
+
+@app.route('/upload', methods=['POST'])
+def upload_files():
+    """Upload multiple audio files to the input folder."""
+    if 'files' not in request.files:
+        return jsonify({'error': 'No files provided'}), 400
+    
+    files = request.files.getlist('files')
+    if not files or all(f.filename == '' for f in files):
+        return jsonify({'error': 'No files selected'}), 400
+    
+    # Get target folder from form data or use default
+    target_folder = request.form.get('folder', os.environ.get('INPUT_DIR', '/data/input'))
+    target_path = Path(target_folder)
+    
+    # Create folder if it doesn't exist
+    target_path.mkdir(parents=True, exist_ok=True)
+    
+    uploaded = []
+    skipped = []
+    errors = []
+    
+    for file in files:
+        if file.filename == '':
+            continue
+            
+        filename = secure_filename(file.filename)
+        if not filename:
+            continue
+            
+        # Check if it's a supported audio format
+        ext = Path(filename).suffix.lower()
+        if ext not in SUPPORTED_FORMATS:
+            skipped.append({'name': filename, 'reason': f'Unsupported format: {ext}'})
+            continue
+        
+        try:
+            filepath = target_path / filename
+            file.save(str(filepath))
+            uploaded.append(filename)
+        except Exception as e:
+            errors.append({'name': filename, 'error': str(e)[:100]})
+    
+    return jsonify({
+        'uploaded': uploaded,
+        'skipped': skipped,
+        'errors': errors,
+        'folder': str(target_path),
+        'total_uploaded': len(uploaded)
+    })
+
+
+@app.route('/download', methods=['GET'])
+def download_transcriptions():
+    """Download all transcriptions from output folder as a zip file."""
+    output_folder = request.args.get('folder', os.environ.get('OUTPUT_DIR', '/data/output'))
+    output_path = Path(output_folder)
+    
+    if not output_path.exists():
+        return jsonify({'error': 'Output folder does not exist'}), 404
+    
+    # Find all transcription files (markdown and json)
+    files_to_zip = []
+    for ext in ['*.md', '*.json', '*.txt', '*.srt']:
+        files_to_zip.extend(output_path.glob(ext))
+    
+    if not files_to_zip:
+        return jsonify({'error': 'No transcription files found'}), 404
+    
+    # Create zip in memory
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for filepath in files_to_zip:
+            zf.write(filepath, filepath.name)
+    
+    zip_buffer.seek(0)
+    
+    # Generate filename with timestamp
+    from datetime import datetime
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    zip_filename = f'transcriptions_{timestamp}.zip'
+    
+    return send_file(
+        zip_buffer,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=zip_filename
+    )
+
+
+@app.route('/download/list', methods=['GET'])
+def list_transcriptions():
+    """List available transcription files for download."""
+    output_folder = request.args.get('folder', os.environ.get('OUTPUT_DIR', '/data/output'))
+    output_path = Path(output_folder)
+    
+    if not output_path.exists():
+        return jsonify({'files': [], 'folder': str(output_path), 'exists': False})
+    
+    files = []
+    for ext in ['*.md', '*.json', '*.txt', '*.srt']:
+        for filepath in output_path.glob(ext):
+            stat = filepath.stat()
+            files.append({
+                'name': filepath.name,
+                'size': stat.st_size,
+                'modified': stat.st_mtime
+            })
+    
+    # Sort by modification time, newest first
+    files.sort(key=lambda x: x['modified'], reverse=True)
+    
+    return jsonify({
+        'files': files,
+        'folder': str(output_path),
+        'exists': True,
+        'count': len(files)
+    })
 
 
 def run_with_webview():
