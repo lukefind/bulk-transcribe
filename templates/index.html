@@ -90,6 +90,20 @@
                 
                 <div id="uploadStatus" class="mt-3 text-xs text-primary-300 hidden"></div>
             </div>
+            
+            <!-- Job History (Server Mode) -->
+            <div id="jobHistory" class="glass rounded-2xl p-5 card hidden">
+                <div class="flex items-center justify-between mb-3">
+                    <label class="flex items-center gap-2 text-sm font-medium text-gray-300">
+                        <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        Recent Jobs
+                    </label>
+                    <button type="button" onclick="loadJobHistory()" class="text-xs text-primary-400 hover:text-primary-300">Refresh</button>
+                </div>
+                <div id="jobHistoryList" class="space-y-2 max-h-48 overflow-auto"></div>
+            </div>
             {% else %}
             <!-- LOCAL MODE: Folder-based workflow -->
             <div class="grid md:grid-cols-2 gap-4">
@@ -467,6 +481,7 @@
         let uploadedFiles = [];  // Array of {id, filename, size}
         let currentJobId = null;
         let jobPollInterval = null;
+        let csrfToken = null;  // CSRF token for server mode POSTs
 
         // Load models on page load (handled in restoreSavedSettings section below)
 
@@ -828,11 +843,111 @@
             }
         }
 
+        // Fetch CSRF token for server mode
+        async function fetchCsrfToken() {
+            if (!IS_SERVER_MODE) return;
+            try {
+                const response = await fetch('/api/session');
+                const data = await response.json();
+                csrfToken = data.csrfToken;
+            } catch (e) {
+                console.error('Failed to fetch CSRF token:', e);
+            }
+        }
+        
+        // Load job history for server mode
+        async function loadJobHistory() {
+            if (!IS_SERVER_MODE) return;
+            try {
+                const response = await fetch('/api/jobs');
+                const data = await response.json();
+                renderJobHistory(data.jobs || []);
+            } catch (e) {
+                console.error('Failed to load job history:', e);
+            }
+        }
+        
+        function renderJobHistory(jobs) {
+            const container = document.getElementById('jobHistory');
+            if (!container) return;
+            
+            if (jobs.length === 0) {
+                container.classList.add('hidden');
+                return;
+            }
+            
+            container.classList.remove('hidden');
+            const list = document.getElementById('jobHistoryList');
+            list.innerHTML = '';
+            
+            jobs.slice(0, 10).forEach(job => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center justify-between p-3 bg-surface-800/50 rounded-lg hover:bg-surface-700/50 cursor-pointer transition-all';
+                div.onclick = () => loadJob(job.jobId);
+                
+                const statusColors = {
+                    'complete': 'text-green-400',
+                    'running': 'text-yellow-400',
+                    'failed': 'text-red-400',
+                    'cancelled': 'text-gray-400',
+                    'queued': 'text-blue-400'
+                };
+                const statusColor = statusColors[job.status] || 'text-gray-400';
+                
+                const date = job.createdAt ? new Date(job.createdAt).toLocaleString() : '';
+                
+                div.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <span class="w-2 h-2 rounded-full ${statusColor.replace('text-', 'bg-')}"></span>
+                        <div>
+                            <div class="text-sm text-gray-300">${job.inputCount} file(s)</div>
+                            <div class="text-xs text-gray-500">${date}</div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs ${statusColor}">${job.status}</span>
+                        ${job.status === 'complete' ? `<span class="text-xs text-gray-500">${job.outputCount} outputs</span>` : ''}
+                    </div>
+                `;
+                list.appendChild(div);
+            });
+        }
+        
+        async function loadJob(jobId) {
+            try {
+                const response = await fetch(`/api/jobs/${jobId}`);
+                const job = await response.json();
+                
+                if (job.error) {
+                    showError(job.error);
+                    return;
+                }
+                
+                currentJobId = jobId;
+                
+                if (job.status === 'running' || job.status === 'queued') {
+                    progressSection.classList.remove('hidden');
+                    resultsSection.classList.add('hidden');
+                    pollJobStatus();
+                } else {
+                    onJobComplete(job);
+                }
+            } catch (e) {
+                showError(`Failed to load job: ${e.message}`);
+            }
+        }
+
         // Call restore after models are loaded
         document.addEventListener('DOMContentLoaded', () => {
             loadModels().then(() => {
                 restoreSavedSettings();
             });
+            
+            // Server mode initialization
+            if (IS_SERVER_MODE) {
+                fetchCsrfToken();
+                loadJobHistory();
+            }
             
             // Save language when changed
             document.getElementById('language').addEventListener('change', (e) => {
@@ -952,8 +1067,12 @@
             }
             
             try {
+                const headers = {};
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
                 const response = await fetch('/api/uploads', {
                     method: 'POST',
+                    headers,
                     body: formData
                 });
                 const data = await response.json();
@@ -1057,9 +1176,12 @@
             hideError();
             
             try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
                 const response = await fetch('/api/jobs', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers,
                     body: JSON.stringify({ uploadIds, options })
                 });
                 const data = await response.json();
@@ -1194,7 +1316,10 @@
             if (!currentJobId) return;
             
             try {
-                await fetch(`/api/jobs/${currentJobId}/cancel`, { method: 'POST' });
+                const headers = {};
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                await fetch(`/api/jobs/${currentJobId}/cancel`, { method: 'POST', headers });
             } catch (e) {
                 console.error('Failed to cancel job:', e);
             }
