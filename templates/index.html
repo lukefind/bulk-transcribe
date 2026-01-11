@@ -62,7 +62,7 @@
                     <div class="flex gap-2">
                         <input type="text" id="inputFolder" 
                                class="input-field flex-1 px-4 py-2.5 bg-surface-800/50 border border-gray-700/50 rounded-xl text-white placeholder-gray-500 text-sm"
-                               placeholder="Select audio folder" readonly>
+                               placeholder="/data/input (or type path)">
                         <button type="button" onclick="browseInput()" 
                                 class="px-4 py-2.5 bg-surface-700/80 hover:bg-surface-700 text-white text-sm font-medium rounded-xl transition-all border border-gray-600/30">
                             Browse
@@ -82,7 +82,7 @@
                     <div class="flex gap-2">
                         <input type="text" id="outputFolder" 
                                class="input-field flex-1 px-4 py-2.5 bg-surface-800/50 border border-gray-700/50 rounded-xl text-white placeholder-gray-500 text-sm"
-                               placeholder="Select output folder" readonly>
+                               placeholder="/data/output (or type path)">
                         <button type="button" onclick="browseOutput()" 
                                 class="px-4 py-2.5 bg-surface-700/80 hover:bg-surface-700 text-white text-sm font-medium rounded-xl transition-all border border-gray-600/30">
                             Browse
@@ -771,6 +771,15 @@
             // Initialize worker options and output option states
             updateWorkerOptions();
             updateOutputOptions();
+            
+            // Trigger file preview when user types in input folder (for server mode)
+            document.getElementById('inputFolder').addEventListener('change', () => {
+                saveToStorage(STORAGE_KEYS.inputFolder, document.getElementById('inputFolder').value);
+                previewFiles();
+            });
+            document.getElementById('outputFolder').addEventListener('change', () => {
+                saveToStorage(STORAGE_KEYS.outputFolder, document.getElementById('outputFolder').value);
+            });
         });
 
         async function browseInput() {
@@ -785,9 +794,16 @@
                     document.getElementById('inputFolder').value = data.folder;
                     saveToStorage(STORAGE_KEYS.inputFolder, data.folder);
                     previewFiles();
+                } else if (data.cancelled) {
+                    // User cancelled - do nothing
+                } else {
+                    // Browse not available (server mode) - focus input for manual entry
+                    document.getElementById('inputFolder').focus();
+                    document.getElementById('inputFolder').placeholder = 'Type path (e.g., /data/input)';
                 }
             } catch (e) {
                 console.error('Browse failed:', e);
+                document.getElementById('inputFolder').focus();
             }
         }
 
@@ -802,9 +818,16 @@
                 if (data.folder) {
                     document.getElementById('outputFolder').value = data.folder;
                     saveToStorage(STORAGE_KEYS.outputFolder, data.folder);
+                } else if (data.cancelled) {
+                    // User cancelled - do nothing
+                } else {
+                    // Browse not available (server mode) - focus input for manual entry
+                    document.getElementById('outputFolder').focus();
+                    document.getElementById('outputFolder').placeholder = 'Type path (e.g., /data/output)';
                 }
             } catch (e) {
                 console.error('Browse failed:', e);
+                document.getElementById('outputFolder').focus();
             }
         }
 
