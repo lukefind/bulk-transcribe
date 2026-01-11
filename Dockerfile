@@ -55,10 +55,11 @@ RUN if [ "$DEVICE" = "cpu" ]; then \
         fi; \
     fi
 
-# Copy application code (all Python modules needed at runtime)
-COPY app.py transcribe_options.py transcribe.py ./
-COPY templates/ templates/
-COPY static/ static/
+# Copy application source (relies on .dockerignore to exclude junk)
+COPY . .
+
+# Ensure Python can find local modules
+ENV PYTHONPATH=/app
 
 # Create data directories
 RUN mkdir -p /data/input /data/output && \
