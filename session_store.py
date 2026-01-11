@@ -408,6 +408,92 @@ def get_job_ttl_days() -> int:
         return 7
 
 
+def get_job_stale_minutes() -> int:
+    """Get job stale threshold in minutes from environment."""
+    try:
+        return int(os.environ.get('JOB_STALE_MINUTES', '30'))
+    except ValueError:
+        return 30
+
+
+def get_max_job_runtime_minutes() -> int:
+    """Get maximum job runtime in minutes from environment."""
+    try:
+        return int(os.environ.get('MAX_JOB_RUNTIME_MINUTES', '120'))
+    except ValueError:
+        return 120
+
+
+def get_max_session_mb() -> int:
+    """Get maximum session storage in MB from environment."""
+    try:
+        return int(os.environ.get('MAX_TOTAL_SESSION_MB', '2000'))
+    except ValueError:
+        return 2000
+
+
+def is_job_stale(manifest: Dict[str, Any]) -> bool:
+    """
+    Check if a running job is stale (no updates for too long).
+    
+    Args:
+        manifest: Job manifest dict
+    
+    Returns:
+        True if job is running but hasn't updated recently
+    """
+    if manifest.get('status') != 'running':
+        return False
+    
+    updated_at = manifest.get('updatedAt')
+    if not updated_at:
+        return True
+    
+    try:
+        from datetime import timedelta
+        last_update = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
+        stale_threshold = datetime.now(timezone.utc) - timedelta(minutes=get_job_stale_minutes())
+        return last_update < stale_threshold
+    except (ValueError, TypeError):
+        return True
+
+
+def mark_job_stale(session_id: str, job_id: str) -> None:
+    """Mark a stale job as failed."""
+    manifest_path = job_manifest_path(session_id, job_id)
+    manifest = read_json(manifest_path)
+    if not manifest:
+        return
+    
+    now = datetime.now(timezone.utc).isoformat()
+    manifest['status'] = 'failed'
+    manifest['finishedAt'] = now
+    manifest['updatedAt'] = now
+    manifest['error'] = {
+        'code': 'STALE_JOB',
+        'message': 'Job stopped responding and was marked as failed'
+    }
+    atomic_write_json(manifest_path, manifest)
+
+
+def get_session_disk_usage_mb(session_id: str) -> float:
+    """Get total disk usage for a session in MB."""
+    session_path = session_dir(session_id)
+    if not os.path.exists(session_path):
+        return 0.0
+    
+    total_bytes = 0
+    for dirpath, dirnames, filenames in os.walk(session_path):
+        for filename in filenames:
+            filepath = os.path.join(dirpath, filename)
+            try:
+                total_bytes += os.path.getsize(filepath)
+            except OSError:
+                pass
+    
+    return total_bytes / (1024 * 1024)
+
+
 def cleanup_expired_sessions(exclude_session_id: Optional[str] = None) -> Dict[str, int]:
     """
     Remove expired sessions based on SESSION_TTL_HOURS.
