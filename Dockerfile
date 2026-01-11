@@ -55,8 +55,8 @@ RUN if [ "$DEVICE" = "cpu" ]; then \
         fi; \
     fi
 
-# Copy application code
-COPY app.py ./
+# Copy application code (all Python modules needed at runtime)
+COPY app.py transcribe_options.py transcribe.py ./
 COPY templates/ templates/
 COPY static/ static/
 
