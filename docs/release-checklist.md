@@ -210,6 +210,79 @@ curl -H "X-Admin-Token: your-secret-token" http://localhost:8476/api/admin/stats
 |----------|--------|------|-------------|
 | `/api/admin/stats` | GET | X-Admin-Token | Server stats |
 
+### Runtime
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/api/runtime` | GET | - | Get compute backend capabilities |
+
+## Compute Backend Behavior
+
+The system detects available compute backends at startup and enforces them at job creation.
+
+### Backend Availability by Environment
+
+| Environment | Docker | Available Backends |
+|-------------|--------|-------------------|
+| macOS arm64 (Apple Silicon) | No | cpu, metal (if torch+mps works) |
+| macOS arm64 (Apple Silicon) | Yes | cpu only |
+| macOS x86_64 | No | cpu |
+| macOS x86_64 | Yes | cpu only |
+| Linux x86_64 | No | cpu |
+| Linux x86_64 + NVIDIA | No | cpu, cuda |
+| Linux x86_64 + NVIDIA | Yes | cpu, cuda |
+
+### Backend Verification
+
+**Test**: Runtime endpoint reports correct capabilities.
+
+```bash
+curl http://localhost:8476/api/runtime
+```
+
+**Expected (macOS Docker)**:
+```json
+{
+  "os": "linux",
+  "arch": "arm64",
+  "inDocker": true,
+  "cudaAvailable": false,
+  "metalAvailable": false,
+  "supportedBackends": ["cpu"],
+  "recommendedBackend": "cpu"
+}
+```
+
+**Test**: Invalid backend is rejected.
+
+```bash
+# Get session and CSRF token
+curl -c cookies.txt http://localhost:8476/
+CSRF=$(curl -s -b cookies.txt http://localhost:8476/api/session | jq -r .csrfToken)
+
+# Try to create job with unsupported backend
+curl -b cookies.txt -X POST http://localhost:8476/api/jobs \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: $CSRF" \
+  -d '{"uploadIds":["test"], "options":{"backend":"metal"}}'
+```
+
+**Expected**:
+```json
+{
+  "error": {
+    "code": "BACKEND_UNSUPPORTED",
+    "message": "Metal backend is not available in this environment. Available: cpu."
+  }
+}
+```
+
+**Pass criteria**:
+- `/api/runtime` returns accurate environment info
+- UI only shows supported backends
+- Unsupported backend requests return 400 with BACKEND_UNSUPPORTED
+- Job manifest includes `backend` and `environment` fields
+- Progress display shows which backend is being used
+
 ## Sign-off
 
 - [ ] All automated tests pass
@@ -220,6 +293,8 @@ curl -H "X-Admin-Token: your-secret-token" http://localhost:8476/api/admin/stats
 - [ ] Stale job detection works
 - [ ] Duplicate filenames handled
 - [ ] Partial failures handled
+- [ ] Backend detection accurate (no Metal in Docker)
+- [ ] Unsupported backend rejected with BACKEND_UNSUPPORTED
 - [ ] Rerun functionality works
 - [ ] Upload limits enforced
 - [ ] Admin stats accessible

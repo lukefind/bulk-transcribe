@@ -482,6 +482,11 @@
         let currentJobId = null;
         let jobPollInterval = null;
         let csrfToken = null;  // CSRF token for server mode POSTs
+        
+        // Runtime environment (from /api/runtime)
+        let runtimeEnv = null;
+        let supportedBackends = ['cpu'];
+        let recommendedBackend = 'cpu';
 
         // Load models on page load (handled in restoreSavedSettings section below)
 
@@ -855,6 +860,55 @@
             }
         }
         
+        // Fetch runtime environment and backend capabilities
+        async function fetchRuntime() {
+            try {
+                const response = await fetch('/api/runtime');
+                runtimeEnv = await response.json();
+                supportedBackends = runtimeEnv.supportedBackends || ['cpu'];
+                recommendedBackend = runtimeEnv.recommendedBackend || 'cpu';
+                updateBackendUI();
+            } catch (e) {
+                console.error('Failed to fetch runtime info:', e);
+            }
+        }
+        
+        function updateBackendUI() {
+            const backendSelect = document.getElementById('processingMode');
+            if (!backendSelect) return;
+            
+            // Clear and rebuild options based on supported backends
+            backendSelect.innerHTML = '';
+            
+            const backendLabels = {
+                'cpu': 'CPU',
+                'metal': 'Metal (Apple GPU)',
+                'cuda': 'CUDA (NVIDIA GPU)'
+            };
+            
+            supportedBackends.forEach(backend => {
+                const option = document.createElement('option');
+                option.value = backend;
+                option.textContent = backendLabels[backend] || backend;
+                if (backend === recommendedBackend) {
+                    option.textContent += ' (Recommended)';
+                }
+                backendSelect.appendChild(option);
+            });
+            
+            // Select recommended backend
+            backendSelect.value = recommendedBackend;
+            
+            // Update platform info display
+            const platformInfo = document.getElementById('platformInfo');
+            if (platformInfo && runtimeEnv) {
+                const dockerLabel = runtimeEnv.inDocker ? ' (Docker)' : '';
+                platformInfo.textContent = `${runtimeEnv.os} ${runtimeEnv.arch}${dockerLabel}`;
+            }
+            
+            updateWorkerOptionsUI();
+        }
+        
         // Load job history for server mode
         async function loadJobHistory() {
             if (!IS_SERVER_MODE) return;
@@ -939,6 +993,9 @@
 
         // Call restore after models are loaded
         document.addEventListener('DOMContentLoaded', () => {
+            // Fetch runtime environment first (affects backend options)
+            fetchRuntime();
+            
             loadModels().then(() => {
                 restoreSavedSettings();
             });
@@ -1161,9 +1218,11 @@
             }
             
             const uploadIds = uploadedFiles.map(f => f.id);
+            const backendSelect = document.getElementById('processingMode');
             const options = {
                 model: document.getElementById('model').value,
                 language: document.getElementById('language').value,
+                backend: backendSelect ? backendSelect.value : recommendedBackend,
                 includeSegments: document.getElementById('includeSegments').checked,
                 includeFull: document.getElementById('includeFull').checked,
                 includeTimestamps: document.getElementById('includeTimestamps').checked,
@@ -1242,13 +1301,16 @@
         function updateJobProgress(job) {
             const progress = job.progress || {};
             const percent = progress.percent || 0;
-            const completed = progress.completed || 0;
-            const total = progress.total || 0;
+            const currentFileIndex = progress.currentFileIndex || 0;
+            const totalFiles = progress.totalFiles || 0;
             const currentFile = progress.currentFile || '';
+            const backend = job.backend || 'cpu';
             
             document.getElementById('progressBar').style.width = `${percent}%`;
-            document.getElementById('progressCount').textContent = `${completed} / ${total}`;
-            document.getElementById('currentFile').innerHTML = `<span class="spinner"></span><span>${currentFile || 'Processing...'}</span>`;
+            document.getElementById('progressCount').textContent = `${currentFileIndex} / ${totalFiles}`;
+            
+            const backendLabel = backend === 'metal' ? 'Metal' : backend === 'cuda' ? 'CUDA' : 'CPU';
+            document.getElementById('currentFile').innerHTML = `<span class="spinner"></span><span>${currentFile || 'Processing...'} (${backendLabel})</span>`;
         }
         
         function onJobComplete(job) {
@@ -1256,7 +1318,8 @@
             resetSubmitButton();
             
             if (job.status === 'failed') {
-                showError(job.error || 'Job failed');
+                const errorMsg = job.error?.message || job.error || 'Job failed';
+                showError(errorMsg);
                 return;
             }
             
