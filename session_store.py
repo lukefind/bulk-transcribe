@@ -148,12 +148,57 @@ def touch_session(session_id: str) -> None:
         meta = read_json(meta_path) or {}
         meta['lastSeenAt'] = now
     else:
+        # New session: generate CSRF token
         meta = {
             'createdAt': now,
-            'lastSeenAt': now
+            'lastSeenAt': now,
+            'csrfToken': new_id(24)
         }
     
     atomic_write_json(meta_path, meta)
+
+
+def get_csrf_token(session_id: str) -> Optional[str]:
+    """Get CSRF token for a session, creating one if needed."""
+    meta_path = session_meta_path(session_id)
+    meta = read_json(meta_path)
+    
+    if not meta:
+        return None
+    
+    if 'csrfToken' not in meta:
+        # Generate and save CSRF token for existing session
+        meta['csrfToken'] = new_id(24)
+        atomic_write_json(meta_path, meta)
+    
+    return meta.get('csrfToken')
+
+
+def validate_csrf_token(session_id: str, token: str) -> bool:
+    """Validate CSRF token matches session."""
+    if not token:
+        return False
+    expected = get_csrf_token(session_id)
+    if not expected:
+        return False
+    return secrets.compare_digest(token, expected)
+
+
+# =============================================================================
+# Path Safety
+# =============================================================================
+
+def is_safe_path(base_dir: str, target_path: str) -> bool:
+    """
+    Check if target_path is safely within base_dir.
+    Prevents path traversal attacks.
+    """
+    try:
+        base = os.path.realpath(base_dir)
+        target = os.path.realpath(target_path)
+        return target.startswith(base + os.sep) or target == base
+    except (ValueError, OSError):
+        return False
 
 
 # =============================================================================
@@ -191,6 +236,36 @@ def ensure_job_dirs(session_id: str, job_id: str) -> Dict[str, str]:
         'base': base,
         'outputs': outputs
     }
+
+
+def list_jobs(session_id: str, limit: int = 20) -> list:
+    """
+    List jobs for a session, most recent first.
+    
+    Returns:
+        List of job summary dicts
+    """
+    jobs_path = os.path.join(session_dir(session_id), 'jobs')
+    if not os.path.exists(jobs_path):
+        return []
+    
+    jobs = []
+    for job_id in os.listdir(jobs_path):
+        manifest_path = job_manifest_path(session_id, job_id)
+        manifest = read_json(manifest_path)
+        if manifest:
+            jobs.append({
+                'jobId': manifest.get('jobId', job_id),
+                'createdAt': manifest.get('createdAt'),
+                'status': manifest.get('status'),
+                'inputCount': len(manifest.get('inputs', [])),
+                'outputCount': len([o for o in manifest.get('outputs', []) if not o.get('error')])
+            })
+    
+    # Sort by createdAt descending
+    jobs.sort(key=lambda j: j.get('createdAt', ''), reverse=True)
+    
+    return jobs[:limit]
 
 
 # =============================================================================

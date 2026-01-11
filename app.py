@@ -44,6 +44,7 @@ import io
 import tempfile
 import shutil
 from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
 import json
 from datetime import datetime, timezone
 
@@ -51,6 +52,10 @@ from transcribe_options import TranscribeOptions, get_preset, postprocess_segmen
 import session_store
 
 app = Flask(__name__)
+
+# Apply ProxyFix for HTTPS detection behind reverse proxy (Caddy, nginx)
+# This ensures request.is_secure works correctly
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # Configure max upload size from environment
 app.config['MAX_CONTENT_LENGTH'] = session_store.get_max_upload_mb() * 1024 * 1024
@@ -141,7 +146,7 @@ def before_request_session():
 
 @app.after_request
 def after_request_session(response):
-    """Set session cookie if new, and touch session metadata."""
+    """Set session cookie if new, touch session metadata, and add security headers."""
     # Set cookie for new sessions
     if hasattr(g, '_new_session_id'):
         session_store.set_new_session_cookie(request, response, g._new_session_id)
@@ -153,7 +158,46 @@ def after_request_session(response):
         except Exception:
             pass  # Don't fail requests due to session touch errors
     
+    # Security headers for API endpoints and downloads
+    if request.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+    
     return response
+
+
+# CSRF-protected endpoints in server mode
+_CSRF_PROTECTED_ENDPOINTS = {
+    'api_upload_files',
+    'api_create_job',
+    'api_cancel_job',
+}
+
+
+def _require_csrf():
+    """Check CSRF token for protected endpoints in server mode."""
+    if not session_store.is_server_mode():
+        return None  # No CSRF in local mode
+    
+    if request.endpoint not in _CSRF_PROTECTED_ENDPOINTS:
+        return None
+    
+    token = request.headers.get('X-CSRF-Token', '')
+    session_id = getattr(g, 'session_id', None)
+    
+    if not session_id or not session_store.validate_csrf_token(session_id, token):
+        return jsonify({'error': 'Invalid or missing CSRF token'}), 403
+    
+    return None
+
+
+@app.before_request
+def before_request_csrf():
+    """Validate CSRF token for protected endpoints."""
+    result = _require_csrf()
+    if result:
+        return result
 
 
 def choose_folder_dialog(prompt="Select a folder"):
@@ -1642,7 +1686,7 @@ def api_download_job(job_id):
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
         for output in files_to_zip:
             filepath = output.get('path')
-            if filepath and os.path.exists(filepath) and filepath.startswith(job_outputs_path):
+            if filepath and os.path.exists(filepath) and session_store.is_safe_path(job_outputs_path, filepath):
                 zf.write(filepath, output.get('filename'))
     
     zip_buffer.seek(0)
@@ -1682,7 +1726,7 @@ def api_download_output(job_id, output_id):
     job_outputs_path = session_store.job_outputs_dir(session_id, job_id)
     
     # Security: verify file is within job outputs directory
-    if not filepath or not os.path.exists(filepath) or not filepath.startswith(job_outputs_path):
+    if not filepath or not os.path.exists(filepath) or not session_store.is_safe_path(job_outputs_path, filepath):
         return jsonify({'error': 'Output file not accessible'}), 404
     
     return send_file(
@@ -1690,6 +1734,30 @@ def api_download_output(job_id, output_id):
         as_attachment=True,
         download_name=output.get('filename')
     )
+
+
+@app.route('/api/session', methods=['GET'])
+def api_get_session():
+    """Get session info including CSRF token (server mode only)."""
+    if not session_store.is_server_mode():
+        return jsonify({'error': 'Not available in local mode'}), 404
+    
+    session_id = g.session_id
+    csrf_token = session_store.get_csrf_token(session_id)
+    
+    response = jsonify({
+        'csrfToken': csrf_token
+    })
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.route('/api/jobs', methods=['GET'])
+def api_list_jobs():
+    """List jobs for current session."""
+    session_id = g.session_id
+    jobs = session_store.list_jobs(session_id, limit=20)
+    return jsonify({'jobs': jobs})
 
 
 @app.route('/api/mode', methods=['GET'])
