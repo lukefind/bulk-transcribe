@@ -37,8 +37,11 @@ multiprocessing.set_start_method('fork', force=True)
 import subprocess
 import threading
 import queue
+from dataclasses import replace
 from flask import Flask, render_template, request, jsonify
 import json
+
+from transcribe_options import TranscribeOptions, get_preset, postprocess_segments
 
 app = Flask(__name__)
 
@@ -220,7 +223,9 @@ def get_all_models_status():
     return models
 
 
-def transcribe_file(audio_file: Path, model: str, language: str, output_folder: Path, word_timestamps: bool = False, status_callback=None) -> dict:
+def transcribe_file(audio_file: Path, model: str, language: str, output_folder: Path, 
+                    word_timestamps: bool = False, status_callback=None,
+                    transcribe_options: TranscribeOptions = None) -> dict:
     """Transcribe a single audio file using Whisper Python library with progress callback."""
     global transcription_status
     
@@ -292,14 +297,35 @@ def transcribe_file(audio_file: Path, model: str, language: str, output_folder: 
         progress_thread = threading.Thread(target=progress_update, daemon=True)
         progress_thread.start()
         
-        # Transcribe - whisper doesn't have a callback, but we can use the result segments
+        # Build transcription options (clone per call to avoid cross-thread mutation)
+        if transcribe_options is None:
+            transcribe_options = get_preset('balanced')
+        else:
+            transcribe_options = replace(transcribe_options)
+
+        # Override with function parameters
+        transcribe_options.language = language if language else None
+        transcribe_options.word_timestamps = word_timestamps
+
+        # Transcribe with explicit parameters
+        whisper_kwargs = transcribe_options.to_whisper_kwargs()
         result = whisper.transcribe(
             whisper_model,
             str(audio_file),
-            language=language if language else None,
-            word_timestamps=word_timestamps,
-            verbose=False
+            **whisper_kwargs
         )
+        
+        # Post-process segments to improve quality
+        if result.get('segments'):
+            result['segments'] = postprocess_segments(
+                result['segments'],
+                merge_short=transcribe_options.merge_short_segments,
+                min_duration=transcribe_options.min_segment_duration,
+                max_duration=transcribe_options.max_segment_duration,
+                word_timestamps_available=word_timestamps and any(
+                    s.get('words') for s in result['segments']
+                ),
+            )
         
         stop_progress.set()
         
@@ -366,6 +392,7 @@ def create_markdown(audio_file: Path, transcription_data: dict, model: str,
     include_full = options.get('include_full', True)
     include_segments = options.get('include_segments', True)
     include_timestamps = options.get('include_timestamps', True)
+    include_word_timestamps = options.get('word_timestamps', False)
     
     output_name = audio_file.stem + '_transcription.md'
     output_path = output_folder / output_name
@@ -379,6 +406,11 @@ def create_markdown(audio_file: Path, transcription_data: dict, model: str,
     
     if 'language' in transcription_data:
         content += f"**Detected Language:** `{transcription_data['language']}`\n"
+    
+    # Add segment count for reference
+    segment_count = len(transcription_data.get('segments', []))
+    if segment_count > 0:
+        content += f"**Segments:** `{segment_count}`\n"
     
     content += f"\n---\n\n"
     
@@ -394,10 +426,19 @@ def create_markdown(audio_file: Path, transcription_data: dict, model: str,
             text = segment.get('text', '').strip()
             
             if include_timestamps:
-                content += f"### Segment {i} ({format_timestamp(start_time)} - {format_timestamp(end_time)})\n\n"
-            else:
-                content += f"### Segment {i}\n\n"
+                content += f"**[{format_timestamp(start_time)} - {format_timestamp(end_time)}]**\n\n"
+            
             content += f"{text}\n\n"
+            
+            # Include word-level timestamps if available and requested
+            if include_word_timestamps and segment.get('words'):
+                words = segment['words']
+                word_line = ' '.join(
+                    f"`{w.get('word', '')}@{w.get('start', 0):.2f}`" 
+                    for w in words if w.get('word')
+                )
+                if word_line:
+                    content += f"<details><summary>Word timestamps</summary>\n\n{word_line}\n\n</details>\n\n"
     
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(content)
@@ -413,7 +454,18 @@ def run_transcription(input_folder: str, output_folder: str, model: str, languag
         options = {}
     
     processing_mode = options.get('processing_mode', 'metal')
-    num_workers = max(1, min(2, options.get('workers', 1)))  # Max 2 workers for CPU mode
+    word_timestamps = options.get('word_timestamps', False)
+    
+    # Compute effective mode: Metal + word_timestamps forces CPU (MPS doesn't support DTW float64)
+    effective_mode = processing_mode
+    if processing_mode == 'metal' and word_timestamps:
+        effective_mode = 'cpu'
+    
+    # Only force single worker when actually using Metal GPU; allow multiple for CPU
+    if effective_mode == 'metal':
+        num_workers = 1
+    else:
+        num_workers = max(1, min(2, options.get('workers', 1)))  # Max 2 workers for CPU mode
     
     import time as time_module
     transcription_status['running'] = True
@@ -441,8 +493,22 @@ def run_transcription(input_folder: str, output_folder: str, model: str, languag
             transcription_status['running'] = False
             return
         
-        word_timestamps = options.get('word_timestamps', False)
         overwrite_existing = options.get('overwrite_existing', False)
+        
+        # Build TranscribeOptions from advanced settings
+        quality_preset = options.get('quality_preset', 'balanced')
+        transcribe_opts = get_preset(quality_preset)
+        
+        # Override with specific settings from UI
+        if options.get('no_speech_threshold') is not None:
+            transcribe_opts.no_speech_threshold = float(options['no_speech_threshold'])
+        if word_timestamps and options.get('max_segment_duration') is not None:
+            transcribe_opts.max_segment_duration = float(options['max_segment_duration'])
+        else:
+            transcribe_opts.max_segment_duration = None
+        
+        transcribe_opts.merge_short_segments = True
+        transcribe_opts.min_segment_duration = 0.5
         
         # Filter out files that already have output (if not overwriting)
         files_to_process = []
@@ -493,6 +559,7 @@ def run_transcription(input_folder: str, output_folder: str, model: str, languag
                     output_path,
                     word_timestamps,
                     status_callback={'whisper_model': worker_model},
+                    transcribe_options=transcribe_opts,
                 )
             except Exception as e:
                 result = {'error': str(e)[:200]}
@@ -565,15 +632,20 @@ def run_transcription(input_folder: str, output_folder: str, model: str, languag
                 import torch
                 
                 # Determine device based on processing_mode and availability
+                # Note: MPS doesn't support float64 required by word timestamp alignment (DTW),
+                # so we must fall back to CPU when word timestamps are enabled.
                 device = "cpu"
                 if processing_mode == 'cuda' and torch.cuda.is_available():
                     device = "cuda"
                     transcription_status['current_file_progress'] = f'Loading {model} model (CUDA GPU)...'
-                elif processing_mode == 'metal' and torch.backends.mps.is_available():
+                elif processing_mode == 'metal' and torch.backends.mps.is_available() and not word_timestamps:
                     device = "mps"
                     transcription_status['current_file_progress'] = f'Loading {model} model (Metal GPU)...'
                 else:
-                    transcription_status['current_file_progress'] = f'Loading {model} model (CPU)...'
+                    if word_timestamps and processing_mode == 'metal':
+                        transcription_status['current_file_progress'] = f'Loading {model} model (CPU - required for word timestamps)...'
+                    else:
+                        transcription_status['current_file_progress'] = f'Loading {model} model (CPU)...'
                 whisper_model = whisper.load_model(model, device=device)
             except Exception as e:
                 transcription_status['error'] = f'Failed to load model: {str(e)[:200]}'
@@ -684,6 +756,9 @@ def start_transcription():
         'overwrite_existing': data.get('overwrite_existing', False),
         'processing_mode': data.get('processing_mode', 'metal'),
         'workers': data.get('workers', 1),
+        'quality_preset': data.get('quality_preset', 'balanced'),
+        'no_speech_threshold': data.get('no_speech_threshold'),
+        'max_segment_duration': data.get('max_segment_duration'),
     }
     
     if not input_folder:

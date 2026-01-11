@@ -674,21 +674,7 @@
 
         // Toggle worker options based on processing mode
         function updateWorkerOptions() {
-            const mode = document.getElementById('processingMode').value;
-            const workersSection = document.getElementById('workersSection');
-            const workersSelect = document.getElementById('workers');
-            const modeDescription = document.getElementById('modeDescription');
-            
-            if (mode === 'metal') {
-                workersSection.classList.add('opacity-50', 'pointer-events-none');
-                workersSelect.disabled = true;
-                workersSelect.value = '1';
-                modeDescription.textContent = 'Metal GPU: ~5-6x realtime on Apple Silicon. Single worker only.';
-            } else {
-                workersSection.classList.remove('opacity-50', 'pointer-events-none');
-                workersSelect.disabled = false;
-                modeDescription.textContent = 'CPU mode: Slower but compatible. Use 2 workers for parallel processing.';
-            }
+            updateWorkerOptionsUI();
             updateOutputOptions();
         }
         
@@ -741,6 +727,33 @@
                 warning.classList.remove('hidden');
             } else {
                 warning.classList.add('hidden');
+            }
+            
+            // Update worker options since word timestamps affects whether Metal uses CPU
+            updateWorkerOptionsUI();
+        }
+        
+        // Update worker UI without triggering updateOutputOptions (to avoid infinite loop)
+        function updateWorkerOptionsUI() {
+            const mode = document.getElementById('processingMode').value;
+            const workersSection = document.getElementById('workersSection');
+            const workersSelect = document.getElementById('workers');
+            const modeDescription = document.getElementById('modeDescription');
+            const wordTimestamps = document.getElementById('wordTimestamps').checked;
+            
+            if (mode === 'metal' && !wordTimestamps) {
+                workersSection.classList.add('opacity-50', 'pointer-events-none');
+                workersSelect.disabled = true;
+                workersSelect.value = '1';
+                modeDescription.textContent = 'Metal GPU: ~5-6x realtime on Apple Silicon. Single worker only.';
+            } else if (mode === 'metal' && wordTimestamps) {
+                workersSection.classList.remove('opacity-50', 'pointer-events-none');
+                workersSelect.disabled = false;
+                modeDescription.textContent = 'Word timestamps force CPU mode. Use 2 workers for parallel processing.';
+            } else {
+                workersSection.classList.remove('opacity-50', 'pointer-events-none');
+                workersSelect.disabled = false;
+                modeDescription.textContent = 'CPU mode: Slower but compatible. Use 2 workers for parallel processing.';
             }
         }
 
@@ -872,7 +885,8 @@
                         word_timestamps: wordTimestamps,
                         overwrite_existing: document.getElementById('overwriteExisting').checked,
                         processing_mode: document.getElementById('processingMode').value,
-                        workers: document.getElementById('processingMode').value === 'metal' ? 1 : parseInt(document.getElementById('workers').value) || 1,
+                        // Metal mode forces single worker UNLESS word timestamps enabled (which forces CPU anyway)
+                        workers: (document.getElementById('processingMode').value === 'metal' && !wordTimestamps) ? 1 : parseInt(document.getElementById('workers').value) || 1,
                         quality_preset: qualityPreset,
                         no_speech_threshold: noSpeechThreshold,
                         max_segment_duration: maxSegmentDuration ? parseFloat(maxSegmentDuration) : null
