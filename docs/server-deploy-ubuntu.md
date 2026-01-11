@@ -130,7 +130,64 @@ nvidia-smi -l 1
 
 ## Usage
 
-### Uploading Files
+### Server Mode (Default)
+
+By default, the server runs in **server mode** (`APP_MODE=server`), which provides:
+
+- **Session isolation**: Each browser session gets its own storage
+- **No filesystem access from browser**: Users cannot specify arbitrary paths
+- **Upload-based workflow**: Files are uploaded through the browser UI
+- **Automatic cleanup**: Old sessions are cleaned up based on `SESSION_TTL_HOURS`
+
+Data is stored under `/data/sessions/<session_id>/`:
+```
+/data/sessions/
+├── <session_id>/
+│   ├── session.json      # Session metadata
+│   ├── uploads/          # Uploaded audio files
+│   └── jobs/
+│       └── <job_id>/
+│           ├── job.json  # Job manifest
+│           └── outputs/  # Transcription results
+```
+
+### Accessing the UI
+
+Open `http://<server-ip>:8476` in your browser.
+
+1. **Upload files**: Drag and drop audio files or click to browse
+2. **Configure**: Select model, language, and output options
+3. **Start**: Click "Start Transcription"
+4. **Download**: Download results as zip or individual files
+
+### API Endpoints (Server Mode)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/uploads` | POST | Upload audio files |
+| `/api/uploads` | GET | List uploaded files |
+| `/api/jobs` | POST | Create transcription job |
+| `/api/jobs/<id>` | GET | Get job status |
+| `/api/jobs/<id>/cancel` | POST | Cancel running job |
+| `/api/jobs/<id>/download` | GET | Download all outputs as zip |
+| `/api/jobs/<id>/outputs/<id>` | GET | Download single output |
+| `/api/mode` | GET | Get current app mode |
+
+### Local Mode (Optional)
+
+For single-user local deployments, you can enable **local mode** (`APP_MODE=local`):
+
+```bash
+# In .env
+APP_MODE=local
+```
+
+Local mode provides:
+- Folder picker (macOS only)
+- Direct filesystem path input
+- Legacy folder-based endpoints
+
+### Legacy Folder Workflow (Local Mode Only)
 
 Place audio files in `./data/input/` on the host:
 
@@ -138,18 +195,7 @@ Place audio files in `./data/input/` on the host:
 cp /path/to/audio/*.mp3 ./data/input/
 ```
 
-### Accessing the UI
-
-Open `http://<server-ip>:8476` in your browser.
-
-1. Input folder: `/data/input` (pre-configured)
-2. Output folder: `/data/output` (pre-configured)
-3. Select model and options
-4. Start transcription
-
-### Retrieving Output
-
-Output files are saved to `./data/output/` on the host:
+Output files are saved to `./data/output/`:
 
 ```bash
 ls -la ./data/output/
@@ -188,15 +234,21 @@ cp .env.example .env
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `APP_MODE` | `server` | `server` (multi-user, session-isolated) or `local` (single-user) |
 | `PORT` | `8476` | Web server port |
 | `DEVICE` | `cpu` | Processing device (`cpu`, `cuda`, or `metal`) |
 | `DEFAULT_WORKERS` | `2` | Default workers for CPU mode |
 | `MAX_WORKERS` | `8` | Hard cap for UI dropdown (safety) |
 | `CUDA_VISIBLE_DEVICES` | (empty) | GPU visibility when `DEVICE=cuda` |
 | `CUDA_MEMORY_FRACTION` | (empty) | Optional GPU memory cap (advanced) |
-| `DATA_DIR` | `/data` | Base data directory inside container |
-| `INPUT_DIR` | `/data/input` | Default input directory |
-| `OUTPUT_DIR` | `/data/output` | Default output directory |
+| `DATA_ROOT` | `/data` | Base data directory (sessions stored under `DATA_ROOT/sessions/`) |
+| `INPUT_DIR` | `/data/input` | Default input directory (local mode only) |
+| `OUTPUT_DIR` | `/data/output` | Default output directory (local mode only) |
+| `SESSION_TTL_HOURS` | `24` | Session expiry time (hours since last activity) |
+| `JOB_TTL_DAYS` | `7` | Job data retention (days) |
+| `MAX_UPLOAD_MB` | `500` | Maximum upload size per request (MB) |
+| `MAX_FILES_PER_JOB` | `50` | Maximum files per transcription job |
+| `COOKIE_SECURE` | `0` | Force secure cookies (set to `1` behind HTTPS proxy) |
 | `HF_TOKEN` | (empty) | HuggingFace token for diarization (optional) |
 | `LOG_LEVEL` | `info` | Logging level (`debug`, `info`, `warning`, `error`) |
 
