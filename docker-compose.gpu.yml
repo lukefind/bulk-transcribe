@@ -4,8 +4,8 @@
 services:
   app:
     build:
-      context: .
-      dockerfile: Dockerfile.gpu
+      args:
+        DEVICE: cuda
     environment:
       - DEVICE=cuda
       - NVIDIA_VISIBLE_DEVICES=all

@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        DEVICE: cpu
     container_name: bulk-transcribe
     ports:
       - "8476:8476"

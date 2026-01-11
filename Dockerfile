@@ -1,10 +1,14 @@
-# Bulk Transcribe - CPU Docker Image
-# For GPU support, use docker-compose.gpu.yml override
+# Bulk Transcribe - Docker Image (CPU or GPU)
+# CPU: docker compose up -d --build
+# GPU: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 
 FROM python:3.11-slim-bookworm
 
 LABEL maintainer="Bulk Transcribe"
 LABEL description="Audio transcription using OpenAI Whisper"
+
+# Build argument to control CPU vs GPU dependencies
+ARG DEVICE=cpu
 
 # Prevent Python from writing pyc files and buffering stdout/stderr
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -25,13 +29,30 @@ WORKDIR /app
 # Copy requirements first for better caching
 COPY requirements.txt requirements-server.txt* ./
 
-# Install Python dependencies
-# Use requirements-server.txt if it exists (excludes pywebview/pyinstaller)
+# Install Python dependencies based on DEVICE build arg
+# CPU: use PyTorch CPU-only wheels (no CUDA dependencies)
+# GPU: use default PyTorch wheels with CUDA support
 RUN pip install --no-cache-dir gunicorn && \
-    if [ -f requirements-server.txt ]; then \
+    if [ "$DEVICE" = "cpu" ]; then \
+        echo "Installing CPU-only PyTorch..." && \
+        pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cpu && \
         pip install --no-cache-dir -r requirements-server.txt; \
     else \
-        pip install --no-cache-dir flask openai-whisper; \
+        echo "Installing GPU/CUDA PyTorch..." && \
+        pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu121 && \
+        pip install --no-cache-dir -r requirements-server.txt; \
+    fi
+
+# Guardrail: verify no CUDA packages on CPU build
+RUN if [ "$DEVICE" = "cpu" ]; then \
+        echo "Checking for unwanted CUDA packages..." && \
+        if pip freeze | grep -qE '^nvidia-'; then \
+            echo "ERROR: CUDA packages found in CPU build!" && \
+            pip freeze | grep -E '^nvidia-' && \
+            exit 1; \
+        else \
+            echo "OK: No CUDA packages installed"; \
+        fi; \
     fi
 
 # Copy application code
