@@ -1,8 +1,6 @@
 # GPU override for NVIDIA CUDA support
 # Usage: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 
-version: "3.8"
-
 services:
   app:
     build:
