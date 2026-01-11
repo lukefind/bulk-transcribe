@@ -1411,6 +1411,8 @@ def api_create_job():
         'sessionId': session_id,
         'createdAt': now,
         'updatedAt': now,
+        'startedAt': None,
+        'finishedAt': None,
         'status': 'queued',
         'options': {
             'model': options.get('model', 'base'),
@@ -1424,8 +1426,8 @@ def api_create_job():
         'inputs': inputs,
         'outputs': [],
         'progress': {
-            'total': len(inputs),
-            'completed': 0,
+            'totalFiles': len(inputs),
+            'currentFileIndex': 0,
             'currentFile': '',
             'percent': 0
         },
@@ -1468,7 +1470,7 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
             return job_info.get('cancel_requested', False)
     
     try:
-        update_manifest(status='running')
+        update_manifest(status='running', startedAt=datetime.now(timezone.utc).isoformat())
         
         # Load whisper model
         import whisper
@@ -1494,16 +1496,17 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
         
         for idx, input_info in enumerate(inputs):
             if is_cancelled():
-                update_manifest(status='cancelled')
+                update_manifest(status='cancelled', finishedAt=datetime.now(timezone.utc).isoformat())
                 return
             
             filepath = input_info['path']
             original_name = input_info['originalFilename']
+            upload_id = input_info.get('uploadId', '')
             base_name = Path(original_name).stem
             
             update_manifest(progress={
                 'currentFile': original_name,
-                'completed': idx,
+                'currentFileIndex': idx,
                 'percent': int((idx / total) * 100)
             })
             
@@ -1516,11 +1519,12 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                     word_timestamps=options.get('wordTimestamps', False)
                 )
                 
-                # Generate output files
+                # Generate output files with upload_id suffix to prevent collisions
                 output_id = session_store.new_id(8)
+                suffix = f"_{upload_id[:6]}" if upload_id else ""
                 
                 # Markdown output
-                md_filename = f"{base_name}.md"
+                md_filename = f"{base_name}{suffix}.md"
                 md_path = os.path.join(outputs_dir, md_filename)
                 
                 content = f"# {original_name}\n\n"
@@ -1541,15 +1545,16 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                 
                 outputs.append({
                     'id': output_id,
+                    'forUploadId': upload_id,
                     'inputFilename': original_name,
                     'filename': md_filename,
                     'path': md_path,
                     'type': 'markdown',
-                    'size': os.path.getsize(md_path)
+                    'sizeBytes': os.path.getsize(md_path)
                 })
                 
                 # JSON output
-                json_filename = f"{base_name}.json"
+                json_filename = f"{base_name}{suffix}.json"
                 json_path = os.path.join(outputs_dir, json_filename)
                 
                 json_output = {
@@ -1564,29 +1569,40 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                 
                 outputs.append({
                     'id': session_store.new_id(8),
+                    'forUploadId': upload_id,
                     'inputFilename': original_name,
                     'filename': json_filename,
                     'path': json_path,
                     'type': 'json',
-                    'size': os.path.getsize(json_path)
+                    'sizeBytes': os.path.getsize(json_path)
                 })
                 
             except Exception as e:
                 # Record error but continue with other files
                 outputs.append({
                     'id': session_store.new_id(8),
+                    'forUploadId': upload_id,
                     'inputFilename': original_name,
-                    'error': str(e)[:200]
+                    'error': {'code': 'TRANSCRIBE_ERROR', 'message': str(e)[:200]}
                 })
         
+        # Determine final status - complete_with_errors if some files failed
+        has_errors = any(o.get('error') for o in outputs)
+        final_status = 'complete_with_errors' if has_errors else 'complete'
+        
         update_manifest(
-            status='complete',
+            status=final_status,
+            finishedAt=datetime.now(timezone.utc).isoformat(),
             outputs=outputs,
-            progress={'completed': total, 'percent': 100, 'currentFile': ''}
+            progress={'currentFileIndex': total, 'percent': 100, 'currentFile': ''}
         )
         
     except Exception as e:
-        update_manifest(status='failed', error=str(e)[:500])
+        update_manifest(
+            status='failed',
+            finishedAt=datetime.now(timezone.utc).isoformat(),
+            error={'code': 'JOB_ERROR', 'message': str(e)[:500]}
+        )
     
     finally:
         with _active_jobs_lock:
@@ -1604,15 +1620,22 @@ def api_get_job(job_id):
     if not manifest:
         return jsonify({'error': 'Job not found'}), 404
     
+    # Check for stale running jobs and mark them as failed
+    if session_store.is_job_stale(manifest):
+        session_store.mark_job_stale(session_id, job_id)
+        manifest = session_store.read_json(manifest_path)
+    
     # Don't expose internal paths
     safe_manifest = {
         'jobId': manifest.get('jobId'),
         'createdAt': manifest.get('createdAt'),
         'updatedAt': manifest.get('updatedAt'),
+        'startedAt': manifest.get('startedAt'),
+        'finishedAt': manifest.get('finishedAt'),
         'status': manifest.get('status'),
         'options': manifest.get('options'),
         'inputs': [{'uploadId': i.get('uploadId'), 'filename': i.get('originalFilename')} for i in manifest.get('inputs', [])],
-        'outputs': [{'id': o.get('id'), 'filename': o.get('filename'), 'type': o.get('type'), 'size': o.get('size'), 'error': o.get('error')} for o in manifest.get('outputs', [])],
+        'outputs': [{'id': o.get('id'), 'forUploadId': o.get('forUploadId'), 'filename': o.get('filename'), 'type': o.get('type'), 'sizeBytes': o.get('sizeBytes'), 'error': o.get('error')} for o in manifest.get('outputs', [])],
         'progress': manifest.get('progress'),
         'error': manifest.get('error')
     }
@@ -1642,6 +1665,95 @@ def api_cancel_job(job_id):
         return jsonify({'status': manifest.get('status'), 'message': 'Job already finished'})
     
     return jsonify({'status': 'not_running'})
+
+
+@app.route('/api/jobs/<job_id>/rerun', methods=['POST'])
+def api_rerun_job(job_id):
+    """Create a new job using the same input files from a previous job."""
+    if not session_store.is_server_mode():
+        return jsonify({'error': 'Rerun only available in server mode'}), 400
+    
+    session_id = g.session_id
+    
+    # Check for existing running job
+    with _active_jobs_lock:
+        for key, job_info in _active_jobs.items():
+            if key[0] == session_id and job_info.get('running'):
+                return jsonify({'error': 'A job is already running in this session'}), 409
+    
+    # Get original job
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    original_manifest = session_store.read_json(manifest_path)
+    
+    if not original_manifest:
+        return jsonify({'error': 'Original job not found'}), 404
+    
+    # Verify input files still exist
+    inputs = []
+    for input_info in original_manifest.get('inputs', []):
+        filepath = input_info.get('path')
+        if not filepath or not os.path.exists(filepath):
+            return jsonify({'error': f'Input file no longer exists: {input_info.get("originalFilename")}'}), 400
+        inputs.append(input_info)
+    
+    if not inputs:
+        return jsonify({'error': 'No input files found in original job'}), 400
+    
+    # Get new options from request or use original
+    data = request.json or {}
+    options = data.get('options', original_manifest.get('options', {}))
+    
+    # Create new job
+    new_job_id = session_store.new_id(12)
+    dirs = session_store.ensure_job_dirs(session_id, new_job_id)
+    
+    now = datetime.now(timezone.utc).isoformat()
+    manifest = {
+        'jobId': new_job_id,
+        'sessionId': session_id,
+        'createdAt': now,
+        'updatedAt': now,
+        'startedAt': None,
+        'finishedAt': None,
+        'status': 'queued',
+        'rerunOf': job_id,
+        'options': {
+            'model': options.get('model', 'base'),
+            'language': options.get('language', ''),
+            'includeSegments': options.get('includeSegments', True),
+            'includeFull': options.get('includeFull', True),
+            'includeTimestamps': options.get('includeTimestamps', True),
+            'wordTimestamps': options.get('wordTimestamps', False),
+            'qualityPreset': options.get('qualityPreset', 'balanced'),
+        },
+        'inputs': inputs,
+        'outputs': [],
+        'progress': {
+            'totalFiles': len(inputs),
+            'currentFileIndex': 0,
+            'currentFile': '',
+            'percent': 0
+        },
+        'error': None
+    }
+    
+    session_store.atomic_write_json(session_store.job_manifest_path(session_id, new_job_id), manifest)
+    
+    # Start job in background thread
+    def run_job():
+        _run_session_job(session_id, new_job_id, inputs, manifest['options'], dirs['outputs'])
+    
+    with _active_jobs_lock:
+        _active_jobs[(session_id, new_job_id)] = {'running': True, 'cancel_requested': False}
+    
+    job_thread = threading.Thread(target=run_job, daemon=True)
+    job_thread.start()
+    
+    return jsonify({'jobId': new_job_id, 'rerunOf': job_id})
+
+
+# Add rerun to CSRF protected endpoints
+_CSRF_PROTECTED_ENDPOINTS.add('api_rerun_job')
 
 
 @app.route('/api/jobs/<job_id>/outputs', methods=['GET'])
