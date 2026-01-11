@@ -51,6 +51,7 @@ from datetime import datetime, timezone
 
 from transcribe_options import TranscribeOptions, get_preset, postprocess_segments
 import session_store
+import compute_backend
 
 app = Flask(__name__)
 
@@ -1403,6 +1404,14 @@ def api_create_job():
     if not upload_ids:
         return jsonify({'error': 'No upload IDs provided'}), 400
     
+    # Validate and determine backend
+    env = compute_backend.get_cached_environment()
+    requested_backend = options.get('backend', env['recommendedBackend'])
+    
+    is_valid, error = compute_backend.validate_backend(requested_backend)
+    if not is_valid:
+        return jsonify({'error': error}), 400
+    
     # Resolve upload IDs to file paths
     inputs = []
     for upload_id in upload_ids:
@@ -1434,6 +1443,12 @@ def api_create_job():
         'startedAt': None,
         'finishedAt': None,
         'status': 'queued',
+        'backend': requested_backend,
+        'environment': {
+            'os': env['os'],
+            'arch': env['arch'],
+            'inDocker': env['inDocker']
+        },
         'options': {
             'model': options.get('model', 'base'),
             'language': options.get('language', ''),
@@ -1458,7 +1473,7 @@ def api_create_job():
     
     # Start job in background thread
     def run_job():
-        _run_session_job(session_id, job_id, inputs, manifest['options'], dirs['outputs'])
+        _run_session_job(session_id, job_id, inputs, manifest['options'], dirs['outputs'], requested_backend)
     
     with _active_jobs_lock:
         _active_jobs[(session_id, job_id)] = {'running': True, 'cancel_requested': False}
@@ -1469,7 +1484,7 @@ def api_create_job():
     return jsonify({'jobId': job_id})
 
 
-def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, outputs_dir: str):
+def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, outputs_dir: str, backend: str):
     """Run transcription job and update manifest with progress."""
     manifest_path = session_store.job_manifest_path(session_id, job_id)
     
@@ -1497,17 +1512,21 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
         model_name = options.get('model', 'base')
         language = options.get('language', '') or None
         
-        update_manifest(progress={'currentFile': f'Loading {model_name} model...'})
+        update_manifest(progress={'currentFile': f'Loading {model_name} model on {backend}...'})
         
-        # Determine device
+        # Use explicit backend - NO auto-detection
+        device = compute_backend.get_torch_device(backend)
+        
+        # Validate backend is actually available at runtime
         import torch
-        device = 'cpu'
-        if torch.cuda.is_available():
-            device = 'cuda'
-        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        if device == 'cuda' and not torch.cuda.is_available():
+            raise RuntimeError(f'CUDA backend requested but torch.cuda.is_available() is False')
+        if device == 'mps':
+            if not hasattr(torch.backends, 'mps') or not torch.backends.mps.is_available():
+                raise RuntimeError(f'Metal backend requested but torch.backends.mps.is_available() is False')
             # MPS doesn't support word timestamps (float64 for DTW)
-            if not options.get('wordTimestamps', False):
-                device = 'mps'
+            if options.get('wordTimestamps', False):
+                raise RuntimeError(f'Metal backend does not support word timestamps. Use CPU instead.')
         
         whisper_model = whisper.load_model(model_name, device=device)
         
@@ -1653,6 +1672,8 @@ def api_get_job(job_id):
         'startedAt': manifest.get('startedAt'),
         'finishedAt': manifest.get('finishedAt'),
         'status': manifest.get('status'),
+        'backend': manifest.get('backend'),
+        'environment': manifest.get('environment'),
         'options': manifest.get('options'),
         'inputs': [{'uploadId': i.get('uploadId'), 'filename': i.get('originalFilename')} for i in manifest.get('inputs', [])],
         'outputs': [{'id': o.get('id'), 'forUploadId': o.get('forUploadId'), 'filename': o.get('filename'), 'type': o.get('type'), 'sizeBytes': o.get('sizeBytes'), 'error': o.get('error')} for o in manifest.get('outputs', [])],
@@ -1723,6 +1744,14 @@ def api_rerun_job(job_id):
     data = request.json or {}
     options = data.get('options', original_manifest.get('options', {}))
     
+    # Validate and determine backend
+    env = compute_backend.get_cached_environment()
+    requested_backend = options.get('backend', env['recommendedBackend'])
+    
+    is_valid, error = compute_backend.validate_backend(requested_backend)
+    if not is_valid:
+        return jsonify({'error': error}), 400
+    
     # Create new job
     new_job_id = session_store.new_id(12)
     dirs = session_store.ensure_job_dirs(session_id, new_job_id)
@@ -1737,6 +1766,12 @@ def api_rerun_job(job_id):
         'finishedAt': None,
         'status': 'queued',
         'rerunOf': job_id,
+        'backend': requested_backend,
+        'environment': {
+            'os': env['os'],
+            'arch': env['arch'],
+            'inDocker': env['inDocker']
+        },
         'options': {
             'model': options.get('model', 'base'),
             'language': options.get('language', ''),
@@ -1761,7 +1796,7 @@ def api_rerun_job(job_id):
     
     # Start job in background thread
     def run_job():
-        _run_session_job(session_id, new_job_id, inputs, manifest['options'], dirs['outputs'])
+        _run_session_job(session_id, new_job_id, inputs, manifest['options'], dirs['outputs'], requested_backend)
     
     with _active_jobs_lock:
         _active_jobs[(session_id, new_job_id)] = {'running': True, 'cancel_requested': False}
@@ -1900,6 +1935,13 @@ def api_get_mode():
         'isServer': session_store.is_server_mode(),
         'isLocal': session_store.is_local_mode()
     })
+
+
+@app.route('/api/runtime', methods=['GET'])
+def api_get_runtime():
+    """Get runtime environment and supported compute backends."""
+    env = compute_backend.get_cached_environment()
+    return jsonify(env)
 
 
 @app.route('/api/admin/stats', methods=['GET'])
