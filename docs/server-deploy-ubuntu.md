@@ -387,3 +387,14 @@ docker compose exec app python -c "import whisper; whisper.load_model('turbo')"
 | turbo | ~6 GB | ~800 MB | ~5x realtime | ~20x realtime |
 
 *Speed estimates vary by hardware. GPU speeds assume NVIDIA RTX 3080 or similar.*
+
+## Release Verification
+
+Before deploying to production, complete the verification checklist:
+
+See [Release Checklist](release-checklist.md) for:
+- Session isolation testing
+- CSRF protection verification
+- Security headers check
+- Admin endpoint setup
+- Full API reference
