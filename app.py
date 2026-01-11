@@ -37,6 +37,7 @@ multiprocessing.set_start_method('fork', force=True)
 import subprocess
 import threading
 import queue
+import secrets
 from dataclasses import replace
 from flask import Flask, render_template, request, jsonify, send_file, g
 import zipfile
@@ -59,6 +60,15 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # Configure max upload size from environment
 app.config['MAX_CONTENT_LENGTH'] = session_store.get_max_upload_mb() * 1024 * 1024
+
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    """Handle upload size limit exceeded."""
+    max_mb = session_store.get_max_upload_mb()
+    return jsonify({
+        'error': f'File too large. Maximum upload size is {max_mb}MB.'
+    }), 413
 
 SUPPORTED_FORMATS = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.webm', '.mp4', '.mov', '.avi']
 AVAILABLE_MODELS = ['tiny', 'base', 'small', 'medium', 'large', 'turbo']
@@ -1316,6 +1326,16 @@ def api_upload_files():
     
     session_id = g.session_id
     session_store.ensure_session_dirs(session_id)
+    
+    # Check session disk cap (server mode only)
+    if session_store.is_server_mode():
+        current_usage = session_store.get_session_disk_usage_mb(session_id)
+        max_session_mb = session_store.get_max_session_mb()
+        if current_usage >= max_session_mb:
+            return jsonify({
+                'error': f'Session storage limit reached ({max_session_mb}MB). Delete old jobs or wait for cleanup.'
+            }), 400
+    
     uploads_path = Path(session_store.uploads_dir(session_id))
     
     uploaded = []
@@ -1880,6 +1900,65 @@ def api_get_mode():
         'isServer': session_store.is_server_mode(),
         'isLocal': session_store.is_local_mode()
     })
+
+
+@app.route('/api/admin/stats', methods=['GET'])
+def api_admin_stats():
+    """Admin diagnostics endpoint. Requires X-Admin-Token header."""
+    admin_token = os.environ.get('ADMIN_TOKEN', '')
+    if not admin_token:
+        return jsonify({'error': 'Admin endpoint not configured'}), 404
+    
+    provided_token = request.headers.get('X-Admin-Token', '')
+    if not provided_token or not secrets.compare_digest(provided_token, admin_token):
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    import hashlib
+    
+    # Count sessions and jobs
+    sessions_root = os.path.join(session_store.data_root(), 'sessions')
+    session_count = 0
+    jobs_by_status = {}
+    total_disk_mb = 0.0
+    
+    if os.path.exists(sessions_root):
+        for session_id in os.listdir(sessions_root):
+            session_path = os.path.join(sessions_root, session_id)
+            if not os.path.isdir(session_path):
+                continue
+            session_count += 1
+            
+            # Count disk usage
+            for dirpath, dirnames, filenames in os.walk(session_path):
+                for filename in filenames:
+                    try:
+                        total_disk_mb += os.path.getsize(os.path.join(dirpath, filename)) / (1024 * 1024)
+                    except OSError:
+                        pass
+            
+            # Count jobs by status
+            jobs_path = os.path.join(session_path, 'jobs')
+            if os.path.exists(jobs_path):
+                for job_id in os.listdir(jobs_path):
+                    manifest = session_store.read_json(os.path.join(jobs_path, job_id, 'job.json'))
+                    if manifest:
+                        status = manifest.get('status', 'unknown')
+                        jobs_by_status[status] = jobs_by_status.get(status, 0) + 1
+    
+    response = jsonify({
+        'sessionCount': session_count,
+        'jobsByStatus': jobs_by_status,
+        'totalDiskUsageMB': round(total_disk_mb, 2),
+        'limits': {
+            'maxUploadMB': session_store.get_max_upload_mb(),
+            'maxSessionMB': session_store.get_max_session_mb(),
+            'maxFilesPerJob': session_store.get_max_files_per_job(),
+            'sessionTTLHours': session_store.get_session_ttl_hours(),
+            'jobStaleMins': session_store.get_job_stale_minutes()
+        }
+    })
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 def run_with_webview():
