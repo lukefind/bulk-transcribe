@@ -134,12 +134,12 @@ def before_request_session():
     
     g.session_id = session_id
     
-    # Periodic cleanup
+    # Periodic cleanup (exclude current session to prevent mid-request deletion)
     _request_counter += 1
     if _request_counter >= _cleanup_interval:
         _request_counter = 0
         try:
-            session_store.cleanup_expired_sessions()
+            session_store.cleanup_expired_sessions(exclude_session_id=session_id)
         except Exception:
             pass  # Don't fail requests due to cleanup errors
 
