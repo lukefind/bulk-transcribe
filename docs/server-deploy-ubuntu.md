@@ -17,6 +17,9 @@ Deploy Bulk Transcribe on an Ubuntu server using Docker Compose.
 git clone https://github.com/lukefind/bulk-transcribe.git
 cd bulk-transcribe
 
+# Copy environment configuration
+cp .env.example .env
+
 # Create data directories
 mkdir -p data/input data/output
 
@@ -54,6 +57,10 @@ docker compose version
 ```bash
 git clone https://github.com/lukefind/bulk-transcribe.git
 cd bulk-transcribe
+
+# Copy and customize environment configuration
+cp .env.example .env
+# Edit .env as needed (default values work for most cases)
 
 # Create data directories with correct permissions
 mkdir -p data/input data/output
@@ -172,12 +179,26 @@ docker image prune -f
 
 ### Environment Variables
 
+Copy the example configuration file:
+
+```bash
+cp .env.example .env
+# Edit .env as needed
+```
+
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `8476` | Server port |
+| `PORT` | `8476` | Web server port |
+| `DEVICE` | `cpu` | Processing device (`cpu`, `cuda`, or `metal`) |
+| `DEFAULT_WORKERS` | `2` | Default workers for CPU mode |
+| `MAX_WORKERS` | `8` | Hard cap for UI dropdown (safety) |
+| `CUDA_VISIBLE_DEVICES` | (empty) | GPU visibility when `DEVICE=cuda` |
+| `CUDA_MEMORY_FRACTION` | (empty) | Optional GPU memory cap (advanced) |
+| `DATA_DIR` | `/data` | Base data directory inside container |
 | `INPUT_DIR` | `/data/input` | Default input directory |
 | `OUTPUT_DIR` | `/data/output` | Default output directory |
-| `DEVICE` | `cpu` | Processing device (`cpu` or `cuda`) |
+| `HF_TOKEN` | (empty) | HuggingFace token for diarization (optional) |
+| `LOG_LEVEL` | `info` | Logging level (`debug`, `info`, `warning`, `error`) |
 
 ### Changing the Port
 

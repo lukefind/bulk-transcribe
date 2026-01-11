@@ -50,6 +50,8 @@ env/
 # Local config
 .env
 .env.local
+# Keep .env.example as template
+!.env.example
 
 # Test outputs
 output/

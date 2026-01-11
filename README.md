@@ -127,10 +127,19 @@ Each transcription produces a JSON file with segment-level data. Segments includ
 - **RAM** 8GB minimum, 16GB+ recommended for turbo model
 - **Storage** ~500MB for app, plus model cache (~6GB for turbo model)
 
+## Server Deployment
+
+For Ubuntu server deployment with Docker, see the [Server Deployment Guide](docs/server-deploy-ubuntu.md). The guide includes:
+
+- Docker Compose setup for CPU and NVIDIA GPU
+- Environment configuration (copy `.env.example` to `.env`)
+- Reverse proxy configuration
+- Management commands
+
 ## Documentation
 
 - [User Guide](USER_GUIDE.md) - Detailed usage instructions and tips
-- [Changelog](CHANGELOG.md) - Version history and release notes
+- [Server Deployment Guide](docs/server-deploy-ubuntu.md) - Ubuntu server deployment with Docker
 
 ## Privacy
 
