@@ -1412,6 +1412,24 @@ def api_create_job():
     if not is_valid:
         return jsonify({'error': error}), 400
     
+    # Validate diarization requirements if enabled
+    diarization_enabled = options.get('diarizationEnabled', False)
+    if diarization_enabled:
+        hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
+        if not hf_token:
+            return jsonify({
+                'error': 'Diarization requires HF_TOKEN environment variable. Get a token from https://huggingface.co/settings/tokens',
+                'code': 'HF_TOKEN_MISSING'
+            }), 400
+        
+        try:
+            import pyannote.audio
+        except ImportError:
+            return jsonify({
+                'error': 'Diarization requires pyannote.audio which is not installed on this server.',
+                'code': 'DIARIZATION_UNAVAILABLE'
+            }), 400
+    
     # Resolve upload IDs to file paths
     inputs = []
     for upload_id in upload_ids:
@@ -1457,6 +1475,10 @@ def api_create_job():
             'includeTimestamps': options.get('includeTimestamps', True),
             'wordTimestamps': options.get('wordTimestamps', False),
             'qualityPreset': options.get('qualityPreset', 'balanced'),
+            'diarizationEnabled': diarization_enabled,
+            'minSpeakers': options.get('minSpeakers') if diarization_enabled else None,
+            'maxSpeakers': options.get('maxSpeakers') if diarization_enabled else None,
+            'numSpeakers': options.get('numSpeakers') if diarization_enabled else None,
         },
         'inputs': inputs,
         'outputs': [],
@@ -1504,6 +1526,72 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
             job_info = _active_jobs.get((session_id, job_id), {})
             return job_info.get('cancel_requested', False)
     
+    def write_error_artifact(code: str, message: str, phase: str, suggestion: str = '', outputs: list = None):
+        """Write a job_error.md artifact for reviewer-friendly error reporting."""
+        error_filename = 'job_error.md'
+        error_path = os.path.join(outputs_dir, error_filename)
+        
+        content = f"""# Job Error Report
+
+**Job ID:** {job_id}
+**Status:** failed
+**Backend:** {backend}
+**Phase:** {phase}
+
+## Error
+
+**Code:** `{code}`
+
+**Message:** {message}
+
+"""
+        if suggestion:
+            content += f"""## Suggestion
+
+{suggestion}
+"""
+        
+        try:
+            with open(error_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            
+            error_output = {
+                'id': session_store.new_id(8),
+                'filename': error_filename,
+                'path': error_path,
+                'type': 'error-report',
+                'sizeBytes': os.path.getsize(error_path)
+            }
+            
+            if outputs is not None:
+                outputs.append(error_output)
+            return error_output
+        except Exception:
+            return None
+    
+    def fail_job(code: str, message: str, phase: str, suggestion: str = '', outputs: list = None):
+        """Terminate job with error, write artifact, and update manifest."""
+        error_output = write_error_artifact(code, message, phase, suggestion, outputs)
+        final_outputs = outputs if outputs else []
+        if error_output and error_output not in final_outputs:
+            final_outputs.append(error_output)
+        
+        update_manifest(
+            status='failed',
+            finishedAt=datetime.now(timezone.utc).isoformat(),
+            error={'code': code, 'message': message},
+            outputs=final_outputs
+        )
+    
+    def cancel_job(outputs: list = None):
+        """Terminate job as canceled, preserving outputs."""
+        update_manifest(
+            status='canceled',
+            finishedAt=datetime.now(timezone.utc).isoformat(),
+            error={'code': 'USER_CANCELED', 'message': 'Job canceled by user'},
+            outputs=outputs or []
+        )
+    
     try:
         update_manifest(status='running', startedAt=datetime.now(timezone.utc).isoformat())
         
@@ -1521,11 +1609,9 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
             import torch
             import whisper
         except ImportError as e:
-            update_manifest(
-                status='failed',
-                finishedAt=datetime.now(timezone.utc).isoformat(),
-                error={'code': 'DEPENDENCY_ERROR', 'message': f'Required library not available: {e}'}
-            )
+            fail_job('DEPENDENCY_ERROR', f'Required library not available: {e}',
+                     phase='initialization',
+                     suggestion='Check that torch and openai-whisper are installed.')
             return
         
         try:
@@ -1537,28 +1623,22 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                 if options.get('wordTimestamps', False):
                     raise RuntimeError('Metal backend does not support word timestamps. Use CPU instead.')
         except RuntimeError as e:
-            update_manifest(
-                status='failed',
-                finishedAt=datetime.now(timezone.utc).isoformat(),
-                error={'code': 'BACKEND_RUNTIME_FAILURE', 'message': str(e)}
-            )
+            fail_job('BACKEND_RUNTIME_FAILURE', str(e),
+                     phase='backend validation',
+                     suggestion='Try using CPU backend instead.')
             return
         
         try:
             whisper_model = whisper.load_model(model_name, device=device)
         except torch.cuda.OutOfMemoryError:
-            update_manifest(
-                status='failed',
-                finishedAt=datetime.now(timezone.utc).isoformat(),
-                error={'code': 'OUT_OF_MEMORY', 'message': f'Not enough GPU memory to load {model_name} model. Try a smaller model.'}
-            )
+            fail_job('OUT_OF_MEMORY', f'Not enough GPU memory to load {model_name} model.',
+                     phase='model loading',
+                     suggestion='Try a smaller model (e.g., base or small) or use CPU backend.')
             return
         except Exception as e:
-            update_manifest(
-                status='failed',
-                finishedAt=datetime.now(timezone.utc).isoformat(),
-                error={'code': 'MODEL_LOAD_ERROR', 'message': f'Failed to load {model_name} model: {str(e)[:200]}'}
-            )
+            fail_job('MODEL_LOAD_ERROR', f'Failed to load {model_name} model: {str(e)[:200]}',
+                     phase='model loading',
+                     suggestion='Check model name is valid and sufficient memory is available.')
             return
         
         outputs = []
@@ -1566,12 +1646,7 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
         
         for idx, input_info in enumerate(inputs):
             if is_cancelled():
-                update_manifest(
-                    status='canceled',
-                    finishedAt=datetime.now(timezone.utc).isoformat(),
-                    error={'code': 'USER_CANCELED', 'message': 'Job canceled by user'},
-                    outputs=outputs  # Preserve any completed outputs
-                )
+                cancel_job(outputs)
                 return
             
             filepath = input_info['path']
@@ -1596,12 +1671,7 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                 
                 # Check for cancellation between transcription and diarization
                 if is_cancelled():
-                    update_manifest(
-                        status='canceled',
-                        finishedAt=datetime.now(timezone.utc).isoformat(),
-                        error={'code': 'USER_CANCELED', 'message': 'Job canceled by user'},
-                        outputs=outputs
-                    )
+                    cancel_job(outputs)
                     return
                 
                 # Run diarization if enabled
@@ -1611,7 +1681,7 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                 
                 if diarization_enabled:
                     update_manifest(progress={
-                        'currentFile': f'{original_name} (diarizing...)',
+                        'currentFile': f'{original_name} (running diarization...)',
                         'currentFileIndex': idx,
                         'percent': int((idx / total) * 100)
                     })
@@ -1626,8 +1696,13 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                             device=device
                         )
                         
+                        # Check for cancellation after diarization
+                        if is_cancelled():
+                            cancel_job(outputs)
+                            return
+                        
                         update_manifest(progress={
-                            'currentFile': f'{original_name} (merging speakers...)',
+                            'currentFile': f'{original_name} (merging transcript + speakers...)',
                             'currentFileIndex': idx,
                             'percent': int((idx / total) * 100)
                         })
@@ -1652,6 +1727,17 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                             'inputFilename': original_name,
                             'error': {'code': 'DIARIZATION_ERROR', 'message': str(e)[:200]}
                         })
+                
+                # Check for cancellation before writing outputs
+                if is_cancelled():
+                    cancel_job(outputs)
+                    return
+                
+                update_manifest(progress={
+                    'currentFile': f'{original_name} (writing outputs...)',
+                    'currentFileIndex': idx,
+                    'percent': int((idx / total) * 100)
+                })
                 
                 # Generate output files with upload_id suffix to prevent collisions
                 output_id = session_store.new_id(8)
@@ -1792,11 +1878,10 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
         
     except Exception as e:
         # Catch-all for unexpected errors
-        update_manifest(
-            status='failed',
-            finishedAt=datetime.now(timezone.utc).isoformat(),
-            error={'code': 'WORKER_EXCEPTION', 'message': f'Unexpected error: {str(e)[:400]}'}
-        )
+        fail_job('WORKER_EXCEPTION', f'Unexpected error: {str(e)[:400]}',
+                 phase='unknown',
+                 suggestion='Check server logs for details.',
+                 outputs=outputs if 'outputs' in dir() else None)
     
     finally:
         with _active_jobs_lock:
@@ -2097,6 +2182,25 @@ def api_get_mode():
 def api_get_runtime():
     """Get runtime environment and supported compute backends."""
     env = compute_backend.get_cached_environment()
+    
+    # Add diarization availability info
+    hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
+    pyannote_available = False
+    diarization_reason = None
+    
+    try:
+        import pyannote.audio
+        pyannote_available = True
+    except (ImportError, AttributeError, Exception) as e:
+        diarization_reason = f'pyannote.audio not available: {type(e).__name__}'
+    
+    if pyannote_available and not hf_token:
+        diarization_reason = 'HF_TOKEN environment variable not set'
+    
+    env['diarizationAvailable'] = pyannote_available and bool(hf_token)
+    if diarization_reason:
+        env['diarizationReason'] = diarization_reason
+    
     return jsonify(env)
 
 
