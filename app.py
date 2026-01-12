@@ -2201,6 +2201,28 @@ def api_get_runtime():
     if diarization_reason:
         env['diarizationReason'] = diarization_reason
     
+    # Add version info for debugging
+    try:
+        import torch
+        env['torchVersion'] = torch.__version__
+    except:
+        env['torchVersion'] = None
+    
+    try:
+        import torchaudio
+        env['torchaudioVersion'] = torchaudio.__version__
+    except:
+        env['torchaudioVersion'] = None
+    
+    if pyannote_available:
+        try:
+            import pyannote.audio
+            env['pyannoteVersion'] = pyannote.audio.__version__
+        except:
+            env['pyannoteVersion'] = 'installed'
+    else:
+        env['pyannoteVersion'] = None
+    
     return jsonify(env)
 
 

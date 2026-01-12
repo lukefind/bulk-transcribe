@@ -36,14 +36,14 @@ RUN if [ "$DEVICE" = "cpu" ]; then \
         echo "Installing CPU-only torch/torchaudio..." && \
         pip install --no-cache-dir \
             --index-url https://download.pytorch.org/whl/cpu \
-            torch==2.9.1 torchaudio==2.9.1 && \
+            torch==2.1.2 torchaudio==2.1.2 && \
         echo "Installing remaining requirements with constraints..." && \
         pip install --no-cache-dir -r requirements-server.txt -c constraints.txt; \
     else \
         echo "Installing GPU/CUDA torch/torchaudio..." && \
         pip install --no-cache-dir \
             --index-url https://download.pytorch.org/whl/cu121 \
-            torch==2.9.1 torchaudio==2.9.1 && \
+            torch==2.1.2 torchaudio==2.1.2 && \
         echo "Installing remaining requirements with constraints..." && \
         pip install --no-cache-dir -r requirements-server.txt -c constraints.txt; \
     fi

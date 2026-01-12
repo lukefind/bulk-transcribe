@@ -63,6 +63,14 @@ cookies.txt
 data/
 sessions/
 
+# Test audio files
+Test File/
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+
 # Whisper models (large files)
 *.pt
 

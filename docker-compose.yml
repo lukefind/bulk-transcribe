@@ -10,11 +10,14 @@ services:
       - "8476:8476"
     volumes:
       - ./data:/data
+    env_file:
+      - .env
     environment:
-      - PORT=8476
+      - DEVICE=cpu
       - INPUT_DIR=/data/input
       - OUTPUT_DIR=/data/output
-      - DEVICE=cpu
+      - PORT=8476
+      - HF_TOKEN=${HF_TOKEN}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8476/healthz"]

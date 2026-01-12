@@ -61,6 +61,8 @@ def run_diarization(
             "pyannote/speaker-diarization-3.1",
             use_auth_token=hf_token
         )
+        if pipeline is None:
+            raise RuntimeError("Pipeline.from_pretrained returned None")
     except Exception as e:
         raise RuntimeError(f"Failed to load diarization model: {e}") from e
     
