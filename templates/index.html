@@ -351,6 +351,7 @@
                                 <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Enable speaker diarization</span>
                             </label>
                             <p class="text-xs text-gray-500 mb-3">Identifies who spoke when. Requires HuggingFace token (HF_TOKEN env var).</p>
+                            <p id="diarizationReason" class="hidden text-xs text-amber-400 mb-3"></p>
                             
                             <div id="diarizationOptions" class="hidden space-y-3 ml-7">
                                 <div class="flex items-center justify-between">
@@ -957,6 +958,30 @@
             }
             
             updateWorkerOptionsUI();
+            updateDiarizationAvailability();
+        }
+        
+        function updateDiarizationAvailability() {
+            const checkbox = document.getElementById('diarizationEnabled');
+            const reasonEl = document.getElementById('diarizationReason');
+            if (!checkbox || !runtimeEnv) return;
+            
+            const available = runtimeEnv.diarizationAvailable;
+            checkbox.disabled = !available;
+            
+            if (reasonEl) {
+                if (!available && runtimeEnv.diarizationReason) {
+                    reasonEl.textContent = runtimeEnv.diarizationReason;
+                    reasonEl.classList.remove('hidden');
+                } else {
+                    reasonEl.classList.add('hidden');
+                }
+            }
+            
+            if (!available) {
+                checkbox.checked = false;
+                updateDiarizationOptions();
+            }
         }
         
         function updateDiarizationOptions() {
@@ -1275,7 +1300,8 @@
                 'json': 'JSON',
                 'speaker-markdown': 'Speaker Transcript',
                 'diarization-json': 'Diarization JSON',
-                'rttm': 'RTTM'
+                'rttm': 'RTTM',
+                'error-report': 'Error Report'
             };
             return labels[type] || type;
         }
@@ -1456,6 +1482,23 @@
                     </div>
                 `;
                 resultsList.appendChild(errorDiv);
+                
+                // Check for error report artifact
+                const errorReport = (job.outputs || []).find(o => o.type === 'error-report');
+                if (errorReport) {
+                    const errorReportDiv = document.createElement('div');
+                    errorReportDiv.className = 'mb-4';
+                    errorReportDiv.innerHTML = `
+                        <a href="/api/jobs/${job.jobId}/outputs/${errorReport.id}" 
+                           class="inline-flex items-center gap-2 px-3 py-1.5 bg-red-900/30 hover:bg-red-900/50 text-red-300 text-sm rounded-lg transition-all border border-red-500/30">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                            </svg>
+                            Download Error Report
+                        </a>
+                    `;
+                    resultsList.appendChild(errorReportDiv);
+                }
                 
                 // Add Retry button
                 if (IS_SERVER_MODE && currentJobId) {
