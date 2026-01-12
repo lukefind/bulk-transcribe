@@ -59,6 +59,48 @@ def check_diarization_access(hf_token: str) -> Dict[str, any]:
     }
 
 
+def _convert_to_wav(audio_path: str, target_sample_rate: int = 16000) -> str:
+    """
+    Convert audio to WAV format at 16kHz mono for pyannote compatibility.
+    
+    Args:
+        audio_path: Path to the input audio file
+        target_sample_rate: Target sample rate (default 16kHz)
+    
+    Returns:
+        Path to the converted WAV file (or original if already compatible)
+    """
+    import subprocess
+    import tempfile
+    
+    # Check if already a WAV file
+    if audio_path.lower().endswith('.wav'):
+        return audio_path
+    
+    # Create temp WAV file
+    temp_wav = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+    temp_wav.close()
+    
+    try:
+        # Use ffmpeg to convert to 16kHz mono WAV
+        cmd = [
+            'ffmpeg', '-y', '-i', audio_path,
+            '-ar', str(target_sample_rate),
+            '-ac', '1',  # mono
+            '-c:a', 'pcm_s16le',  # 16-bit PCM
+            temp_wav.name
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg conversion failed: {result.stderr}")
+        return temp_wav.name
+    except Exception as e:
+        # Clean up temp file on error
+        if os.path.exists(temp_wav.name):
+            os.unlink(temp_wav.name)
+        raise
+
+
 def run_diarization(
     audio_path: str,
     min_speakers: Optional[int] = None,
@@ -93,6 +135,18 @@ def run_diarization(
         RuntimeError: If diarization fails
     """
     from logger import log_event, with_timer
+    
+    # Convert audio to WAV format for pyannote compatibility
+    converted_path = None
+    try:
+        converted_path = _convert_to_wav(audio_path)
+        if converted_path != audio_path:
+            # Use converted file for diarization
+            diarization_audio_path = converted_path
+        else:
+            diarization_audio_path = audio_path
+    except Exception as e:
+        raise RuntimeError(f"Audio conversion failed: {e}")
     
     # Log diarization start
     log_fields = {
@@ -189,10 +243,17 @@ def run_diarization(
     # Run diarization with timing
     try:
         with with_timer('diarization_run', **log_fields):
-            diarization = pipeline(audio_path, **diarize_params)
+            diarization = pipeline(diarization_audio_path, **diarize_params)
     except Exception as e:
         log_event('error', 'diarization_run_failed', error=str(e), **log_fields)
         raise RuntimeError(f"Diarization failed: {e}") from e
+    finally:
+        # Clean up converted temp file
+        if converted_path and converted_path != audio_path and os.path.exists(converted_path):
+            try:
+                os.unlink(converted_path)
+            except:
+                pass
     
     # Convert to list of segments
     segments = []

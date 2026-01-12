@@ -18,6 +18,12 @@ services:
       - OUTPUT_DIR=/data/output
       - PORT=8476
       - HF_TOKEN=${HF_TOKEN}
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 4G
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8476/healthz"]
