@@ -10,6 +10,10 @@ LABEL description="Audio transcription using OpenAI Whisper"
 # Build argument to control CPU vs GPU dependencies
 ARG DEVICE=cpu
 
+# Build-time version info (passed from docker-compose or build script)
+ARG BUILD_COMMIT=unknown
+ARG BUILD_TIME=unknown
+
 # Prevent Python from writing pyc files and buffering stdout/stderr
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -78,6 +82,10 @@ ENV PORT=8476
 ENV INPUT_DIR=/data/input
 ENV OUTPUT_DIR=/data/output
 ENV DEVICE=cpu
+
+# Build version info (baked into image)
+ENV BUILD_COMMIT=${BUILD_COMMIT}
+ENV BUILD_TIME=${BUILD_TIME}
 
 # Expose port
 EXPOSE 8476

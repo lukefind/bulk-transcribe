@@ -2650,6 +2650,34 @@
         function hideError() {
             errorSection.classList.add('hidden');
         }
+        
+        // Display build version in footer
+        async function displayBuildVersion() {
+            try {
+                const response = await fetch('/api/runtime');
+                const data = await response.json();
+                const versionEl = document.getElementById('buildVersion');
+                if (versionEl && data.buildCommit && data.buildCommit !== 'unknown') {
+                    versionEl.textContent = `Build: ${data.buildCommit}`;
+                    versionEl.title = `Built: ${data.buildTime || 'unknown'}`;
+                }
+            } catch (e) {
+                console.error('Failed to fetch build version:', e);
+            }
+        }
+        
+        // Call on page load
+        if (IS_SERVER_MODE) {
+            displayBuildVersion();
+        }
     </script>
+    
+    <!-- Footer with version info -->
+    <footer class="border-t border-primary-900/30 mt-8 py-4">
+        <div class="max-w-4xl mx-auto px-6 flex justify-between items-center text-xs text-gray-500">
+            <span>Bulk Transcribe</span>
+            <span id="buildVersion" class="cursor-help"></span>
+        </div>
+    </footer>
 </body>
 </html>

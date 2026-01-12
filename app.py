@@ -2743,6 +2743,10 @@ def api_get_runtime():
     from diarization_policy import get_server_policy_config
     env['diarizationPolicy'] = get_server_policy_config()
     
+    # Add build version info
+    env['buildCommit'] = os.environ.get('BUILD_COMMIT', 'unknown')
+    env['buildTime'] = os.environ.get('BUILD_TIME', 'unknown')
+    
     return jsonify(env)
 
 
