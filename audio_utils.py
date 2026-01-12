@@ -188,3 +188,128 @@ def is_wav_pcm_compatible(info: dict) -> bool:
         return False
     
     return True
+
+
+class ChunkInfo:
+    """Information about an audio chunk."""
+    def __init__(self, index: int, start_sec: float, end_sec: float, path: str):
+        self.index = index
+        self.start_sec = start_sec
+        self.end_sec = end_sec
+        self.path = path
+    
+    def to_dict(self) -> dict:
+        return {
+            'index': self.index,
+            'startSec': self.start_sec,
+            'endSec': self.end_sec,
+            'path': self.path
+        }
+
+
+def split_audio_to_wav_chunks(
+    input_path: str,
+    out_dir: str,
+    chunk_seconds: int = 150,
+    overlap_seconds: int = 5,
+    sample_rate: int = 16000
+) -> list[ChunkInfo]:
+    """
+    Split audio file into overlapping WAV chunks for diarization.
+    
+    Args:
+        input_path: Path to input audio file
+        out_dir: Directory to write chunk files
+        chunk_seconds: Duration of each chunk in seconds
+        overlap_seconds: Overlap between consecutive chunks
+        sample_rate: Output sample rate (default 16kHz for pyannote)
+    
+    Returns:
+        List of ChunkInfo objects describing each chunk
+    
+    Raises:
+        AudioProbeError: If audio probing or splitting fails
+    """
+    # Get audio duration
+    info = get_audio_info(input_path)
+    total_duration = info['durationSec']
+    
+    # Create output directory
+    os.makedirs(out_dir, exist_ok=True)
+    
+    chunks = []
+    chunk_index = 0
+    start_sec = 0.0
+    
+    # Calculate step size (chunk minus overlap)
+    step_sec = chunk_seconds - overlap_seconds
+    
+    while start_sec < total_duration:
+        # Calculate end time for this chunk
+        end_sec = min(start_sec + chunk_seconds, total_duration)
+        duration = end_sec - start_sec
+        
+        # Skip very short final chunks (less than 5 seconds)
+        if duration < 5 and chunk_index > 0:
+            break
+        
+        # Generate chunk filename
+        chunk_filename = f"chunk_{chunk_index:03d}.wav"
+        chunk_path = os.path.join(out_dir, chunk_filename)
+        
+        # Extract chunk using ffmpeg
+        cmd = [
+            'ffmpeg',
+            '-y',  # Overwrite output
+            '-ss', str(start_sec),
+            '-i', input_path,
+            '-t', str(duration),
+            '-ac', '1',  # Mono
+            '-ar', str(sample_rate),
+            '-vn',  # No video
+            '-acodec', 'pcm_s16le',
+            chunk_path
+        ]
+        
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            
+            if result.returncode != 0:
+                raise AudioProbeError(
+                    f"ffmpeg chunk extraction failed: {result.stderr[:200]}"
+                )
+        except subprocess.TimeoutExpired:
+            raise AudioProbeError(f"ffmpeg timed out extracting chunk {chunk_index}")
+        
+        chunks.append(ChunkInfo(
+            index=chunk_index,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            path=chunk_path
+        ))
+        
+        chunk_index += 1
+        start_sec += step_sec
+        
+        # Safety limit: max 100 chunks
+        if chunk_index >= 100:
+            break
+    
+    return chunks
+
+
+def cleanup_chunks(chunk_dir: str) -> None:
+    """
+    Remove chunk files and directory.
+    
+    Args:
+        chunk_dir: Directory containing chunk files
+    """
+    import shutil
+    if os.path.exists(chunk_dir):
+        shutil.rmtree(chunk_dir, ignore_errors=True)
