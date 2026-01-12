@@ -301,7 +301,10 @@ curl -b cookies.txt -X POST http://localhost:8476/api/jobs \
 
 ### 8. Diarization (Pyannote) Verification
 
-**Prerequisites**: HF_TOKEN set in environment with access to pyannote models
+**Prerequisites**: 
+- HF_TOKEN set in environment with access to pyannote models
+- Container memory limit of at least 8GB (diarization is memory-intensive)
+- For audio files >5 minutes, consider using GPU or increasing memory to 16GB
 
 **Test**: HF access verification via /api/runtime
 

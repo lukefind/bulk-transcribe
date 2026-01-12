@@ -1869,8 +1869,8 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                     'sizeBytes': os.path.getsize(json_path)
                 })
                 
-                # Generate diarization outputs if available
-                if diarization_enabled and merged_segments and speaker_segments:
+                # Generate diarization outputs if diarization was run (even if no speakers detected)
+                if diarization_enabled and speaker_segments is not None:
                     import diarization as diarization_module
                     
                     # Speaker markdown (primary reviewer artifact)
