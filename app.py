@@ -2271,7 +2271,7 @@ def api_get_job(job_id):
         'backend': manifest.get('backend'),
         'environment': manifest.get('environment'),
         'options': manifest.get('options'),
-        'inputs': [{'uploadId': i.get('uploadId'), 'filename': i.get('originalFilename')} for i in manifest.get('inputs', [])],
+        'inputs': [{'uploadId': i.get('uploadId'), 'filename': i.get('originalFilename'), 'durationSec': i.get('durationSec')} for i in manifest.get('inputs', [])],
         'outputs': [{'id': o.get('id'), 'forUploadId': o.get('forUploadId'), 'filename': o.get('filename'), 'type': o.get('type'), 'sizeBytes': o.get('sizeBytes'), 'error': o.get('error')} for o in manifest.get('outputs', [])],
         'progress': manifest.get('progress'),
         'error': manifest.get('error')
@@ -2615,6 +2615,336 @@ def api_download_output(job_id, output_id):
         as_attachment=True,
         download_name=output.get('filename')
     )
+
+
+@app.route('/api/jobs/<job_id>/audio/<input_id>', methods=['GET'])
+def api_stream_audio(job_id, input_id):
+    """
+    Stream audio file for in-browser playback with Range support.
+    
+    input_id must match an uploadId in the job's inputs list.
+    Supports HTTP Range requests for seeking in audio player.
+    """
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Find input by uploadId
+    input_info = None
+    for inp in manifest.get('inputs', []):
+        if inp.get('uploadId') == input_id:
+            input_info = inp
+            break
+    
+    if not input_info:
+        return jsonify({'error': 'Input not found'}), 404
+    
+    filepath = input_info.get('path')
+    if not filepath or not os.path.exists(filepath):
+        return jsonify({'error': 'Audio file not accessible'}), 404
+    
+    # Security: verify file is within session uploads directory
+    session_uploads_dir = session_store.uploads_dir(session_id)
+    if not session_store.is_safe_path(session_uploads_dir, filepath):
+        return jsonify({'error': 'Access denied'}), 403
+    
+    # Determine content type from extension
+    ext = os.path.splitext(filepath)[1].lower()
+    content_types = {
+        '.mp3': 'audio/mpeg',
+        '.wav': 'audio/wav',
+        '.m4a': 'audio/mp4',
+        '.ogg': 'audio/ogg',
+        '.webm': 'audio/webm',
+        '.mp4': 'audio/mp4',
+        '.flac': 'audio/flac',
+        '.aac': 'audio/aac',
+    }
+    content_type = content_types.get(ext, 'application/octet-stream')
+    
+    file_size = os.path.getsize(filepath)
+    
+    # Handle Range requests for seeking
+    range_header = request.headers.get('Range')
+    if range_header:
+        # Parse Range header (e.g., "bytes=0-1023")
+        try:
+            range_match = re.match(r'bytes=(\d+)-(\d*)', range_header)
+            if range_match:
+                start = int(range_match.group(1))
+                end_str = range_match.group(2)
+                end = int(end_str) if end_str else file_size - 1
+                
+                # Clamp to file size
+                end = min(end, file_size - 1)
+                
+                if start > end or start >= file_size:
+                    return Response('Range not satisfiable', status=416)
+                
+                length = end - start + 1
+                
+                def generate_range():
+                    with open(filepath, 'rb') as f:
+                        f.seek(start)
+                        remaining = length
+                        chunk_size = 64 * 1024  # 64KB chunks
+                        while remaining > 0:
+                            read_size = min(chunk_size, remaining)
+                            data = f.read(read_size)
+                            if not data:
+                                break
+                            remaining -= len(data)
+                            yield data
+                
+                response = Response(
+                    generate_range(),
+                    status=206,
+                    mimetype=content_type,
+                    direct_passthrough=True
+                )
+                response.headers['Content-Range'] = f'bytes {start}-{end}/{file_size}'
+                response.headers['Content-Length'] = length
+                response.headers['Accept-Ranges'] = 'bytes'
+                response.headers['Cache-Control'] = 'no-cache'
+                return response
+        except (ValueError, AttributeError):
+            pass  # Fall through to full file response
+    
+    # Full file response (no Range or invalid Range)
+    def generate_full():
+        with open(filepath, 'rb') as f:
+            chunk_size = 64 * 1024
+            while True:
+                data = f.read(chunk_size)
+                if not data:
+                    break
+                yield data
+    
+    response = Response(
+        generate_full(),
+        status=200,
+        mimetype=content_type,
+        direct_passthrough=True
+    )
+    response.headers['Content-Length'] = file_size
+    response.headers['Accept-Ranges'] = 'bytes'
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
+
+
+@app.route('/api/jobs/<job_id>/outputs/<output_id>/text', methods=['GET'])
+def api_get_output_text(job_id, output_id):
+    """
+    Get text content of an output file for inline preview.
+    
+    Only allows text-like file types (.md, .txt, .json, .rttm, .srt, .vtt).
+    Returns JSON with content and mime type.
+    Supports ?maxBytes= query param to limit response size.
+    """
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Find output by ID
+    output = None
+    for o in manifest.get('outputs', []):
+        if o.get('id') == output_id:
+            output = o
+            break
+    
+    if not output or output.get('error'):
+        return jsonify({'error': 'Output not found'}), 404
+    
+    filepath = output.get('path')
+    job_outputs_path = session_store.job_outputs_dir(session_id, job_id)
+    
+    # Security: verify file is within job outputs directory
+    if not filepath or not os.path.exists(filepath) or not session_store.is_safe_path(job_outputs_path, filepath):
+        return jsonify({'error': 'Output file not accessible'}), 404
+    
+    # Only allow text-like file types
+    ext = os.path.splitext(filepath)[1].lower()
+    allowed_extensions = {
+        '.md': 'text/markdown',
+        '.txt': 'text/plain',
+        '.json': 'application/json',
+        '.rttm': 'text/plain',
+        '.srt': 'text/plain',
+        '.vtt': 'text/vtt',
+    }
+    
+    if ext not in allowed_extensions:
+        return jsonify({'error': 'File type not supported for text preview'}), 400
+    
+    mime_type = allowed_extensions[ext]
+    
+    # Get max bytes limit (default 2MB, max 5MB)
+    max_bytes = min(
+        int(request.args.get('maxBytes', 2 * 1024 * 1024)),
+        5 * 1024 * 1024
+    )
+    
+    file_size = os.path.getsize(filepath)
+    truncated = file_size > max_bytes
+    
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read(max_bytes)
+    except UnicodeDecodeError:
+        return jsonify({'error': 'File is not valid UTF-8 text'}), 400
+    except Exception as e:
+        return jsonify({'error': f'Failed to read file: {str(e)[:100]}'}), 500
+    
+    return jsonify({
+        'content': content,
+        'mime': mime_type,
+        'sizeBytes': file_size,
+        'truncated': truncated,
+        'filename': output.get('filename')
+    })
+
+
+@app.route('/api/jobs/<job_id>/speakers', methods=['GET'])
+def api_get_speakers(job_id):
+    """
+    Get detected speakers and current label mapping for a job.
+    
+    Returns speakers detected from diarization.json or inferred from speaker.md,
+    along with any custom labels that have been set.
+    """
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Get current label mapping from manifest
+    speaker_labels = manifest.get('speakerLabels', {})
+    
+    # Try to detect speakers from diarization.json outputs
+    detected_speakers = set()
+    
+    for output in manifest.get('outputs', []):
+        if output.get('type') == 'diarization_json' and not output.get('error'):
+            filepath = output.get('path')
+            if filepath and os.path.exists(filepath):
+                try:
+                    diarization_data = session_store.read_json(filepath)
+                    if diarization_data and 'segments' in diarization_data:
+                        for seg in diarization_data['segments']:
+                            speaker = seg.get('speaker')
+                            if speaker:
+                                detected_speakers.add(speaker)
+                except Exception:
+                    pass
+    
+    # If no diarization.json, try to infer from speaker.md content
+    if not detected_speakers:
+        for output in manifest.get('outputs', []):
+            if output.get('type') == 'speaker_markdown' and not output.get('error'):
+                filepath = output.get('path')
+                if filepath and os.path.exists(filepath):
+                    try:
+                        with open(filepath, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        # Look for patterns like "SPEAKER_00:" or "Speaker 1:"
+                        import re
+                        # Match SPEAKER_XX format
+                        matches = re.findall(r'\b(SPEAKER_\d+)\b', content)
+                        detected_speakers.update(matches)
+                        # Also match "Speaker N:" format
+                        speaker_n_matches = re.findall(r'\bSpeaker\s+(\d+):', content)
+                        for n in speaker_n_matches:
+                            detected_speakers.add(f'SPEAKER_{int(n)-1:02d}')
+                    except Exception:
+                        pass
+    
+    # Sort speakers for consistent ordering
+    speakers = sorted(list(detected_speakers))
+    
+    # Build response with default labels for any speakers without custom labels
+    speaker_info = []
+    for speaker_id in speakers:
+        speaker_info.append({
+            'id': speaker_id,
+            'label': speaker_labels.get(speaker_id),
+            'defaultLabel': f'Speaker {int(speaker_id.split("_")[1]) + 1}' if '_' in speaker_id else speaker_id
+        })
+    
+    return jsonify({
+        'speakers': speaker_info,
+        'labels': speaker_labels
+    })
+
+
+@app.route('/api/jobs/<job_id>/speakers', methods=['PUT'])
+def api_put_speakers(job_id):
+    """
+    Update speaker label mapping for a job.
+    
+    Body: { "labels": { "SPEAKER_00": "Child", "SPEAKER_01": "Parent" } }
+    Labels are persisted in the job manifest.
+    """
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    data = request.get_json() or {}
+    labels = data.get('labels', {})
+    
+    if not isinstance(labels, dict):
+        return jsonify({'error': 'labels must be an object'}), 400
+    
+    # Validate labels
+    MAX_LABEL_LENGTH = 40
+    ALLOWED_CHARS = re.compile(r'^[\w\s\-\'\.]+$', re.UNICODE)
+    
+    validated_labels = {}
+    for speaker_id, label in labels.items():
+        # Validate speaker ID format
+        if not re.match(r'^SPEAKER_\d+$', speaker_id):
+            return jsonify({'error': f'Invalid speaker ID format: {speaker_id}'}), 400
+        
+        # Validate label
+        if label is None or label == '':
+            # Empty label means remove custom label (use default)
+            continue
+        
+        if not isinstance(label, str):
+            return jsonify({'error': f'Label for {speaker_id} must be a string'}), 400
+        
+        label = label.strip()
+        if len(label) > MAX_LABEL_LENGTH:
+            return jsonify({'error': f'Label for {speaker_id} exceeds {MAX_LABEL_LENGTH} characters'}), 400
+        
+        if not ALLOWED_CHARS.match(label):
+            return jsonify({'error': f'Label for {speaker_id} contains invalid characters'}), 400
+        
+        validated_labels[speaker_id] = label
+    
+    # Update manifest with new labels
+    manifest['speakerLabels'] = validated_labels
+    manifest['updatedAt'] = datetime.now(timezone.utc).isoformat()
+    
+    # Atomic write
+    session_store.atomic_write_json(manifest_path, manifest)
+    
+    return jsonify({
+        'labels': validated_labels,
+        'message': 'Speaker labels updated'
+    })
+
+_CSRF_PROTECTED_ENDPOINTS.add('api_put_speakers')
 
 
 @app.route('/api/session', methods=['GET'])
