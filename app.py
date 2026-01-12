@@ -1479,8 +1479,9 @@ def api_create_job():
     
     # Compute effective diarization policy using single source of truth
     diarization_effective = None
+    diarization_warnings = []
     if diarization_enabled:
-        from diarization_policy import compute_diarization_policy, get_server_policy_config
+        from diarization_policy import compute_diarization_policy, get_server_policy_config, get_clamping_warnings
         
         server_config = get_server_policy_config()
         diarization_effective = compute_diarization_policy(
@@ -1497,6 +1498,7 @@ def api_create_job():
             min_overlap_seconds=server_config['minOverlapSeconds'],
             max_overlap_seconds=server_config['maxOverlapSeconds'],
         )
+        diarization_warnings = get_clamping_warnings(diarization_effective)
     
     # Validate diarization duration limits on CPU (unless auto-split is enabled)
     if diarization_enabled and diarization_effective and requested_backend == 'cpu':
@@ -1517,13 +1519,22 @@ def api_create_job():
             
             if too_long_files:
                 from audio_utils import format_duration
-                from diarization_policy import get_server_policy_config
-                server_max = get_server_policy_config()['serverMaxDurationSeconds']
-                return jsonify({
+                from diarization_policy import get_clamping_warnings
+                server_max = diarization_effective.get('serverMaxDurationSeconds', effective_max)
+                clamped_info = diarization_effective.get('clamped', {})
+                was_clamped = clamped_info.get('maxDurationClamped', False)
+                requested_max = clamped_info.get('maxDurationOriginal')
+                
+                error_response = {
                     'error': f'Audio file(s) too long for CPU diarization. Max duration: {format_duration(effective_max)}',
                     'code': 'DIARIZATION_TOO_LONG_CPU',
-                    'maxDurationSec': effective_max,
-                    'maxDurationFormatted': format_duration(effective_max),
+                    'effectivePolicy': {
+                        'maxDurationSeconds': effective_max,
+                        'maxDurationFormatted': format_duration(effective_max),
+                        'autoSplit': False,
+                        'chunkSeconds': diarization_effective.get('chunkSeconds'),
+                        'overlapSeconds': diarization_effective.get('overlapSeconds'),
+                    },
                     'serverMaxDurationSec': server_max,
                     'serverMaxDurationFormatted': format_duration(server_max),
                     'tooLongFiles': too_long_files,
@@ -1534,7 +1545,15 @@ def api_create_job():
                         'Disable diarization for this job',
                         'Run on GPU backend if available'
                     ]
-                }), 400
+                }
+                
+                if was_clamped and requested_max:
+                    error_response['requestedMaxDurationSec'] = requested_max
+                    error_response['requestedMaxDurationFormatted'] = format_duration(requested_max)
+                    error_response['wasClamped'] = True
+                    error_response['clampingWarnings'] = get_clamping_warnings(diarization_effective)
+                
+                return jsonify(error_response), 400
     
     # Create job
     job_id = session_store.new_id(12)
@@ -1572,6 +1591,7 @@ def api_create_job():
             'diarizationChunkSeconds': options.get('diarizationChunkSeconds') if diarization_enabled else None,
             'diarizationOverlapSeconds': options.get('diarizationOverlapSeconds') if diarization_enabled else None,
             'diarizationEffective': diarization_effective,
+            'diarizationWarnings': diarization_warnings,
         },
         'inputs': inputs,
         'outputs': [],
@@ -2715,9 +2735,14 @@ def api_compute_diarization_policy():
         max_overlap_seconds=server_config['maxOverlapSeconds'],
     )
     
+    # Generate user-friendly warnings for any clamped values
+    from diarization_policy import get_clamping_warnings
+    warnings = get_clamping_warnings(policy) if policy else []
+    
     return jsonify({
         'policy': policy,
-        'serverConfig': server_config
+        'serverConfig': server_config,
+        'warnings': warnings
     })
 
 
