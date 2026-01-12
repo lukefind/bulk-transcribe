@@ -1508,7 +1508,6 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
         update_manifest(status='running', startedAt=datetime.now(timezone.utc).isoformat())
         
         # Load whisper model
-        import whisper
         model_name = options.get('model', 'base')
         language = options.get('language', '') or None
         
@@ -1518,24 +1517,61 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
         device = compute_backend.get_torch_device(backend)
         
         # Validate backend is actually available at runtime
-        import torch
-        if device == 'cuda' and not torch.cuda.is_available():
-            raise RuntimeError(f'CUDA backend requested but torch.cuda.is_available() is False')
-        if device == 'mps':
-            if not hasattr(torch.backends, 'mps') or not torch.backends.mps.is_available():
-                raise RuntimeError(f'Metal backend requested but torch.backends.mps.is_available() is False')
-            # MPS doesn't support word timestamps (float64 for DTW)
-            if options.get('wordTimestamps', False):
-                raise RuntimeError(f'Metal backend does not support word timestamps. Use CPU instead.')
+        try:
+            import torch
+            import whisper
+        except ImportError as e:
+            update_manifest(
+                status='failed',
+                finishedAt=datetime.now(timezone.utc).isoformat(),
+                error={'code': 'DEPENDENCY_ERROR', 'message': f'Required library not available: {e}'}
+            )
+            return
         
-        whisper_model = whisper.load_model(model_name, device=device)
+        try:
+            if device == 'cuda' and not torch.cuda.is_available():
+                raise RuntimeError('CUDA is not available on this system')
+            if device == 'mps':
+                if not hasattr(torch.backends, 'mps') or not torch.backends.mps.is_available():
+                    raise RuntimeError('Metal (MPS) is not available on this system')
+                if options.get('wordTimestamps', False):
+                    raise RuntimeError('Metal backend does not support word timestamps. Use CPU instead.')
+        except RuntimeError as e:
+            update_manifest(
+                status='failed',
+                finishedAt=datetime.now(timezone.utc).isoformat(),
+                error={'code': 'BACKEND_RUNTIME_FAILURE', 'message': str(e)}
+            )
+            return
+        
+        try:
+            whisper_model = whisper.load_model(model_name, device=device)
+        except torch.cuda.OutOfMemoryError:
+            update_manifest(
+                status='failed',
+                finishedAt=datetime.now(timezone.utc).isoformat(),
+                error={'code': 'OUT_OF_MEMORY', 'message': f'Not enough GPU memory to load {model_name} model. Try a smaller model.'}
+            )
+            return
+        except Exception as e:
+            update_manifest(
+                status='failed',
+                finishedAt=datetime.now(timezone.utc).isoformat(),
+                error={'code': 'MODEL_LOAD_ERROR', 'message': f'Failed to load {model_name} model: {str(e)[:200]}'}
+            )
+            return
         
         outputs = []
         total = len(inputs)
         
         for idx, input_info in enumerate(inputs):
             if is_cancelled():
-                update_manifest(status='cancelled', finishedAt=datetime.now(timezone.utc).isoformat())
+                update_manifest(
+                    status='canceled',
+                    finishedAt=datetime.now(timezone.utc).isoformat(),
+                    error={'code': 'USER_CANCELED', 'message': 'Job canceled by user'},
+                    outputs=outputs  # Preserve any completed outputs
+                )
                 return
             
             filepath = input_info['path']
@@ -1637,10 +1673,11 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
         )
         
     except Exception as e:
+        # Catch-all for unexpected errors
         update_manifest(
             status='failed',
             finishedAt=datetime.now(timezone.utc).isoformat(),
-            error={'code': 'JOB_ERROR', 'message': str(e)[:500]}
+            error={'code': 'WORKER_EXCEPTION', 'message': f'Unexpected error: {str(e)[:400]}'}
         )
     
     finally:
@@ -1693,7 +1730,7 @@ def api_cancel_job(job_id):
         job_info = _active_jobs.get((session_id, job_id))
         if job_info and job_info.get('running'):
             job_info['cancel_requested'] = True
-            return jsonify({'status': 'cancelling'})
+            return jsonify({'status': 'canceling', 'message': 'Cancel requested'})
     
     # Check if job exists
     manifest_path = session_store.job_manifest_path(session_id, job_id)
@@ -1702,7 +1739,8 @@ def api_cancel_job(job_id):
     if not manifest:
         return jsonify({'error': 'Job not found'}), 404
     
-    if manifest.get('status') in ('complete', 'failed', 'cancelled'):
+    # Check terminal states (note: 'canceled' is the canonical spelling)
+    if manifest.get('status') in ('complete', 'complete_with_errors', 'failed', 'canceled'):
         return jsonify({'status': manifest.get('status'), 'message': 'Job already finished'})
     
     return jsonify({'status': 'not_running'})

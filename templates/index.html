@@ -1288,7 +1288,7 @@
                     
                     updateJobProgress(job);
                     
-                    if (job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled') {
+                    if (job.status === 'complete' || job.status === 'complete_with_errors' || job.status === 'failed' || job.status === 'canceled') {
                         clearInterval(jobPollInterval);
                         onJobComplete(job);
                     }
@@ -1296,6 +1296,38 @@
                     console.error('Failed to poll job status:', e);
                 }
             }, 1000);
+        }
+        
+        async function retryJob(jobId) {
+            if (!IS_SERVER_MODE) return;
+            
+            try {
+                const headers = {'Content-Type': 'application/json'};
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch(`/api/jobs/${jobId}/rerun`, {
+                    method: 'POST',
+                    headers
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    const errorMsg = data.error?.message || data.error || 'Failed to retry job';
+                    showError(errorMsg);
+                    return;
+                }
+                
+                // Start polling the new job
+                currentJobId = data.jobId;
+                resultsSection.classList.add('hidden');
+                progressSection.classList.remove('hidden');
+                hideError();
+                pollJobStatus();
+                loadJobHistory();
+            } catch (e) {
+                showError(`Failed to retry job: ${e.message}`);
+            }
         }
         
         function updateJobProgress(job) {
@@ -1317,21 +1349,66 @@
             progressSection.classList.add('hidden');
             resetSubmitButton();
             
-            if (job.status === 'failed') {
-                const errorMsg = job.error?.message || job.error || 'Job failed';
-                showError(errorMsg);
-                return;
-            }
-            
-            if (job.status === 'cancelled') {
-                showError('Job was cancelled');
-                return;
-            }
-            
-            // Show results
+            // Show results section for all terminal states
             resultsSection.classList.remove('hidden');
             const resultsList = document.getElementById('resultsList');
             resultsList.innerHTML = '';
+            
+            // Show error message prominently for failed/canceled jobs
+            if (job.status === 'failed' || job.status === 'canceled') {
+                const errorMsg = job.error?.message || job.error || (job.status === 'canceled' ? 'Job was canceled by user' : 'Job failed');
+                const errorCode = job.error?.code || 'UNKNOWN';
+                
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'mb-4 p-4 bg-red-900/30 border border-red-500/50 rounded-xl';
+                errorDiv.innerHTML = `
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-red-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <div>
+                            <div class="text-red-400 font-medium">Job ${job.status === 'canceled' ? 'Canceled' : 'Failed'}</div>
+                            <div class="text-red-300 text-sm mt-1">${errorMsg}</div>
+                            <div class="text-red-400/60 text-xs mt-1">Error code: ${errorCode}</div>
+                        </div>
+                    </div>
+                `;
+                resultsList.appendChild(errorDiv);
+                
+                // Add Retry button
+                if (IS_SERVER_MODE && currentJobId) {
+                    const retryDiv = document.createElement('div');
+                    retryDiv.className = 'mb-4';
+                    retryDiv.innerHTML = `
+                        <button onclick="retryJob('${job.jobId}')" 
+                                class="inline-flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-all">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                            Retry Job
+                        </button>
+                    `;
+                    resultsList.appendChild(retryDiv);
+                }
+            }
+            
+            // Show partial success message for complete_with_errors
+            if (job.status === 'complete_with_errors') {
+                const warnDiv = document.createElement('div');
+                warnDiv.className = 'mb-4 p-4 bg-amber-900/30 border border-amber-500/50 rounded-xl';
+                warnDiv.innerHTML = `
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-amber-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                        </svg>
+                        <div>
+                            <div class="text-amber-400 font-medium">Completed with Errors</div>
+                            <div class="text-amber-300 text-sm mt-1">Some files failed to process. Successfully completed files are available for download.</div>
+                        </div>
+                    </div>
+                `;
+                resultsList.appendChild(warnDiv);
+            }
             
             const outputs = job.outputs || [];
             const successOutputs = outputs.filter(o => !o.error);
