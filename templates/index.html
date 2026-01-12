@@ -1399,6 +1399,7 @@
                 };
                 const statusColor = statusColors[job.status] || 'text-gray-400';
                 const isRunning = job.status === 'running' || job.status === 'queued';
+                const isReviewable = job.reviewable && !isRunning;
                 
                 const date = job.createdAt ? new Date(job.createdAt).toLocaleString() : '';
                 
@@ -1411,6 +1412,13 @@
                         </div>
                     </div>
                     <div class="flex items-center gap-2">
+                        ${isReviewable ? `
+                            <button onclick="event.stopPropagation(); openReviewForJob('${job.jobId}')" 
+                                    class="px-2 py-1 text-xs bg-primary-600/50 hover:bg-primary-600 text-primary-200 rounded transition-all"
+                                    title="Review transcript">
+                                Review
+                            </button>
+                        ` : ''}
                         <span class="text-xs ${statusColor}">${job.status.replace('_', ' ')}</span>
                         ${!isRunning ? `
                             <button onclick="event.stopPropagation(); deleteJob('${job.jobId}')" 
@@ -1523,6 +1531,26 @@
                 }
             } catch (e) {
                 showError(`Failed to load job: ${e.message}`);
+            }
+        }
+        
+        async function openReviewForJob(jobId, inputId = null) {
+            try {
+                const response = await fetch(`/api/jobs/${jobId}`);
+                const job = await response.json();
+                
+                if (job.error) {
+                    showError(job.error);
+                    return;
+                }
+                
+                currentJobId = jobId;
+                saveSelectedJob(jobId);
+                
+                // Open review panel directly
+                openReviewPanel(job, inputId);
+            } catch (e) {
+                showError(`Failed to load job for review: ${e.message}`);
             }
         }
 
@@ -2876,13 +2904,14 @@
         let reviewJobData = null;
         let reviewTimeline = null;  // { speakers: [], chunks: [] }
         let reviewState = { speakerLabelMap: {}, chunkEdits: {}, uiPrefs: {} };
+        let reviewSelectedInputId = null;
         let reviewSelectedChunkIndex = -1;
         let reviewCurrentChunkIndex = -1;
         let reviewHasUnsavedChanges = false;
         let searchDebounceTimer = null;
         let saveDebounceTimer = null;
         
-        async function openReviewPanel(job) {
+        async function openReviewPanel(job, inputId = null) {
             if (!job || !job.outputs || job.outputs.length === 0) return;
             
             reviewJobData = job;
@@ -2890,9 +2919,21 @@
             document.getElementById('reviewPanel').classList.remove('hidden');
             document.getElementById('reviewUnsavedIndicator').classList.add('hidden');
             
-            // Setup audio player for first input
-            if (job.inputs && job.inputs.length > 0) {
-                setupReviewAudio(job.jobId, job.inputs[0]);
+            // Find the target input
+            let targetInput = null;
+            if (inputId && job.inputs) {
+                targetInput = job.inputs.find(i => i.uploadId === inputId);
+            }
+            if (!targetInput && job.inputs && job.inputs.length > 0) {
+                targetInput = job.inputs[0];
+            }
+            
+            // Store selected input ID for timeline loading
+            reviewSelectedInputId = targetInput?.uploadId || null;
+            
+            // Setup audio player
+            if (targetInput) {
+                setupReviewAudio(job.jobId, targetInput);
             }
             
             // Load timeline from API
@@ -2986,7 +3027,7 @@
             content.innerHTML = '<p class="text-gray-500 italic p-4">Loading timeline...</p>';
             
             try {
-                const inputId = reviewJobData.inputs?.[0]?.uploadId || '';
+                const inputId = reviewSelectedInputId || reviewJobData.inputs?.[0]?.uploadId || '';
                 const response = await fetch(`/api/jobs/${reviewJobData.jobId}/review/timeline?inputId=${inputId}`);
                 if (!response.ok) {
                     const err = await response.json();
