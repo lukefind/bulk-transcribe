@@ -2118,6 +2118,9 @@
         }
         
         function onJobComplete(job) {
+            // Store job for review panel access (must be set before buttons are created)
+            window._lastCompletedJob = job;
+            
             progressSection.classList.add('hidden');
             resetSubmitButton();
             
@@ -2264,9 +2267,6 @@
                     resultsList.appendChild(div);
                 }
             }
-            
-            // Store job for review panel access
-            window._lastCompletedJob = job;
             
             // Clear upload queue after successful job
             uploadedFiles = [];
