@@ -2948,6 +2948,509 @@ def api_put_speakers(job_id):
 _CSRF_PROTECTED_ENDPOINTS.add('api_put_speakers')
 
 
+# =============================================================================
+# REVIEW STATE + TIMELINE ENDPOINTS
+# =============================================================================
+
+@app.route('/api/jobs/<job_id>/review/state', methods=['GET'])
+def api_get_review_state(job_id):
+    """
+    Get the current review state for a job.
+    
+    Returns speaker label map, chunk edits, and UI preferences.
+    """
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Review state is stored in {job}/review/review_state.json
+    job_dir = session_store.job_dir(session_id, job_id)
+    review_dir = os.path.join(job_dir, 'review')
+    state_path = os.path.join(review_dir, 'review_state.json')
+    
+    state = session_store.read_json(state_path)
+    if not state:
+        state = {
+            'speakerLabelMap': {},
+            'chunkEdits': {},
+            'uiPrefs': {}
+        }
+    
+    return jsonify(state)
+
+
+@app.route('/api/jobs/<job_id>/review/state', methods=['PUT'])
+def api_put_review_state(job_id):
+    """
+    Update the review state for a job.
+    
+    Accepts:
+    {
+        "speakerLabelMap": {"SPEAKER_00": "Matt", ...},
+        "chunkEdits": {"t_000001": {"speakerId": "SPEAKER_02"}, ...},
+        "uiPrefs": {...}
+    }
+    """
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+    
+    # Validate speaker labels
+    ALLOWED_CHARS = re.compile(r'^[\w\s\-\'\.]+$', re.UNICODE)
+    MAX_LABEL_LENGTH = 40
+    
+    speaker_labels = data.get('speakerLabelMap', {})
+    for speaker_id, label in speaker_labels.items():
+        if not re.match(r'^SPEAKER_\d+$', speaker_id):
+            return jsonify({'error': f'Invalid speaker ID: {speaker_id}'}), 400
+        if len(label) > MAX_LABEL_LENGTH:
+            return jsonify({'error': f'Label for {speaker_id} exceeds {MAX_LABEL_LENGTH} chars'}), 400
+        if not ALLOWED_CHARS.match(label):
+            return jsonify({'error': f'Label for {speaker_id} contains invalid characters'}), 400
+    
+    # Validate chunk edits
+    chunk_edits = data.get('chunkEdits', {})
+    for chunk_id, edit in chunk_edits.items():
+        if not re.match(r'^t_\d+$', chunk_id):
+            return jsonify({'error': f'Invalid chunk ID: {chunk_id}'}), 400
+        if 'speakerId' in edit:
+            sid = edit['speakerId']
+            if sid and not re.match(r'^SPEAKER_\d+$', sid):
+                return jsonify({'error': f'Invalid speaker ID in edit: {sid}'}), 400
+    
+    # Build state object
+    state = {
+        'speakerLabelMap': speaker_labels,
+        'chunkEdits': chunk_edits,
+        'uiPrefs': data.get('uiPrefs', {}),
+        'updatedAt': datetime.now(timezone.utc).isoformat()
+    }
+    
+    # Ensure review directory exists
+    job_dir = session_store.job_dir(session_id, job_id)
+    review_dir = os.path.join(job_dir, 'review')
+    os.makedirs(review_dir, exist_ok=True)
+    
+    state_path = os.path.join(review_dir, 'review_state.json')
+    session_store.atomic_write_json(state_path, state)
+    
+    return jsonify({
+        'message': 'Review state saved',
+        'state': state
+    })
+
+_CSRF_PROTECTED_ENDPOINTS.add('api_put_review_state')
+
+
+@app.route('/api/jobs/<job_id>/review/timeline', methods=['GET'])
+def api_get_review_timeline(job_id):
+    """
+    Get the review timeline for a job input.
+    
+    Query params:
+    - inputId: (optional) specific input to get timeline for, defaults to first
+    
+    Returns a ReviewTimeline with chunks, speakers, and edits applied.
+    """
+    from review_timeline import TimelineParser, apply_review_state
+    
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Get input ID
+    input_id = request.args.get('inputId')
+    inputs = manifest.get('inputs', [])
+    
+    if not inputs:
+        return jsonify({'error': 'No inputs in job'}), 400
+    
+    # Find the requested input or use first
+    target_input = None
+    if input_id:
+        for inp in inputs:
+            if inp.get('uploadId') == input_id:
+                target_input = inp
+                break
+        if not target_input:
+            return jsonify({'error': 'Input not found'}), 404
+    else:
+        target_input = inputs[0]
+        input_id = target_input.get('uploadId')
+    
+    filename = target_input.get('originalFilename', 'unknown')
+    
+    # Find outputs for this input
+    outputs = manifest.get('outputs', [])
+    
+    # Read available output files
+    transcript_json = None
+    diarization_json = None
+    speaker_md = None
+    transcript_md = None
+    
+    for output in outputs:
+        if output.get('forUploadId') != input_id and output.get('forUploadId'):
+            continue
+        
+        output_type = output.get('type', '')
+        output_path = output.get('path')
+        
+        if not output_path or not os.path.exists(output_path):
+            continue
+        
+        try:
+            with open(output_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except Exception:
+            continue
+        
+        if output_type == 'json':
+            transcript_json = content
+        elif output_type == 'diarization-json':
+            diarization_json = content
+        elif output_type == 'speaker-markdown':
+            speaker_md = content
+        elif output_type == 'markdown':
+            transcript_md = content
+    
+    # Parse into timeline
+    parser = TimelineParser(job_id, input_id, filename)
+    timeline = parser.parse(
+        transcript_json=transcript_json,
+        diarization_json=diarization_json,
+        speaker_md=speaker_md,
+        transcript_md=transcript_md
+    )
+    
+    # Apply saved review state if exists
+    job_dir = session_store.job_dir(session_id, job_id)
+    state_path = os.path.join(job_dir, 'review', 'review_state.json')
+    review_state = session_store.read_json(state_path)
+    
+    if review_state:
+        timeline = apply_review_state(timeline, review_state)
+    
+    return jsonify(timeline.to_dict())
+
+
+@app.route('/api/jobs/<job_id>/review/export', methods=['GET'])
+def api_export_review_project(job_id):
+    """
+    Export a review project as a zip bundle.
+    
+    Query params:
+    - inputId: (optional) specific input to export, defaults to first
+    
+    Returns a .btproj.zip containing:
+    - manifest_snapshot.json
+    - timeline.json
+    - review_state.json
+    - outputs/ (text outputs used for review)
+    """
+    from review_timeline import TimelineParser, apply_review_state
+    
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    input_id = request.args.get('inputId')
+    inputs = manifest.get('inputs', [])
+    
+    if not inputs:
+        return jsonify({'error': 'No inputs in job'}), 400
+    
+    target_input = None
+    if input_id:
+        for inp in inputs:
+            if inp.get('uploadId') == input_id:
+                target_input = inp
+                break
+        if not target_input:
+            return jsonify({'error': 'Input not found'}), 404
+    else:
+        target_input = inputs[0]
+        input_id = target_input.get('uploadId')
+    
+    filename = target_input.get('originalFilename', 'unknown')
+    safe_name = secure_filename(Path(filename).stem) or 'project'
+    
+    # Build zip in memory
+    zip_buffer = io.BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        # Manifest snapshot (sanitized - no paths)
+        safe_manifest = {
+            'jobId': manifest.get('jobId'),
+            'createdAt': manifest.get('createdAt'),
+            'status': manifest.get('status'),
+            'options': manifest.get('options'),
+            'inputs': [{'uploadId': i.get('uploadId'), 'filename': i.get('originalFilename')} 
+                      for i in manifest.get('inputs', [])],
+            'outputs': [{'id': o.get('id'), 'filename': o.get('filename'), 'type': o.get('type')} 
+                       for o in manifest.get('outputs', []) if not o.get('error')],
+            'exportedAt': datetime.now(timezone.utc).isoformat(),
+            'buildCommit': os.environ.get('BUILD_COMMIT', 'unknown'),
+        }
+        zf.writestr('manifest_snapshot.json', json.dumps(safe_manifest, indent=2))
+        
+        # Review state
+        job_dir = session_store.job_dir(session_id, job_id)
+        state_path = os.path.join(job_dir, 'review', 'review_state.json')
+        review_state = session_store.read_json(state_path) or {}
+        zf.writestr('review_state.json', json.dumps(review_state, indent=2))
+        
+        # Timeline
+        outputs = manifest.get('outputs', [])
+        transcript_json = None
+        diarization_json = None
+        speaker_md = None
+        transcript_md = None
+        
+        for output in outputs:
+            if output.get('forUploadId') != input_id and output.get('forUploadId'):
+                continue
+            
+            output_type = output.get('type', '')
+            output_path = output.get('path')
+            output_filename = output.get('filename', '')
+            
+            if not output_path or not os.path.exists(output_path):
+                continue
+            
+            try:
+                with open(output_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # Add to zip
+                zf.writestr(f'outputs/{output_filename}', content)
+                
+                # Track for timeline parsing
+                if output_type == 'json':
+                    transcript_json = content
+                elif output_type == 'diarization-json':
+                    diarization_json = content
+                elif output_type == 'speaker-markdown':
+                    speaker_md = content
+                elif output_type == 'markdown':
+                    transcript_md = content
+            except Exception:
+                continue
+        
+        # Generate and include timeline
+        parser = TimelineParser(job_id, input_id, filename)
+        timeline = parser.parse(
+            transcript_json=transcript_json,
+            diarization_json=diarization_json,
+            speaker_md=speaker_md,
+            transcript_md=transcript_md
+        )
+        if review_state:
+            timeline = apply_review_state(timeline, review_state)
+        
+        zf.writestr('timeline.json', timeline.to_json())
+    
+    zip_buffer.seek(0)
+    
+    return send_file(
+        zip_buffer,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=f'{safe_name}.btproj.zip'
+    )
+
+
+@app.route('/api/review/import', methods=['POST'])
+def api_import_review_project():
+    """
+    Import a review project from a .btproj.zip bundle.
+    
+    Creates a new project in the current session that can be reviewed.
+    """
+    session_id = g.session_id
+    
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    
+    file = request.files['file']
+    if not file.filename:
+        return jsonify({'error': 'No file selected'}), 400
+    
+    if not file.filename.endswith('.btproj.zip'):
+        return jsonify({'error': 'File must be a .btproj.zip'}), 400
+    
+    # Read zip into memory
+    try:
+        zip_data = io.BytesIO(file.read())
+        with zipfile.ZipFile(zip_data, 'r') as zf:
+            # Validate structure
+            names = zf.namelist()
+            
+            if 'manifest_snapshot.json' not in names:
+                return jsonify({'error': 'Invalid project: missing manifest_snapshot.json'}), 400
+            
+            # Check for zip slip attacks
+            for name in names:
+                if name.startswith('/') or '..' in name:
+                    return jsonify({'error': 'Invalid project: path traversal detected'}), 400
+            
+            # Read manifest
+            manifest_data = json.loads(zf.read('manifest_snapshot.json'))
+            
+            # Create new project
+            project_id = session_store.new_id(16)
+            project_dir = os.path.join(
+                session_store.session_dir(session_id),
+                'projects',
+                project_id
+            )
+            os.makedirs(project_dir, exist_ok=True)
+            
+            # Extract outputs
+            outputs_dir = os.path.join(project_dir, 'outputs')
+            os.makedirs(outputs_dir, exist_ok=True)
+            
+            imported_outputs = []
+            for name in names:
+                if name.startswith('outputs/') and not name.endswith('/'):
+                    filename = os.path.basename(name)
+                    if filename:
+                        safe_name = secure_filename(filename)
+                        output_path = os.path.join(outputs_dir, safe_name)
+                        with open(output_path, 'wb') as f:
+                            f.write(zf.read(name))
+                        
+                        # Determine type from filename
+                        output_type = 'text'
+                        if safe_name.endswith('.json'):
+                            if 'diarization' in safe_name:
+                                output_type = 'diarization-json'
+                            else:
+                                output_type = 'json'
+                        elif safe_name.endswith('.md'):
+                            if 'speaker' in safe_name:
+                                output_type = 'speaker-markdown'
+                            else:
+                                output_type = 'markdown'
+                        
+                        imported_outputs.append({
+                            'id': session_store.new_id(8),
+                            'filename': safe_name,
+                            'path': output_path,
+                            'type': output_type,
+                            'sizeBytes': os.path.getsize(output_path)
+                        })
+            
+            # Extract review state
+            review_dir = os.path.join(project_dir, 'review')
+            os.makedirs(review_dir, exist_ok=True)
+            
+            if 'review_state.json' in names:
+                review_state = zf.read('review_state.json')
+                with open(os.path.join(review_dir, 'review_state.json'), 'wb') as f:
+                    f.write(review_state)
+            
+            if 'timeline.json' in names:
+                timeline = zf.read('timeline.json')
+                with open(os.path.join(review_dir, 'timeline.json'), 'wb') as f:
+                    f.write(timeline)
+            
+            # Create project manifest
+            project_manifest = {
+                'projectId': project_id,
+                'jobId': project_id,  # Use same ID for compatibility
+                'sessionId': session_id,
+                'isImportedProject': True,
+                'importedFrom': manifest_data.get('jobId'),
+                'createdAt': datetime.now(timezone.utc).isoformat(),
+                'status': 'complete',
+                'inputs': manifest_data.get('inputs', []),
+                'outputs': imported_outputs,
+                'options': manifest_data.get('options', {}),
+            }
+            
+            manifest_path = os.path.join(project_dir, 'manifest.json')
+            session_store.atomic_write_json(manifest_path, project_manifest)
+            
+            # Register in projects list
+            projects_list_path = os.path.join(
+                session_store.session_dir(session_id),
+                'projects.json'
+            )
+            projects_list = session_store.read_json(projects_list_path) or {'projects': []}
+            projects_list['projects'].insert(0, {
+                'projectId': project_id,
+                'name': manifest_data.get('inputs', [{}])[0].get('filename', 'Imported Project'),
+                'importedAt': datetime.now(timezone.utc).isoformat(),
+            })
+            session_store.atomic_write_json(projects_list_path, projects_list)
+            
+            return jsonify({
+                'projectId': project_id,
+                'message': 'Project imported successfully',
+                'outputs': len(imported_outputs)
+            })
+            
+    except zipfile.BadZipFile:
+        return jsonify({'error': 'Invalid zip file'}), 400
+    except json.JSONDecodeError:
+        return jsonify({'error': 'Invalid project: corrupt JSON'}), 400
+    except Exception as e:
+        return jsonify({'error': f'Import failed: {str(e)[:100]}'}), 500
+
+_CSRF_PROTECTED_ENDPOINTS.add('api_import_review_project')
+
+
+@app.route('/api/projects', methods=['GET'])
+def api_list_projects():
+    """List imported projects for current session."""
+    session_id = g.session_id
+    
+    projects_list_path = os.path.join(
+        session_store.session_dir(session_id),
+        'projects.json'
+    )
+    projects_list = session_store.read_json(projects_list_path) or {'projects': []}
+    
+    # Enrich with manifest data
+    enriched = []
+    for proj in projects_list.get('projects', []):
+        project_id = proj.get('projectId')
+        manifest_path = os.path.join(
+            session_store.session_dir(session_id),
+            'projects',
+            project_id,
+            'manifest.json'
+        )
+        manifest = session_store.read_json(manifest_path)
+        if manifest:
+            enriched.append({
+                'projectId': project_id,
+                'name': proj.get('name'),
+                'importedAt': proj.get('importedAt'),
+                'status': manifest.get('status'),
+                'outputs': len(manifest.get('outputs', [])),
+            })
+    
+    return jsonify({'projects': enriched})
+
+
 @app.route('/api/session', methods=['GET'])
 def api_get_session():
     """Get session info including CSRF token (server mode only)."""
