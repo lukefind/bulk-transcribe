@@ -3261,6 +3261,11 @@
                 const borderColor = speaker?.color || '#6b7280';
                 div.style.borderLeft = `3px solid ${borderColor}`;
                 
+                // Get edited text if exists
+                const editedText = reviewState.chunkEdits?.[chunk.chunk_id]?.text;
+                const displayText = editedText !== undefined ? editedText : chunk.text;
+                const isEdited = editedText !== undefined;
+                
                 div.innerHTML = `
                     <div class="flex-shrink-0 w-16">
                         <span class="text-primary-400 hover:text-primary-300 cursor-pointer text-xs font-mono" 
@@ -3270,13 +3275,22 @@
                         <span class="inline-block px-2 py-0.5 rounded text-xs font-medium" 
                               style="background-color: ${borderColor}20; color: ${borderColor}">${speaker?.label || 'Unknown'}</span>
                     </div>
-                    <div class="flex-1 text-gray-300 text-sm">${escapeHtml(chunk.text)}</div>
-                    <div class="flex-shrink-0 speaker-buttons hidden">
-                        ${renderSpeakerButtons(chunk, idx)}
+                    <div class="chunk-text flex-1 text-gray-300 text-sm ${isEdited ? 'italic' : ''}" data-chunk-id="${chunk.chunk_id}" data-original="${escapeHtml(chunk.text)}">${escapeHtml(displayText)}</div>
+                    <div class="flex-shrink-0 flex items-center gap-1">
+                        <button onclick="event.stopPropagation(); editChunkText(${idx})" 
+                                class="edit-btn p-1 text-gray-500 hover:text-primary-400 transition-colors" title="Edit text">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                            </svg>
+                        </button>
+                        <div class="speaker-buttons hidden">
+                            ${renderSpeakerButtons(chunk, idx)}
+                        </div>
                     </div>
                 `;
                 
                 div.onclick = () => selectChunk(idx);
+                div.ondblclick = (e) => { e.stopPropagation(); editChunkText(idx); };
                 div.onmouseenter = () => div.querySelector('.speaker-buttons')?.classList.remove('hidden');
                 div.onmouseleave = () => {
                     if (reviewSelectedChunkIndex !== idx) {
@@ -3410,14 +3424,116 @@
             });
         }
         
+        function editChunkText(chunkIndex) {
+            if (!reviewTimeline?.chunks?.[chunkIndex]) return;
+            
+            const chunk = reviewTimeline.chunks[chunkIndex];
+            const chunkRow = document.querySelector(`.chunk-row[data-chunk-index="${chunkIndex}"]`);
+            if (!chunkRow) return;
+            
+            const textDiv = chunkRow.querySelector('.chunk-text');
+            if (!textDiv) return;
+            
+            // Get current text (edited or original)
+            const currentText = reviewState.chunkEdits?.[chunk.chunk_id]?.text ?? chunk.text;
+            
+            // Replace with textarea
+            const originalHtml = textDiv.innerHTML;
+            textDiv.innerHTML = `
+                <textarea class="w-full bg-surface-700 border border-primary-500 rounded p-2 text-gray-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary-500" 
+                          rows="3" id="editTextarea">${escapeHtml(currentText)}</textarea>
+                <div class="flex gap-2 mt-2">
+                    <button onclick="event.stopPropagation(); saveChunkText(${chunkIndex})" 
+                            class="px-3 py-1 bg-primary-600 hover:bg-primary-500 text-white text-xs rounded">Save</button>
+                    <button onclick="event.stopPropagation(); cancelChunkEdit(${chunkIndex})" 
+                            class="px-3 py-1 bg-surface-600 hover:bg-surface-500 text-gray-300 text-xs rounded">Cancel</button>
+                    <button onclick="event.stopPropagation(); revertChunkText(${chunkIndex})" 
+                            class="px-3 py-1 bg-surface-600 hover:bg-surface-500 text-gray-400 text-xs rounded ml-auto" title="Revert to original">Revert</button>
+                </div>
+            `;
+            
+            // Focus textarea
+            const textarea = textDiv.querySelector('textarea');
+            textarea.focus();
+            textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+            
+            // Handle Escape and Ctrl+Enter
+            textarea.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelChunkEdit(chunkIndex);
+                } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    saveChunkText(chunkIndex);
+                }
+            });
+        }
+        
+        function saveChunkText(chunkIndex) {
+            if (!reviewTimeline?.chunks?.[chunkIndex]) return;
+            
+            const chunk = reviewTimeline.chunks[chunkIndex];
+            const textarea = document.getElementById('editTextarea');
+            if (!textarea) return;
+            
+            const newText = textarea.value.trim();
+            
+            // Update local state
+            if (!reviewState.chunkEdits) reviewState.chunkEdits = {};
+            if (!reviewState.chunkEdits[chunk.chunk_id]) {
+                reviewState.chunkEdits[chunk.chunk_id] = {};
+            }
+            reviewState.chunkEdits[chunk.chunk_id].text = newText;
+            
+            // Mark unsaved and save
+            markUnsaved();
+            debounceSave();
+            
+            // Re-render
+            renderTimeline();
+            selectChunk(chunkIndex);
+        }
+        
+        function cancelChunkEdit(chunkIndex) {
+            // Just re-render to restore original display
+            renderTimeline();
+            if (chunkIndex >= 0) selectChunk(chunkIndex);
+        }
+        
+        function revertChunkText(chunkIndex) {
+            if (!reviewTimeline?.chunks?.[chunkIndex]) return;
+            
+            const chunk = reviewTimeline.chunks[chunkIndex];
+            
+            // Remove text edit from state (keep speaker edit if exists)
+            if (reviewState.chunkEdits?.[chunk.chunk_id]) {
+                delete reviewState.chunkEdits[chunk.chunk_id].text;
+                // If no edits left, remove the entry
+                if (Object.keys(reviewState.chunkEdits[chunk.chunk_id]).length === 0) {
+                    delete reviewState.chunkEdits[chunk.chunk_id];
+                }
+            }
+            
+            // Mark unsaved and save
+            markUnsaved();
+            debounceSave();
+            
+            // Re-render
+            renderTimeline();
+            selectChunk(chunkIndex);
+        }
+        
         function assignSpeaker(chunkIndex, speakerId) {
             if (!reviewTimeline?.chunks?.[chunkIndex]) return;
             
             const chunk = reviewTimeline.chunks[chunkIndex];
             
-            // Update local state
+            // Update local state - preserve existing text edit if any
             if (!reviewState.chunkEdits) reviewState.chunkEdits = {};
-            reviewState.chunkEdits[chunk.chunk_id] = { speakerId };
+            if (!reviewState.chunkEdits[chunk.chunk_id]) {
+                reviewState.chunkEdits[chunk.chunk_id] = {};
+            }
+            reviewState.chunkEdits[chunk.chunk_id].speakerId = speakerId;
             
             // Mark unsaved
             markUnsaved();
