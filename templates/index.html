@@ -1245,10 +1245,13 @@
                 }
                 
                 currentJobId = jobId;
+                saveSelectedJob(jobId);
                 
                 if (job.status === 'running' || job.status === 'queued') {
                     progressSection.classList.remove('hidden');
                     resultsSection.classList.add('hidden');
+                    clearActivityLog();
+                    addActivityLogEntry('Viewing job', '');
                     pollJobStatus();
                 } else {
                     onJobComplete(job);
@@ -1270,7 +1273,7 @@
             // Server mode initialization
             if (IS_SERVER_MODE) {
                 fetchCsrfToken();
-                loadJobHistory();
+                loadJobHistoryAndRestore();
             }
             
             // Save language when changed
@@ -1291,6 +1294,51 @@
                 saveToStorage(STORAGE_KEYS.outputFolder, document.getElementById('outputFolder').value);
             });
         });
+        
+        async function loadJobHistoryAndRestore() {
+            if (!IS_SERVER_MODE) return;
+            
+            try {
+                const response = await fetch('/api/jobs');
+                const data = await response.json();
+                const jobs = data.jobs || [];
+                
+                renderJobHistory(jobs);
+                
+                // Find any running job
+                const runningJob = jobs.find(j => j.status === 'running' || j.status === 'queued');
+                
+                if (runningJob) {
+                    // Auto-attach to running job
+                    currentJobId = runningJob.jobId;
+                    saveSelectedJob(runningJob.jobId);
+                    progressSection.classList.remove('hidden');
+                    resultsSection.classList.add('hidden');
+                    clearActivityLog();
+                    addActivityLogEntry('Reconnected to running job', '');
+                    pollJobStatus();
+                } else {
+                    // Try to restore last selected job from localStorage
+                    const savedJobId = localStorage.getItem('bt_selectedJobId');
+                    if (savedJobId) {
+                        const savedJob = jobs.find(j => j.jobId === savedJobId);
+                        if (savedJob) {
+                            loadJob(savedJobId);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to load job history:', e);
+            }
+        }
+        
+        function saveSelectedJob(jobId) {
+            if (jobId) {
+                localStorage.setItem('bt_selectedJobId', jobId);
+            } else {
+                localStorage.removeItem('bt_selectedJobId');
+            }
+        }
 
         async function browseInput() {
             try {
@@ -1558,6 +1606,7 @@
                 }
                 
                 currentJobId = data.jobId;
+                saveSelectedJob(data.jobId);
                 progressSection.classList.remove('hidden');
                 resultsSection.classList.add('hidden');
                 clearActivityLog();
@@ -1627,9 +1676,12 @@
                 
                 // Start polling the new job
                 currentJobId = data.jobId;
+                saveSelectedJob(data.jobId);
                 resultsSection.classList.add('hidden');
                 progressSection.classList.remove('hidden');
                 hideError();
+                clearActivityLog();
+                addActivityLogEntry('Job restarted', '');
                 pollJobStatus();
                 loadJobHistory();
             } catch (e) {
