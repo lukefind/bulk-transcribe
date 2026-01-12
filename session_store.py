@@ -238,12 +238,17 @@ def ensure_job_dirs(session_id: str, job_id: str) -> Dict[str, str]:
     }
 
 
+REVIEWABLE_OUTPUT_TYPES = {
+    'speaker-markdown', 'markdown', 'diarization-json', 'json', 'vtt', 'srt'
+}
+
+
 def list_jobs(session_id: str, limit: int = 20) -> list:
     """
     List jobs for a session, most recent first.
     
     Returns:
-        List of job summary dicts
+        List of job summary dicts with reviewable flag
     """
     jobs_path = os.path.join(session_dir(session_id), 'jobs')
     if not os.path.exists(jobs_path):
@@ -254,12 +259,22 @@ def list_jobs(session_id: str, limit: int = 20) -> list:
         manifest_path = job_manifest_path(session_id, job_id)
         manifest = read_json(manifest_path)
         if manifest:
+            outputs = manifest.get('outputs', [])
+            valid_outputs = [o for o in outputs if not o.get('error')]
+            
+            # Job is reviewable if it has any transcript-like output
+            reviewable = any(
+                o.get('type') in REVIEWABLE_OUTPUT_TYPES 
+                for o in valid_outputs
+            )
+            
             jobs.append({
                 'jobId': manifest.get('jobId', job_id),
                 'createdAt': manifest.get('createdAt'),
                 'status': manifest.get('status'),
                 'inputCount': len(manifest.get('inputs', [])),
-                'outputCount': len([o for o in manifest.get('outputs', []) if not o.get('error')])
+                'outputCount': len(valid_outputs),
+                'reviewable': reviewable
             })
     
     # Sort by createdAt descending

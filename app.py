@@ -3295,9 +3295,13 @@ def api_import_review_project():
     if not file.filename.endswith('.btproj.zip'):
         return jsonify({'error': 'File must be a .btproj.zip'}), 400
     
-    # Read zip into memory
+    # Read zip into memory with size limit (50MB max for project bundles)
+    MAX_PROJECT_SIZE = 50 * 1024 * 1024
     try:
-        zip_data = io.BytesIO(file.read())
+        zip_bytes = file.read()
+        if len(zip_bytes) > MAX_PROJECT_SIZE:
+            return jsonify({'error': f'Project too large. Maximum size is {MAX_PROJECT_SIZE // (1024*1024)}MB'}), 400
+        zip_data = io.BytesIO(zip_bytes)
         with zipfile.ZipFile(zip_data, 'r') as zf:
             # Validate structure
             names = zf.namelist()
