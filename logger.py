@@ -4,9 +4,12 @@ Structured logging helper for bulk-transcribe.
 Provides consistent JSON logging format with key fields for observability.
 """
 
+import hashlib
 import json
+import os
 import time
 import logging
+import warnings
 from typing import Dict, Any, Optional
 
 # Configure JSON logger
@@ -18,6 +21,68 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
+
+def hash_id(value: str, n: int = 8) -> str:
+    """
+    Generate a short hash of an identifier for logging.
+    
+    Args:
+        value: The value to hash (e.g., session ID)
+        n: Number of characters to return (default 8)
+    
+    Returns:
+        First n characters of SHA256 hex digest
+    """
+    if not value:
+        return ''
+    return hashlib.sha256(value.encode()).hexdigest()[:n]
+
+
+def configure_runtime_noise() -> None:
+    """
+    Suppress noisy third-party warnings in production logs.
+    
+    Call once at process startup. Controlled by SUPPRESS_THIRD_PARTY_WARNINGS env.
+    """
+    if os.environ.get('SUPPRESS_THIRD_PARTY_WARNINGS', '1') == '0':
+        return
+    
+    # Suppress known noisy modules
+    warnings.filterwarnings("ignore", category=UserWarning, module=r"pyannote\..*")
+    warnings.filterwarnings("ignore", category=UserWarning, module=r"torchaudio\..*")
+    warnings.filterwarnings("ignore", category=UserWarning, module=r"speechbrain\..*")
+    warnings.filterwarnings("ignore", category=UserWarning, module=r"torch\..*")
+    warnings.filterwarnings("ignore", category=UserWarning, module=r"whisper\..*")
+    warnings.filterwarnings("ignore", category=FutureWarning, module=r"pyannote\..*")
+    warnings.filterwarnings("ignore", category=FutureWarning, module=r"speechbrain\..*")
+    warnings.filterwarnings("ignore", category=FutureWarning, module=r"torch\..*")
+
+
+def _sanitize_fields(fields: dict) -> dict:
+    """
+    Sanitize log fields to remove sensitive data.
+    
+    - Replaces sessionId/session_id with sessionHash
+    - Never logs HF_TOKEN or other secrets
+    """
+    sanitized = {}
+    
+    for key, value in fields.items():
+        # Convert session IDs to hashes
+        if key in ('sessionId', 'session_id'):
+            if value:
+                sanitized['sessionHash'] = hash_id(str(value), 8)
+            continue
+        
+        # Skip any token fields
+        if 'token' in key.lower() or 'secret' in key.lower() or 'password' in key.lower():
+            continue
+        
+        sanitized[key] = value
+    
+    return sanitized
+
+
 def log_event(level: str, event: str, **fields) -> None:
     """
     Log a structured event with consistent fields.
@@ -26,6 +91,9 @@ def log_event(level: str, event: str, **fields) -> None:
         level: Log level ('info', 'warn', 'error', 'debug')
         event: Event name (e.g., 'job_started', 'diarization_finished')
         **fields: Additional fields to include in the log
+        
+    Note:
+        sessionId/session_id fields are automatically converted to sessionHash
     """
     log_entry = {
         'timestamp': time.time(),
@@ -33,8 +101,9 @@ def log_event(level: str, event: str, **fields) -> None:
         'level': level.lower()
     }
     
-    # Add provided fields
-    log_entry.update(fields)
+    # Sanitize and add provided fields
+    sanitized = _sanitize_fields(fields)
+    log_entry.update(sanitized)
     
     # Log as JSON
     log_line = json.dumps(log_entry, separators=(',', ':'))
