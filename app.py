@@ -1817,7 +1817,8 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                         auto_split = effective_policy.get('autoSplit', False)
                         chunk_seconds = effective_policy.get('chunkSeconds', 150)
                         overlap_seconds = effective_policy.get('overlapSeconds', 5)
-                        effective_max_duration = effective_policy.get('maxDurationSeconds', max_diarization_duration)
+                        default_max = int(os.environ.get('DIARIZATION_DEFAULT_MAX_DURATION_SECONDS', '180'))
+                        effective_max_duration = effective_policy.get('maxDurationSeconds', default_max)
                         
                         # Get file duration to decide if chunking is needed
                         file_duration = None
