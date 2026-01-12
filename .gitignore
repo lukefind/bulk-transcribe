@@ -66,6 +66,7 @@ cookies.txt
 
 # Any session/project exports
 *.btproj.zip
+sessions/
 
 # Whisper models (large files)
 *.pt
