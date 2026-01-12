@@ -59,26 +59,65 @@ def check_diarization_access(hf_token: str) -> Dict[str, any]:
     }
 
 
-def _convert_to_wav(audio_path: str, target_sample_rate: int = 16000) -> str:
+def _convert_to_wav(
+    audio_path: str, 
+    target_sample_rate: int = 16000,
+    temp_dir: Optional[str] = None,
+    max_wav_mb: Optional[int] = None,
+    job_id: Optional[str] = None,
+    session_id: Optional[str] = None
+) -> str:
     """
     Convert audio to WAV format at 16kHz mono for pyannote compatibility.
     
     Args:
         audio_path: Path to the input audio file
         target_sample_rate: Target sample rate (default 16kHz)
+        temp_dir: Directory for temp files (default: system temp)
+        max_wav_mb: Maximum output WAV size in MB (default: from env or 500)
+        job_id: Job ID for logging
+        session_id: Session ID for logging
     
     Returns:
         Path to the converted WAV file (or original if already compatible)
+    
+    Raises:
+        RuntimeError: If conversion fails or output too large
     """
     import subprocess
     import tempfile
+    import time
+    from logger import log_event
     
-    # Check if already a WAV file
-    if audio_path.lower().endswith('.wav'):
-        return audio_path
+    # Get max WAV size from env if not provided
+    if max_wav_mb is None:
+        max_wav_mb = int(os.environ.get('DIARIZATION_MAX_WAV_MB', '500'))
     
-    # Create temp WAV file
-    temp_wav = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+    log_fields = {'file': os.path.basename(audio_path)}
+    if job_id:
+        log_fields['jobId'] = job_id
+    if session_id:
+        log_fields['sessionId'] = session_id
+    
+    # Check if already a compatible WAV file
+    try:
+        from audio_utils import get_audio_info, is_wav_pcm_compatible
+        info = get_audio_info(audio_path)
+        if is_wav_pcm_compatible(info):
+            log_event('info', 'wav_convert_skipped', reason='already_compatible', **log_fields)
+            return audio_path
+    except Exception:
+        pass  # If probe fails, try conversion anyway
+    
+    # Create temp WAV file in specified directory
+    start_time = time.time()
+    log_event('info', 'wav_convert_started', targetSampleRate=target_sample_rate, **log_fields)
+    
+    if temp_dir:
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_wav = tempfile.NamedTemporaryFile(suffix='.wav', delete=False, dir=temp_dir)
+    else:
+        temp_wav = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
     temp_wav.close()
     
     try:
@@ -90,10 +129,33 @@ def _convert_to_wav(audio_path: str, target_sample_rate: int = 16000) -> str:
             '-c:a', 'pcm_s16le',  # 16-bit PCM
             temp_wav.name
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
-            raise RuntimeError(f"ffmpeg conversion failed: {result.stderr}")
+            raise RuntimeError(f"ffmpeg conversion failed: {result.stderr[:500]}")
+        
+        # Check output size
+        output_size_bytes = os.path.getsize(temp_wav.name)
+        output_size_mb = output_size_bytes / (1024 * 1024)
+        
+        duration_ms = int((time.time() - start_time) * 1000)
+        log_event('info', 'wav_convert_finished', 
+                 durationMs=duration_ms, 
+                 outputSizeMB=round(output_size_mb, 2),
+                 **log_fields)
+        
+        if output_size_mb > max_wav_mb:
+            os.unlink(temp_wav.name)
+            raise RuntimeError(
+                f"Converted WAV too large: {output_size_mb:.1f}MB exceeds limit of {max_wav_mb}MB. "
+                f"Use shorter audio or increase DIARIZATION_MAX_WAV_MB."
+            )
+        
         return temp_wav.name
+        
+    except subprocess.TimeoutExpired:
+        if os.path.exists(temp_wav.name):
+            os.unlink(temp_wav.name)
+        raise RuntimeError("WAV conversion timed out after 5 minutes")
     except Exception as e:
         # Clean up temp file on error
         if os.path.exists(temp_wav.name):
@@ -108,7 +170,8 @@ def run_diarization(
     num_speakers: Optional[int] = None,
     device: str = 'cpu',
     job_id: Optional[str] = None,
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None,
+    temp_dir: Optional[str] = None
 ) -> list[dict]:
     """
     Run speaker diarization on an audio file.
@@ -121,6 +184,7 @@ def run_diarization(
         device: PyTorch device ('cpu', 'cuda', 'mps')
         job_id: Job ID for logging (optional)
         session_id: Session ID for logging (optional)
+        temp_dir: Directory for temp files (optional)
     
     Returns:
         List of speaker segments:
@@ -139,7 +203,12 @@ def run_diarization(
     # Convert audio to WAV format for pyannote compatibility
     converted_path = None
     try:
-        converted_path = _convert_to_wav(audio_path)
+        converted_path = _convert_to_wav(
+            audio_path, 
+            temp_dir=temp_dir,
+            job_id=job_id,
+            session_id=session_id
+        )
         if converted_path != audio_path:
             # Use converted file for diarization
             diarization_audio_path = converted_path
@@ -148,7 +217,7 @@ def run_diarization(
     except Exception as e:
         raise RuntimeError(f"Audio conversion failed: {e}")
     
-    # Log diarization start
+    # Log diarization start with memory info
     log_fields = {
         'stage': 'diarization',
         'file': os.path.basename(audio_path)
@@ -157,6 +226,15 @@ def run_diarization(
         log_fields['jobId'] = job_id
     if session_id:
         log_fields['sessionId'] = session_id
+    
+    # Log memory usage at start
+    try:
+        from audio_utils import get_memory_usage_mb
+        mem_mb = get_memory_usage_mb()
+        if mem_mb is not None:
+            log_fields['memoryMB'] = round(mem_mb, 1)
+    except Exception:
+        pass
     
     log_event('info', 'diarization_started', **log_fields)
     
@@ -264,10 +342,22 @@ def run_diarization(
             "speaker": speaker
         })
     
-    log_event('info', 'diarization_finished', 
-             numSegments=len(segments), 
-             numSpeakers=len(set(s['speaker'] for s in segments)),
-             **log_fields)
+    # Log memory usage at end
+    end_mem_mb = None
+    try:
+        from audio_utils import get_memory_usage_mb
+        end_mem_mb = get_memory_usage_mb()
+    except Exception:
+        pass
+    
+    # Remove memoryMB from log_fields to avoid duplicate when adding end memory
+    finish_log_fields = {k: v for k, v in log_fields.items() if k != 'memoryMB'}
+    finish_log_fields['numSegments'] = len(segments)
+    finish_log_fields['numSpeakers'] = len(set(s['speaker'] for s in segments))
+    if end_mem_mb is not None:
+        finish_log_fields['memoryMB'] = round(end_mem_mb, 1)
+    
+    log_event('info', 'diarization_finished', **finish_log_fields)
     
     return segments
 
