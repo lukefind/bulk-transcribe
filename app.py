@@ -1477,52 +1477,64 @@ def api_create_job():
             'channels': audio_info.get('channels') if audio_info else None
         })
     
-    # Validate diarization duration limits on CPU (unless auto-split is enabled)
-    diarization_auto_split = options.get('diarizationAutoSplit', False)
-    diarization_chunk_seconds = options.get('diarizationChunkSeconds', 150)
-    diarization_overlap_seconds = options.get('diarizationOverlapSeconds', 5)
-    
-    # Validate auto-split parameters
-    if diarization_auto_split:
-        if diarization_chunk_seconds < 30 or diarization_chunk_seconds > 600:
-            return jsonify({
-                'error': 'Chunk length must be between 30 and 600 seconds',
-                'code': 'INVALID_CHUNK_LENGTH'
-            }), 400
-        if diarization_overlap_seconds >= diarization_chunk_seconds:
-            return jsonify({
-                'error': 'Overlap must be less than chunk length',
-                'code': 'INVALID_OVERLAP'
-            }), 400
-    
-    if diarization_enabled and requested_backend == 'cpu' and not diarization_auto_split:
-        too_long_files = []
-        for inp in inputs:
-            duration = inp.get('durationSec')
-            if duration and duration > max_diarization_duration:
-                from audio_utils import format_duration
-                too_long_files.append({
-                    'filename': inp['originalFilename'],
-                    'durationSec': duration,
-                    'durationFormatted': format_duration(duration)
-                })
+    # Compute effective diarization policy using single source of truth
+    diarization_effective = None
+    if diarization_enabled:
+        from diarization_policy import compute_diarization_policy, get_server_policy_config
         
-        if too_long_files:
-            from audio_utils import format_duration
-            return jsonify({
-                'error': f'Audio file(s) too long for CPU diarization. Max duration: {format_duration(max_diarization_duration)}',
-                'code': 'DIARIZATION_TOO_LONG_CPU',
-                'maxDurationSec': max_diarization_duration,
-                'maxDurationFormatted': format_duration(max_diarization_duration),
-                'tooLongFiles': too_long_files,
-                'suggestions': [
-                    'Enable "Auto-split long audio" to process in chunks',
-                    'Split audio into shorter segments (under 3 minutes)',
-                    'Disable diarization for this job',
-                    'Run on GPU backend if available',
-                    'Increase MAX_DIARIZATION_DURATION_SECONDS env var (requires more memory)'
-                ]
-            }), 400
+        server_config = get_server_policy_config()
+        diarization_effective = compute_diarization_policy(
+            diarization_enabled=diarization_enabled,
+            diarization_auto_split=options.get('diarizationAutoSplit', False),
+            requested_max_duration_seconds=options.get('diarizationMaxDurationSeconds'),
+            requested_chunk_seconds=options.get('diarizationChunkSeconds'),
+            requested_overlap_seconds=options.get('diarizationOverlapSeconds'),
+            server_max_duration_seconds=server_config['serverMaxDurationSeconds'],
+            default_max_duration_seconds=server_config['defaultMaxDurationSeconds'],
+            min_chunk_seconds=server_config['minChunkSeconds'],
+            max_chunk_seconds=server_config['maxChunkSeconds'],
+            overlap_ratio=server_config['overlapRatio'],
+            min_overlap_seconds=server_config['minOverlapSeconds'],
+            max_overlap_seconds=server_config['maxOverlapSeconds'],
+        )
+    
+    # Validate diarization duration limits on CPU (unless auto-split is enabled)
+    if diarization_enabled and diarization_effective and requested_backend == 'cpu':
+        effective_max = diarization_effective['maxDurationSeconds']
+        auto_split_enabled = diarization_effective['autoSplit']
+        
+        if not auto_split_enabled:
+            too_long_files = []
+            for inp in inputs:
+                duration = inp.get('durationSec')
+                if duration and duration > effective_max:
+                    from audio_utils import format_duration
+                    too_long_files.append({
+                        'filename': inp['originalFilename'],
+                        'durationSec': duration,
+                        'durationFormatted': format_duration(duration)
+                    })
+            
+            if too_long_files:
+                from audio_utils import format_duration
+                from diarization_policy import get_server_policy_config
+                server_max = get_server_policy_config()['serverMaxDurationSeconds']
+                return jsonify({
+                    'error': f'Audio file(s) too long for CPU diarization. Max duration: {format_duration(effective_max)}',
+                    'code': 'DIARIZATION_TOO_LONG_CPU',
+                    'maxDurationSec': effective_max,
+                    'maxDurationFormatted': format_duration(effective_max),
+                    'serverMaxDurationSec': server_max,
+                    'serverMaxDurationFormatted': format_duration(server_max),
+                    'tooLongFiles': too_long_files,
+                    'suggestions': [
+                        'Enable "Auto-split long audio" to process in chunks',
+                        f'Increase max duration (server allows up to {format_duration(server_max)})',
+                        'Split audio into shorter segments',
+                        'Disable diarization for this job',
+                        'Run on GPU backend if available'
+                    ]
+                }), 400
     
     # Create job
     job_id = session_store.new_id(12)
@@ -1555,9 +1567,11 @@ def api_create_job():
             'minSpeakers': options.get('minSpeakers') if diarization_enabled else None,
             'maxSpeakers': options.get('maxSpeakers') if diarization_enabled else None,
             'numSpeakers': options.get('numSpeakers') if diarization_enabled else None,
-            'diarizationAutoSplit': diarization_auto_split if diarization_enabled else False,
-            'diarizationChunkSeconds': diarization_chunk_seconds if diarization_auto_split else None,
-            'diarizationOverlapSeconds': diarization_overlap_seconds if diarization_auto_split else None,
+            'diarizationMaxDurationSeconds': options.get('diarizationMaxDurationSeconds') if diarization_enabled else None,
+            'diarizationAutoSplit': options.get('diarizationAutoSplit', False) if diarization_enabled else False,
+            'diarizationChunkSeconds': options.get('diarizationChunkSeconds') if diarization_enabled else None,
+            'diarizationOverlapSeconds': options.get('diarizationOverlapSeconds') if diarization_enabled else None,
+            'diarizationEffective': diarization_effective,
         },
         'inputs': inputs,
         'outputs': [],
@@ -1798,10 +1812,12 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                         from queue import Queue, Empty
                         from audio_utils import get_audio_info, split_audio_to_wav_chunks, cleanup_chunks
                         
-                        # Check if we need chunked diarization
-                        auto_split = options.get('diarizationAutoSplit', False)
-                        chunk_seconds = options.get('diarizationChunkSeconds', 150)
-                        overlap_seconds = options.get('diarizationOverlapSeconds', 5)
+                        # Get effective diarization policy from manifest (single source of truth)
+                        effective_policy = options.get('diarizationEffective') or {}
+                        auto_split = effective_policy.get('autoSplit', False)
+                        chunk_seconds = effective_policy.get('chunkSeconds', 150)
+                        overlap_seconds = effective_policy.get('overlapSeconds', 5)
+                        effective_max_duration = effective_policy.get('maxDurationSeconds', max_diarization_duration)
                         
                         # Get file duration to decide if chunking is needed
                         file_duration = None
@@ -1812,7 +1828,19 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                             pass
                         
                         # Determine if we should use chunked diarization
-                        use_chunked = auto_split and file_duration and file_duration > max_diarization_duration
+                        use_chunked = auto_split and file_duration and file_duration > effective_max_duration
+                        
+                        # Log effective policy once per file
+                        log_event('diarization_policy_effective', {
+                            'filename': original_name,
+                            'fileDurationSec': file_duration,
+                            'maxDurationSeconds': effective_max_duration,
+                            'autoSplit': auto_split,
+                            'chunkSeconds': chunk_seconds,
+                            'overlapSeconds': overlap_seconds,
+                            'useChunked': use_chunked,
+                            'derived': effective_policy.get('derived', True),
+                        }, stage='diarization')
                         
                         # Add watchdog timeout for diarization
                         max_diarization_minutes = int(os.environ.get('MAX_DIARIZATION_MINUTES', '30'))
