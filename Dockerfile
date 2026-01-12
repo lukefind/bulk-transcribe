@@ -32,14 +32,15 @@ COPY requirements.txt requirements-server.txt* ./
 # Install Python dependencies based on DEVICE build arg
 # CPU: use PyTorch CPU-only wheels (no CUDA dependencies)
 # GPU: use default PyTorch wheels with CUDA support
-RUN pip install --no-cache-dir gunicorn && \
-    if [ "$DEVICE" = "cpu" ]; then \
-        echo "Installing CPU-only PyTorch..." && \
-        pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cpu && \
+RUN if [ "$DEVICE" = "cpu" ]; then \
+        echo "Installing CPU-only packages..." && \
+        pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
+            torch torchaudio && \
         pip install --no-cache-dir -r requirements-server.txt; \
     else \
-        echo "Installing GPU/CUDA PyTorch..." && \
-        pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu121 && \
+        echo "Installing GPU/CUDA packages..." && \
+        pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 \
+            torch torchaudio && \
         pip install --no-cache-dir -r requirements-server.txt; \
     fi
 
