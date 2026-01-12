@@ -1594,6 +1594,65 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                     word_timestamps=options.get('wordTimestamps', False)
                 )
                 
+                # Check for cancellation between transcription and diarization
+                if is_cancelled():
+                    update_manifest(
+                        status='canceled',
+                        finishedAt=datetime.now(timezone.utc).isoformat(),
+                        error={'code': 'USER_CANCELED', 'message': 'Job canceled by user'},
+                        outputs=outputs
+                    )
+                    return
+                
+                # Run diarization if enabled
+                diarization_enabled = options.get('diarizationEnabled', False)
+                speaker_segments = None
+                merged_segments = None
+                
+                if diarization_enabled:
+                    update_manifest(progress={
+                        'currentFile': f'{original_name} (diarizing...)',
+                        'currentFileIndex': idx,
+                        'percent': int((idx / total) * 100)
+                    })
+                    
+                    try:
+                        import diarization
+                        speaker_segments = diarization.run_diarization(
+                            filepath,
+                            min_speakers=options.get('minSpeakers'),
+                            max_speakers=options.get('maxSpeakers'),
+                            num_speakers=options.get('numSpeakers'),
+                            device=device
+                        )
+                        
+                        update_manifest(progress={
+                            'currentFile': f'{original_name} (merging speakers...)',
+                            'currentFileIndex': idx,
+                            'percent': int((idx / total) * 100)
+                        })
+                        
+                        merged_segments = diarization.merge_transcript_with_speakers(
+                            result.get('segments', []),
+                            speaker_segments
+                        )
+                    except ImportError as e:
+                        # pyannote not installed - record error but continue without diarization
+                        outputs.append({
+                            'id': session_store.new_id(8),
+                            'forUploadId': upload_id,
+                            'inputFilename': original_name,
+                            'error': {'code': 'DIARIZATION_UNAVAILABLE', 'message': str(e)[:200]}
+                        })
+                    except Exception as e:
+                        # Diarization failed - record error but continue with transcript
+                        outputs.append({
+                            'id': session_store.new_id(8),
+                            'forUploadId': upload_id,
+                            'inputFilename': original_name,
+                            'error': {'code': 'DIARIZATION_ERROR', 'message': str(e)[:200]}
+                        })
+                
                 # Generate output files with upload_id suffix to prevent collisions
                 output_id = session_store.new_id(8)
                 suffix = f"_{upload_id[:6]}" if upload_id else ""
@@ -1651,6 +1710,65 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                     'type': 'json',
                     'sizeBytes': os.path.getsize(json_path)
                 })
+                
+                # Generate diarization outputs if available
+                if diarization_enabled and merged_segments and speaker_segments:
+                    import diarization as diarization_module
+                    
+                    # Speaker markdown (primary reviewer artifact)
+                    speaker_md_filename = f"{base_name}{suffix}.speaker.md"
+                    speaker_md_path = os.path.join(outputs_dir, speaker_md_filename)
+                    speaker_md_content = diarization_module.format_speaker_markdown(
+                        merged_segments, original_name
+                    )
+                    with open(speaker_md_path, 'w', encoding='utf-8') as f:
+                        f.write(speaker_md_content)
+                    
+                    outputs.append({
+                        'id': session_store.new_id(8),
+                        'forUploadId': upload_id,
+                        'inputFilename': original_name,
+                        'filename': speaker_md_filename,
+                        'path': speaker_md_path,
+                        'type': 'speaker-markdown',
+                        'sizeBytes': os.path.getsize(speaker_md_path)
+                    })
+                    
+                    # Diarization JSON (structured data)
+                    diar_json_filename = f"{base_name}{suffix}.diarization.json"
+                    diar_json_path = os.path.join(outputs_dir, diar_json_filename)
+                    diar_json_output = diarization_module.format_diarization_json(
+                        speaker_segments, merged_segments, original_name
+                    )
+                    with open(diar_json_path, 'w', encoding='utf-8') as f:
+                        json.dump(diar_json_output, f, indent=2, ensure_ascii=False)
+                    
+                    outputs.append({
+                        'id': session_store.new_id(8),
+                        'forUploadId': upload_id,
+                        'inputFilename': original_name,
+                        'filename': diar_json_filename,
+                        'path': diar_json_path,
+                        'type': 'diarization-json',
+                        'sizeBytes': os.path.getsize(diar_json_path)
+                    })
+                    
+                    # RTTM output (interop/debug)
+                    rttm_filename = f"{base_name}{suffix}.rttm"
+                    rttm_path = os.path.join(outputs_dir, rttm_filename)
+                    rttm_content = diarization_module.format_rttm(speaker_segments, original_name)
+                    with open(rttm_path, 'w', encoding='utf-8') as f:
+                        f.write(rttm_content)
+                    
+                    outputs.append({
+                        'id': session_store.new_id(8),
+                        'forUploadId': upload_id,
+                        'inputFilename': original_name,
+                        'filename': rttm_filename,
+                        'path': rttm_path,
+                        'type': 'rttm',
+                        'sizeBytes': os.path.getsize(rttm_path)
+                    })
                 
             except Exception as e:
                 # Record error but continue with other files
