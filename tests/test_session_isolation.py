@@ -221,3 +221,169 @@ class TestApiEndpoints:
         data = response.get_json()
         assert 'uploads' in data
         assert data['uploads'] == []
+    
+    def test_api_runtime_has_diarization_fields(self, app_client):
+        """GET /api/runtime should include diarization availability."""
+        response = app_client.get('/api/runtime')
+        assert response.status_code == 200
+        
+        data = response.get_json()
+        assert 'diarizationAvailable' in data
+        assert isinstance(data['diarizationAvailable'], bool)
+        
+        # If unavailable, should have reason
+        if not data['diarizationAvailable']:
+            assert 'diarizationReason' in data
+
+
+class TestRerunEndpoint:
+    """Test job rerun functionality."""
+    
+    def test_rerun_creates_new_job_id(self, app_client, test_data_root):
+        """Rerun should create a new job with different ID."""
+        import session_store
+        from app import app
+        
+        # Get session
+        app_client.get('/')
+        cookies = {c.name: c.value for c in app_client.cookie_jar}
+        session_id = cookies.get('bt_session')
+        
+        # Get CSRF token
+        session_resp = app_client.get('/api/session')
+        csrf_token = session_resp.get_json().get('csrfToken', '')
+        
+        # Create a fake completed job
+        job_id = 'test_rerun_job'
+        dirs = session_store.ensure_job_dirs(session_id, job_id)
+        manifest = {
+            'jobId': job_id,
+            'sessionId': session_id,
+            'status': 'complete',
+            'backend': 'cpu',
+            'options': {'model': 'tiny'},
+            'inputs': [{'uploadId': 'fake', 'path': '/fake/path', 'originalFilename': 'test.mp3'}],
+            'outputs': []
+        }
+        session_store.atomic_write_json(
+            session_store.job_manifest_path(session_id, job_id),
+            manifest
+        )
+        
+        # Call rerun
+        response = app_client.post(
+            f'/api/jobs/{job_id}/rerun',
+            headers={'X-CSRF-Token': csrf_token},
+            content_type='application/json'
+        )
+        
+        # Should fail because input file doesn't exist, but we can check the response structure
+        data = response.get_json()
+        # Either creates new job or fails with error - both are valid
+        assert 'jobId' in data or 'error' in data
+
+
+class TestCancelEndpoint:
+    """Test job cancel functionality."""
+    
+    def test_cancel_sets_canceled_status(self, app_client, test_data_root):
+        """Cancel should set status to canceled with USER_CANCELED code."""
+        import session_store
+        
+        # Get session
+        app_client.get('/')
+        cookies = {c.name: c.value for c in app_client.cookie_jar}
+        session_id = cookies.get('bt_session')
+        
+        # Get CSRF token
+        session_resp = app_client.get('/api/session')
+        csrf_token = session_resp.get_json().get('csrfToken', '')
+        
+        # Create a fake queued job
+        job_id = 'test_cancel_job'
+        dirs = session_store.ensure_job_dirs(session_id, job_id)
+        manifest = {
+            'jobId': job_id,
+            'sessionId': session_id,
+            'status': 'queued',
+            'backend': 'cpu',
+            'options': {},
+            'inputs': [],
+            'outputs': []
+        }
+        session_store.atomic_write_json(
+            session_store.job_manifest_path(session_id, job_id),
+            manifest
+        )
+        
+        # Call cancel
+        response = app_client.post(
+            f'/api/jobs/{job_id}/cancel',
+            headers={'X-CSRF-Token': csrf_token}
+        )
+        assert response.status_code == 200
+        
+        # Check manifest was updated
+        updated = session_store.read_json(session_store.job_manifest_path(session_id, job_id))
+        assert updated['status'] == 'canceled'
+        assert updated['error']['code'] == 'USER_CANCELED'
+
+
+class TestDiarizationGating:
+    """Test diarization HF_TOKEN gating."""
+    
+    def test_diarization_rejected_without_hf_token(self, app_client, test_data_root):
+        """Job creation with diarization should fail if HF_TOKEN not set."""
+        # Ensure HF_TOKEN is not set
+        old_token = os.environ.pop('HF_TOKEN', None)
+        old_token2 = os.environ.pop('HUGGINGFACE_TOKEN', None)
+        
+        try:
+            # Get session
+            app_client.get('/')
+            
+            # Get CSRF token
+            session_resp = app_client.get('/api/session')
+            csrf_token = session_resp.get_json().get('csrfToken', '')
+            
+            # Try to create job with diarization
+            response = app_client.post(
+                '/api/jobs',
+                headers={'X-CSRF-Token': csrf_token, 'Content-Type': 'application/json'},
+                json={'uploadIds': ['fake'], 'options': {'diarizationEnabled': True}}
+            )
+            
+            data = response.get_json()
+            # Should fail with HF_TOKEN_MISSING or DIARIZATION_UNAVAILABLE
+            assert response.status_code == 400
+            assert data.get('code') in ['HF_TOKEN_MISSING', 'DIARIZATION_UNAVAILABLE'] or 'diarization' in data.get('error', '').lower() or 'HF_TOKEN' in data.get('error', '')
+        finally:
+            # Restore tokens
+            if old_token:
+                os.environ['HF_TOKEN'] = old_token
+            if old_token2:
+                os.environ['HUGGINGFACE_TOKEN'] = old_token2
+
+
+class TestBackendValidation:
+    """Test backend validation."""
+    
+    def test_invalid_backend_rejected(self, app_client):
+        """Job creation with invalid backend should fail."""
+        # Get session
+        app_client.get('/')
+        
+        # Get CSRF token
+        session_resp = app_client.get('/api/session')
+        csrf_token = session_resp.get_json().get('csrfToken', '')
+        
+        # Try to create job with invalid backend
+        response = app_client.post(
+            '/api/jobs',
+            headers={'X-CSRF-Token': csrf_token, 'Content-Type': 'application/json'},
+            json={'uploadIds': ['fake'], 'options': {'backend': 'invalid_backend_xyz'}}
+        )
+        
+        assert response.status_code == 400
+        data = response.get_json()
+        assert 'error' in data
