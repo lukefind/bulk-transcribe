@@ -1430,7 +1430,10 @@ def api_create_job():
                 'code': 'DIARIZATION_UNAVAILABLE'
             }), 400
     
-    # Resolve upload IDs to file paths
+    # Get diarization duration limit from env
+    max_diarization_duration = int(os.environ.get('MAX_DIARIZATION_DURATION_SECONDS', '180'))
+    
+    # Resolve upload IDs to file paths and probe audio metadata
     inputs = []
     for upload_id in upload_ids:
         filepath = session_store.find_upload_by_id(session_id, upload_id)
@@ -1442,11 +1445,62 @@ def api_create_job():
         parts = stored_name.split('_', 1)
         original_name = parts[1] if len(parts) > 1 else stored_name
         
+        # Probe audio metadata
+        audio_info = None
+        try:
+            from audio_utils import get_audio_info, AudioProbeError
+            audio_info = get_audio_info(filepath)
+        except AudioProbeError as e:
+            return jsonify({
+                'error': f'Failed to probe audio file: {original_name}',
+                'code': 'AUDIO_PROBE_FAILED',
+                'details': str(e)
+            }), 400
+        except Exception as e:
+            return jsonify({
+                'error': f'Unexpected error probing audio: {original_name}',
+                'code': 'AUDIO_PROBE_FAILED',
+                'details': str(e)[:200]
+            }), 400
+        
         inputs.append({
             'uploadId': upload_id,
             'path': filepath,
-            'originalFilename': original_name
+            'originalFilename': original_name,
+            'durationSec': audio_info.get('durationSec') if audio_info else None,
+            'codec': audio_info.get('codec') if audio_info else None,
+            'sampleRate': audio_info.get('sampleRate') if audio_info else None,
+            'channels': audio_info.get('channels') if audio_info else None
         })
+    
+    # Validate diarization duration limits on CPU
+    if diarization_enabled and requested_backend == 'cpu':
+        too_long_files = []
+        for inp in inputs:
+            duration = inp.get('durationSec')
+            if duration and duration > max_diarization_duration:
+                from audio_utils import format_duration
+                too_long_files.append({
+                    'filename': inp['originalFilename'],
+                    'durationSec': duration,
+                    'durationFormatted': format_duration(duration)
+                })
+        
+        if too_long_files:
+            from audio_utils import format_duration
+            return jsonify({
+                'error': f'Audio file(s) too long for CPU diarization. Max duration: {format_duration(max_diarization_duration)}',
+                'code': 'DIARIZATION_TOO_LONG_CPU',
+                'maxDurationSec': max_diarization_duration,
+                'maxDurationFormatted': format_duration(max_diarization_duration),
+                'tooLongFiles': too_long_files,
+                'suggestions': [
+                    'Split audio into shorter segments (under 3 minutes)',
+                    'Disable diarization for this job',
+                    'Run on GPU backend if available',
+                    'Increase MAX_DIARIZATION_DURATION_SECONDS env var (requires more memory)'
+                ]
+            }), 400
     
     # Create job
     job_id = session_store.new_id(12)
@@ -1726,7 +1780,8 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                                     num_speakers=options.get('numSpeakers'),
                                     device=device,
                                     job_id=job_id,
-                                    session_id=session_id
+                                    session_id=session_id,
+                                    temp_dir=os.path.join(outputs_dir, 'tmp')
                                 )
                                 diarization_result.put(speaker_segments)
                             except Exception as e:
