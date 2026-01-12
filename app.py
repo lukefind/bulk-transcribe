@@ -2644,7 +2644,52 @@ def api_get_runtime():
     else:
         env['pyannoteVersion'] = None
     
+    # Add diarization policy configuration (server caps)
+    from diarization_policy import get_server_policy_config
+    env['diarizationPolicy'] = get_server_policy_config()
+    
     return jsonify(env)
+
+
+@app.route('/api/diarization/policy', methods=['POST'])
+def api_compute_diarization_policy():
+    """
+    Compute effective diarization policy from user preferences.
+    
+    This endpoint ensures the UI and backend use the same policy computation.
+    The UI calls this when diarization options change to preview effective values.
+    """
+    data = request.get_json() or {}
+    
+    diarization_enabled = data.get('diarizationEnabled', False)
+    diarization_auto_split = data.get('diarizationAutoSplit', False)
+    requested_max_duration = data.get('requestedMaxDurationSeconds')
+    requested_chunk = data.get('requestedChunkSeconds')
+    requested_overlap = data.get('requestedOverlapSeconds')
+    
+    from diarization_policy import compute_diarization_policy, get_server_policy_config
+    
+    server_config = get_server_policy_config()
+    
+    policy = compute_diarization_policy(
+        diarization_enabled=diarization_enabled,
+        diarization_auto_split=diarization_auto_split,
+        requested_max_duration_seconds=requested_max_duration,
+        requested_chunk_seconds=requested_chunk,
+        requested_overlap_seconds=requested_overlap,
+        server_max_duration_seconds=server_config['serverMaxDurationSeconds'],
+        default_max_duration_seconds=server_config['defaultMaxDurationSeconds'],
+        min_chunk_seconds=server_config['minChunkSeconds'],
+        max_chunk_seconds=server_config['maxChunkSeconds'],
+        overlap_ratio=server_config['overlapRatio'],
+        min_overlap_seconds=server_config['minOverlapSeconds'],
+        max_overlap_seconds=server_config['maxOverlapSeconds'],
+    )
+    
+    return jsonify({
+        'policy': policy,
+        'serverConfig': server_config
+    })
 
 
 @app.route('/api/admin/stats', methods=['GET'])
