@@ -27,21 +27,25 @@ RUN useradd --create-home --shell /bin/bash appuser
 WORKDIR /app
 
 # Copy requirements first for better caching
-COPY requirements.txt requirements-server.txt* ./
+COPY requirements.txt requirements-server.txt* constraints.txt* ./
 
 # Install Python dependencies based on DEVICE build arg
 # CPU: use PyTorch CPU-only wheels (no CUDA dependencies)
 # GPU: use default PyTorch wheels with CUDA support
 RUN if [ "$DEVICE" = "cpu" ]; then \
-        echo "Installing CPU-only packages..." && \
-        pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
-            torch torchaudio && \
-        pip install --no-cache-dir -r requirements-server.txt; \
+        echo "Installing CPU-only torch/torchaudio..." && \
+        pip install --no-cache-dir \
+            --index-url https://download.pytorch.org/whl/cpu \
+            torch==2.9.1 torchaudio==2.9.1 && \
+        echo "Installing remaining requirements with constraints..." && \
+        pip install --no-cache-dir -r requirements-server.txt -c constraints.txt; \
     else \
-        echo "Installing GPU/CUDA packages..." && \
-        pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 \
-            torch torchaudio && \
-        pip install --no-cache-dir -r requirements-server.txt; \
+        echo "Installing GPU/CUDA torch/torchaudio..." && \
+        pip install --no-cache-dir \
+            --index-url https://download.pytorch.org/whl/cu121 \
+            torch==2.9.1 torchaudio==2.9.1 && \
+        echo "Installing remaining requirements with constraints..." && \
+        pip install --no-cache-dir -r requirements-server.txt -c constraints.txt; \
     fi
 
 # Guardrail: verify no CUDA packages on CPU build
