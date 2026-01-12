@@ -1122,35 +1122,116 @@
             
             jobs.slice(0, 10).forEach(job => {
                 const div = document.createElement('div');
-                div.className = 'flex items-center justify-between p-3 bg-surface-800/50 rounded-lg hover:bg-surface-700/50 cursor-pointer transition-all';
-                div.onclick = () => loadJob(job.jobId);
+                div.className = 'flex items-center justify-between p-3 bg-surface-800/50 rounded-lg hover:bg-surface-700/50 transition-all group';
                 
                 const statusColors = {
                     'complete': 'text-green-400',
+                    'complete_with_errors': 'text-amber-400',
                     'running': 'text-yellow-400',
                     'failed': 'text-red-400',
-                    'cancelled': 'text-gray-400',
+                    'canceled': 'text-gray-400',
                     'queued': 'text-blue-400'
                 };
                 const statusColor = statusColors[job.status] || 'text-gray-400';
+                const isRunning = job.status === 'running' || job.status === 'queued';
                 
                 const date = job.createdAt ? new Date(job.createdAt).toLocaleString() : '';
                 
                 div.innerHTML = `
-                    <div class="flex items-center gap-3">
-                        <span class="w-2 h-2 rounded-full ${statusColor.replace('text-', 'bg-')}"></span>
+                    <div class="flex items-center gap-3 cursor-pointer flex-1" onclick="loadJob('${job.jobId}')">
+                        <span class="w-2 h-2 rounded-full ${statusColor.replace('text-', 'bg-')} ${isRunning ? 'animate-pulse' : ''}"></span>
                         <div>
                             <div class="text-sm text-gray-300">${job.inputCount} file(s)</div>
                             <div class="text-xs text-gray-500">${date}</div>
                         </div>
                     </div>
                     <div class="flex items-center gap-2">
-                        <span class="text-xs ${statusColor}">${job.status}</span>
-                        ${job.status === 'complete' ? `<span class="text-xs text-gray-500">${job.outputCount} outputs</span>` : ''}
+                        <span class="text-xs ${statusColor}">${job.status.replace('_', ' ')}</span>
+                        ${!isRunning ? `
+                            <button onclick="event.stopPropagation(); deleteJob('${job.jobId}')" 
+                                    class="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 transition-all"
+                                    title="Delete job">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                </svg>
+                            </button>
+                        ` : ''}
                     </div>
                 `;
                 list.appendChild(div);
             });
+            
+            // Add clear old jobs button if there are jobs
+            if (jobs.length > 0) {
+                const clearBtn = document.createElement('button');
+                clearBtn.className = 'mt-3 w-full py-2 text-xs text-gray-500 hover:text-gray-300 hover:bg-surface-700/50 rounded-lg transition-all';
+                clearBtn.innerHTML = 'Clear old jobs (>24h)';
+                clearBtn.onclick = () => clearOldJobs();
+                list.appendChild(clearBtn);
+            }
+        }
+        
+        async function deleteJob(jobId) {
+            if (!confirm('Delete this job and all its outputs?')) return;
+            
+            try {
+                const headers = {};
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch(`/api/jobs/${jobId}`, {
+                    method: 'DELETE',
+                    headers
+                });
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    showError(data.error || 'Failed to delete job');
+                    return;
+                }
+                
+                // Refresh job history
+                loadJobHistory();
+                
+                // If this was the current job, clear it
+                if (currentJobId === jobId) {
+                    currentJobId = null;
+                    progressSection.classList.add('hidden');
+                    resultsSection.classList.add('hidden');
+                }
+            } catch (e) {
+                showError(`Failed to delete job: ${e.message}`);
+            }
+        }
+        
+        async function clearOldJobs() {
+            if (!confirm('Clear all jobs older than 24 hours?')) return;
+            
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch('/api/jobs/clear', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ olderThanHours: 24 })
+                });
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    showError(data.error || 'Failed to clear jobs');
+                    return;
+                }
+                
+                // Refresh job history
+                loadJobHistory();
+                
+                if (data.cleared > 0) {
+                    // Show brief success message
+                    console.log(`Cleared ${data.cleared} old jobs`);
+                }
+            } catch (e) {
+                showError(`Failed to clear jobs: ${e.message}`);
+            }
         }
         
         async function loadJob(jobId) {
