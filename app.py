@@ -1599,7 +1599,9 @@ def api_create_job():
             'totalFiles': len(inputs),
             'currentFileIndex': 0,
             'currentFile': '',
-            'percent': 0
+            'percent': 0,
+            'stage': 'queued',
+            'stageStartedAt': now
         },
         'error': None
     }
@@ -1635,10 +1637,18 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
     
     def update_manifest(**updates):
         manifest = session_store.read_json(manifest_path) or {}
-        manifest['updatedAt'] = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
+        manifest['updatedAt'] = now
         for key, value in updates.items():
             if key == 'progress':
+                # Check if stage is changing
+                new_stage = value.get('stage')
+                old_stage = manifest.get('progress', {}).get('stage')
+                if new_stage and new_stage != old_stage:
+                    value['stageStartedAt'] = now
                 manifest.setdefault('progress', {}).update(value)
+            elif key == 'debug':
+                manifest.setdefault('debug', {}).update(value)
             else:
                 manifest[key] = value
         session_store.atomic_write_json(manifest_path, manifest)
@@ -1659,12 +1669,19 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
         error_filename = 'job_error.md'
         error_path = os.path.join(outputs_dir, error_filename)
         
+        # Get current manifest for effective policy
+        current_manifest = session_store.read_json(manifest_path) or {}
+        effective_policy = current_manifest.get('options', {}).get('diarizationEffective')
+        current_stage = current_manifest.get('progress', {}).get('stage', 'unknown')
+        
         content = f"""# Job Error Report
 
 **Job ID:** {job_id}
 **Status:** failed
 **Backend:** {backend}
 **Phase:** {phase}
+**Stage at failure:** {current_stage}
+**Timestamp:** {datetime.now(timezone.utc).isoformat()}
 
 ## Error
 
@@ -1677,6 +1694,18 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
             content += f"""## Suggestion
 
 {suggestion}
+
+"""
+        
+        if effective_policy:
+            content += f"""## Effective Diarization Policy
+
+- **Max Duration:** {effective_policy.get('maxDurationSeconds')}s
+- **Auto-Split:** {effective_policy.get('autoSplit')}
+- **Chunk Size:** {effective_policy.get('chunkSeconds')}s
+- **Overlap:** {effective_policy.get('overlapSeconds')}s
+- **Server Max:** {effective_policy.get('serverMaxDurationSeconds')}s
+
 """
         
         try:
@@ -1727,7 +1756,10 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
         model_name = options.get('model', 'base')
         language = options.get('language', '') or None
         
-        update_manifest(progress={'currentFile': f'Loading {model_name} model on {backend}...'})
+        update_manifest(progress={
+            'currentFile': f'Loading {model_name} model on {backend}...',
+            'stage': 'loading_model'
+        })
         
         # Use explicit backend - NO auto-detection
         device = compute_backend.get_torch_device(backend)
@@ -1796,7 +1828,8 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
             update_manifest(progress={
                 'currentFile': original_name,
                 'currentFileIndex': idx,
-                'percent': int((idx / total) * 100)
+                'percent': int((idx / total) * 100),
+                'stage': 'transcribing'
             })
             
             try:
@@ -1822,7 +1855,8 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                     update_manifest(progress={
                         'currentFile': f'{original_name} (loading diarization pipeline...)',
                         'currentFileIndex': idx,
-                        'percent': int((idx / total) * 100)
+                        'percent': int((idx / total) * 100),
+                        'stage': 'diarizing'
                     })
                     
                     try:
@@ -2007,7 +2041,8 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                         update_manifest(progress={
                             'currentFile': f'{original_name} (merging transcript + speakers...)',
                             'currentFileIndex': idx,
-                            'percent': int((idx / total) * 100)
+                            'percent': int((idx / total) * 100),
+                            'stage': 'merging'
                         })
                         
                         merged_segments = diarization.merge_transcript_with_speakers(
@@ -2041,7 +2076,8 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                 update_manifest(progress={
                     'currentFile': f'{original_name} (writing outputs...)',
                     'currentFileIndex': idx,
-                    'percent': int((idx / total) * 100)
+                    'percent': int((idx / total) * 100),
+                    'stage': 'writing_outputs'
                 })
                 
                 # Generate output files with upload_id suffix to prevent collisions
@@ -2186,7 +2222,7 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
             status=final_status,
             finishedAt=datetime.now(timezone.utc).isoformat(),
             outputs=outputs,
-            progress={'currentFileIndex': total, 'percent': 100, 'currentFile': ''}
+            progress={'currentFileIndex': total, 'percent': 100, 'currentFile': '', 'stage': 'complete'}
         )
         
     except Exception as e:
