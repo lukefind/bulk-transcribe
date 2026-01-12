@@ -2236,6 +2236,93 @@ def api_cancel_after_current(job_id):
     return jsonify({'status': 'not_running'})
 
 
+@app.route('/api/jobs/<job_id>', methods=['DELETE'])
+def api_delete_job(job_id):
+    """Delete a job and its outputs."""
+    session_id = g.session_id
+    
+    # Check if job is running
+    with _active_jobs_lock:
+        if (session_id, job_id) in _active_jobs:
+            job_info = _active_jobs[(session_id, job_id)]
+            if job_info.get('running'):
+                return jsonify({'error': 'Cannot delete a running job'}), 409
+    
+    # Get job directory
+    job_dir = session_store.job_dir(session_id, job_id)
+    if not job_dir or not os.path.exists(job_dir):
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Delete job directory
+    import shutil
+    try:
+        shutil.rmtree(job_dir)
+        return jsonify({'status': 'deleted', 'jobId': job_id})
+    except Exception as e:
+        return jsonify({'error': f'Failed to delete job: {str(e)[:200]}'}), 500
+
+
+@app.route('/api/jobs/clear', methods=['POST'])
+def api_clear_jobs():
+    """Clear old jobs from the session."""
+    session_id = g.session_id
+    data = request.get_json() or {}
+    
+    older_than_hours = data.get('olderThanHours', 24)
+    
+    # Get all jobs for this session
+    jobs_dir = session_store.session_jobs_dir(session_id)
+    if not jobs_dir or not os.path.exists(jobs_dir):
+        return jsonify({'cleared': 0})
+    
+    import shutil
+    from datetime import datetime, timezone, timedelta
+    
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
+    cleared = 0
+    skipped_running = 0
+    
+    for job_id in os.listdir(jobs_dir):
+        job_dir = os.path.join(jobs_dir, job_id)
+        if not os.path.isdir(job_dir):
+            continue
+        
+        # Check if running
+        with _active_jobs_lock:
+            if (session_id, job_id) in _active_jobs:
+                job_info = _active_jobs[(session_id, job_id)]
+                if job_info.get('running'):
+                    skipped_running += 1
+                    continue
+        
+        # Check job age
+        manifest_path = os.path.join(job_dir, 'manifest.json')
+        if os.path.exists(manifest_path):
+            manifest = session_store.read_json(manifest_path)
+            if manifest:
+                created_at = manifest.get('createdAt')
+                if created_at:
+                    try:
+                        job_time = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                        if job_time >= cutoff:
+                            continue  # Job is too recent
+                    except Exception:
+                        pass
+        
+        # Delete job
+        try:
+            shutil.rmtree(job_dir)
+            cleared += 1
+        except Exception:
+            pass
+    
+    return jsonify({
+        'cleared': cleared,
+        'skippedRunning': skipped_running,
+        'olderThanHours': older_than_hours
+    })
+
+
 @app.route('/api/jobs/<job_id>/rerun', methods=['POST'])
 def api_rerun_job(job_id):
     """Create a new job using the same input files from a previous job."""
