@@ -2221,7 +2221,7 @@
                 resultsList.appendChild(downloadAllDiv);
                 
                 // Add Review button if there are previewable outputs
-                const previewableTypes = ['speaker_markdown', 'transcript_markdown', 'transcript_text', 'diarization_json'];
+                const previewableTypes = ['speaker-markdown', 'markdown', 'diarization-json', 'json', 'rttm'];
                 const hasPreviewable = successOutputs.some(o => previewableTypes.includes(o.type));
                 
                 if (hasPreviewable) {
@@ -2851,7 +2851,7 @@
             const select = document.getElementById('reviewOutputSelect');
             select.innerHTML = '';
             
-            const previewableTypes = ['speaker_markdown', 'transcript_markdown', 'transcript_text', 'diarization_json', 'rttm'];
+            const previewableTypes = ['speaker-markdown', 'markdown', 'diarization-json', 'json', 'rttm'];
             const previewableOutputs = job.outputs.filter(o => !o.error && previewableTypes.includes(o.type));
             
             if (previewableOutputs.length === 0) {
@@ -2859,9 +2859,9 @@
                 return;
             }
             
-            // Prefer speaker_markdown, then transcript_markdown
-            let defaultOutput = previewableOutputs.find(o => o.type === 'speaker_markdown') 
-                             || previewableOutputs.find(o => o.type === 'transcript_markdown')
+            // Prefer speaker-markdown, then markdown
+            let defaultOutput = previewableOutputs.find(o => o.type === 'speaker-markdown') 
+                             || previewableOutputs.find(o => o.type === 'markdown')
                              || previewableOutputs[0];
             
             for (const output of previewableOutputs) {
@@ -2873,7 +2873,7 @@
             }
             
             // Show speaker editor button if diarization outputs exist
-            const hasDiarization = job.outputs.some(o => o.type === 'speaker_markdown' || o.type === 'diarization_json');
+            const hasDiarization = job.outputs.some(o => o.type === 'speaker-markdown' || o.type === 'diarization-json');
             document.getElementById('speakerEditorBtn').classList.toggle('hidden', !hasDiarization);
             
             // Setup audio player for first input
@@ -3039,7 +3039,7 @@
         function parseTranscript(content, outputType) {
             const lines = [];
             
-            if (outputType === 'speaker_markdown') {
+            if (outputType === 'speaker-markdown') {
                 // Parse speaker markdown: [00:00:12] Speaker 1: text
                 const regex = /\[(\d{1,2}):(\d{2}):?(\d{2})?\]\s*(SPEAKER_\d+|Speaker\s*\d+)?:?\s*(.*)/gm;
                 let match;
@@ -3064,7 +3064,7 @@
                         lineIndex: lineIndex++
                     });
                 }
-            } else if (outputType === 'transcript_markdown' || outputType === 'transcript_text') {
+            } else if (outputType === 'markdown') {
                 // Parse timestamp markdown: [00:00:12] text
                 const regex = /\[(\d{1,2}):(\d{2}):?(\d{2})?\]\s*(.*)/gm;
                 let match;
@@ -3083,7 +3083,7 @@
                         lineIndex: lineIndex++
                     });
                 }
-            } else if (outputType === 'diarization_json') {
+            } else if (outputType === 'diarization-json' || outputType === 'json') {
                 // Parse diarization JSON
                 try {
                     const data = JSON.parse(content);
