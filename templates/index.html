@@ -420,40 +420,86 @@
             </div>
         </form>
 
-        <!-- Progress Section -->
+        <!-- Job Control Panel -->
         <div id="progressSection" class="mt-8 hidden">
             <div class="glass rounded-2xl p-6">
+                <!-- Header with job info -->
                 <div class="flex items-center justify-between mb-4">
-                    <h2 class="text-lg font-semibold text-white flex items-center gap-2">
-                        <svg class="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                        </svg>
-                        Progress
-                    </h2>
+                    <div class="flex items-center gap-3">
+                        <div class="w-3 h-3 rounded-full bg-primary-400 animate-pulse" id="jobStatusDot"></div>
+                        <h2 class="text-lg font-semibold text-white">Active Job</h2>
+                        <span id="jobIdBadge" class="text-xs font-mono text-gray-400 bg-surface-700/50 px-2 py-0.5 rounded"></span>
+                    </div>
                     <div class="flex items-center gap-2">
-                        <span id="activeJobs" class="text-sm text-gray-400 bg-surface-700/50 px-3 py-1 rounded-full">Jobs: 0</span>
-                        <span id="progressCount" class="text-sm text-gray-400 bg-surface-700/50 px-3 py-1 rounded-full">0 / 0</span>
+                        <span id="jobStatusBadge" class="text-xs font-semibold px-2.5 py-1 rounded-full bg-primary-500/20 text-primary-300">RUNNING</span>
                     </div>
                 </div>
                 
-                <div class="w-full bg-surface-700/50 rounded-full h-2 mb-4 overflow-hidden">
-                    <div id="progressBar" class="bg-gradient-to-r from-primary-500 to-primary-400 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                <!-- Timing info -->
+                <div class="grid grid-cols-2 gap-4 mb-4 text-sm">
+                    <div class="bg-surface-700/30 rounded-lg p-3">
+                        <div class="text-gray-400 text-xs mb-1">Started</div>
+                        <div id="jobStartTime" class="text-white font-mono">--:--:--</div>
+                    </div>
+                    <div class="bg-surface-700/30 rounded-lg p-3">
+                        <div class="text-gray-400 text-xs mb-1">Elapsed</div>
+                        <div id="jobElapsed" class="text-white font-mono text-lg">00:00</div>
+                    </div>
                 </div>
                 
-                <div id="currentFile" class="text-sm text-gray-300 flex items-center gap-2">
-                    <span class="spinner"></span>
-                    <span>Starting...</span>
+                <!-- File progress -->
+                <div class="mb-4">
+                    <div class="flex items-center justify-between text-sm mb-2">
+                        <span id="filePosition" class="text-gray-300">File 0 of 0</span>
+                        <span id="progressPercent" class="text-gray-400">0%</span>
+                    </div>
+                    <div class="w-full bg-surface-700/50 rounded-full h-2.5 overflow-hidden">
+                        <div id="progressBar" class="bg-gradient-to-r from-primary-500 to-primary-400 h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+                    </div>
                 </div>
                 
-                <!-- Per-file progress bar -->
-                <div id="fileProgressSection" class="mt-4 hidden">
-                    <div class="flex items-center justify-between text-xs text-gray-400 mb-1">
-                        <span>Current file progress</span>
-                        <span id="fileProgressPercent">0%</span>
+                <!-- Current file and stage -->
+                <div class="bg-surface-700/30 rounded-lg p-3 mb-4">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="spinner"></span>
+                        <span id="currentStage" class="text-sm text-primary-300 font-medium">Starting...</span>
                     </div>
-                    <div class="w-full bg-surface-700/50 rounded-full h-1.5 overflow-hidden">
-                        <div id="fileProgressBar" class="bg-gradient-to-r from-green-500 to-emerald-400 h-1.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+                    <div id="currentFile" class="text-sm text-gray-300 font-mono truncate"></div>
+                </div>
+                
+                <!-- Cancel controls -->
+                <div class="flex gap-2" id="cancelControls">
+                    <button type="button" id="cancelAfterBtn" onclick="cancelAfterCurrentFile()"
+                            class="flex-1 py-2.5 px-4 bg-amber-600/20 hover:bg-amber-600/40 border border-amber-500/30 text-amber-300 font-medium rounded-lg transition-all text-sm">
+                        <span class="flex items-center justify-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            Cancel After File
+                        </span>
+                        <span class="text-xs text-amber-400/70 block mt-0.5">Finish current, then stop</span>
+                    </button>
+                    <button type="button" id="forceStopBtn" onclick="forceStopNow()"
+                            class="flex-1 py-2.5 px-4 bg-red-600/20 hover:bg-red-600/40 border border-red-500/30 text-red-300 font-medium rounded-lg transition-all text-sm">
+                        <span class="flex items-center justify-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                            Force Stop Now
+                        </span>
+                        <span class="text-xs text-red-400/70 block mt-0.5">Stop immediately</span>
+                    </button>
+                </div>
+                
+                <!-- Activity timeline -->
+                <div id="activityTimeline" class="mt-4 border-t border-gray-700/50 pt-4">
+                    <div class="text-xs text-gray-400 mb-2 flex items-center gap-1">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        Activity
                     </div>
+                    <div id="activityLog" class="text-xs font-mono text-gray-400 space-y-1 max-h-32 overflow-y-auto"></div>
                 </div>
                 
                 <!-- Live transcription preview -->
@@ -742,18 +788,24 @@
         }
 
         async function cancelAfterCurrentFile() {
+            if (!currentJobId) return;
             try {
                 const btn = document.getElementById('cancelAfterBtn');
                 btn.disabled = true;
-                btn.textContent = 'Stopping after file...';
-                const response = await fetch('/cancel', { 
+                btn.innerHTML = '<span class="text-amber-400">Canceling after current file...</span>';
+                
+                const headers = {};
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch(`/api/jobs/${currentJobId}/cancel-after-current`, { 
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mode: 'after_file' })
+                    headers
                 });
                 const data = await response.json();
                 if (data.error) {
                     console.error('Cancel failed:', data.error);
+                    btn.disabled = false;
+                    btn.innerHTML = 'Cancel After File';
                 }
             } catch (e) {
                 console.error('Cancel failed:', e);
@@ -761,15 +813,19 @@
         }
 
         async function forceStopNow() {
+            if (!currentJobId) return;
             try {
                 const btn = document.getElementById('forceStopBtn');
                 btn.disabled = true;
-                btn.textContent = 'Stopping...';
+                btn.innerHTML = '<span class="text-red-400">Stopping...</span>';
                 document.getElementById('cancelAfterBtn').disabled = true;
-                const response = await fetch('/cancel', { 
+                
+                const headers = {};
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch(`/api/jobs/${currentJobId}/cancel`, { 
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mode: 'force' })
+                    headers
                 });
                 const data = await response.json();
                 if (data.error) {
@@ -1368,6 +1424,8 @@
                 currentJobId = data.jobId;
                 progressSection.classList.remove('hidden');
                 resultsSection.classList.add('hidden');
+                clearActivityLog();
+                addActivityLogEntry('Job started', '');
                 
                 // Start polling for job status
                 pollJobStatus();
@@ -1443,6 +1501,10 @@
             }
         }
         
+        // Track activity log entries
+        let activityLogEntries = [];
+        let lastProgressText = '';
+        
         function updateJobProgress(job) {
             const progress = job.progress || {};
             const percent = progress.percent || 0;
@@ -1451,11 +1513,138 @@
             const currentFile = progress.currentFile || '';
             const backend = job.backend || 'cpu';
             
-            document.getElementById('progressBar').style.width = `${percent}%`;
-            document.getElementById('progressCount').textContent = `${currentFileIndex} / ${totalFiles}`;
+            // Update job ID badge
+            const jobIdBadge = document.getElementById('jobIdBadge');
+            if (jobIdBadge) {
+                jobIdBadge.textContent = job.jobId ? job.jobId.substring(0, 12) + '...' : '';
+            }
             
-            const backendLabel = backend === 'metal' ? 'Metal' : backend === 'cuda' ? 'CUDA' : 'CPU';
-            document.getElementById('currentFile').innerHTML = `<span class="spinner"></span><span>${currentFile || 'Processing...'} (${backendLabel})</span>`;
+            // Update status badge
+            const statusBadge = document.getElementById('jobStatusBadge');
+            if (statusBadge) {
+                const statusColors = {
+                    'running': 'bg-primary-500/20 text-primary-300',
+                    'queued': 'bg-gray-500/20 text-gray-300',
+                    'complete': 'bg-green-500/20 text-green-300',
+                    'complete_with_errors': 'bg-amber-500/20 text-amber-300',
+                    'failed': 'bg-red-500/20 text-red-300',
+                    'canceled': 'bg-gray-500/20 text-gray-300'
+                };
+                statusBadge.className = `text-xs font-semibold px-2.5 py-1 rounded-full ${statusColors[job.status] || statusColors.running}`;
+                statusBadge.textContent = (job.status || 'running').toUpperCase().replace('_', ' ');
+            }
+            
+            // Update status dot
+            const statusDot = document.getElementById('jobStatusDot');
+            if (statusDot) {
+                if (job.status === 'running') {
+                    statusDot.className = 'w-3 h-3 rounded-full bg-primary-400 animate-pulse';
+                } else if (job.status === 'complete') {
+                    statusDot.className = 'w-3 h-3 rounded-full bg-green-400';
+                } else if (job.status === 'failed') {
+                    statusDot.className = 'w-3 h-3 rounded-full bg-red-400';
+                } else {
+                    statusDot.className = 'w-3 h-3 rounded-full bg-gray-400';
+                }
+            }
+            
+            // Update timing info
+            if (job.startedAt) {
+                const startTime = new Date(job.startedAt);
+                const jobStartTimeEl = document.getElementById('jobStartTime');
+                if (jobStartTimeEl) {
+                    jobStartTimeEl.textContent = startTime.toLocaleTimeString();
+                }
+                
+                const elapsed = Math.floor((Date.now() - startTime.getTime()) / 1000);
+                const mins = Math.floor(elapsed / 60);
+                const secs = elapsed % 60;
+                const jobElapsedEl = document.getElementById('jobElapsed');
+                if (jobElapsedEl) {
+                    jobElapsedEl.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+                }
+            }
+            
+            // Update progress bar
+            document.getElementById('progressBar').style.width = `${percent}%`;
+            
+            // Update file position
+            const filePositionEl = document.getElementById('filePosition');
+            if (filePositionEl) {
+                filePositionEl.textContent = `File ${currentFileIndex + 1} of ${totalFiles}`;
+            }
+            
+            const progressPercentEl = document.getElementById('progressPercent');
+            if (progressPercentEl) {
+                progressPercentEl.textContent = `${percent}%`;
+            }
+            
+            // Update current stage and file
+            const currentStageEl = document.getElementById('currentStage');
+            const currentFileEl = document.getElementById('currentFile');
+            
+            // Parse stage from currentFile text
+            let stage = 'Processing...';
+            let fileName = currentFile;
+            
+            if (currentFile.includes('Loading')) {
+                stage = currentFile;
+                fileName = '';
+            } else if (currentFile.includes('(running diarization')) {
+                stage = 'Running diarization...';
+                fileName = currentFile.replace(' (running diarization...)', '');
+            } else if (currentFile.includes('(merging')) {
+                stage = 'Merging transcript + speakers...';
+                fileName = currentFile.replace(/\s*\(merging.*\)/, '');
+            } else if (currentFile.includes('(loading diarization')) {
+                stage = 'Loading diarization pipeline...';
+                fileName = currentFile.replace(/\s*\(loading.*\)/, '');
+            } else if (currentFile) {
+                stage = 'Transcribing...';
+                fileName = currentFile;
+            }
+            
+            if (currentStageEl) currentStageEl.textContent = stage;
+            if (currentFileEl) currentFileEl.textContent = fileName;
+            
+            // Add to activity log if progress changed
+            if (currentFile && currentFile !== lastProgressText) {
+                lastProgressText = currentFile;
+                addActivityLogEntry(stage, fileName);
+            }
+            
+            // Show cancel pending state
+            if (job.cancelAfterCurrentFile) {
+                const cancelAfterBtn = document.getElementById('cancelAfterBtn');
+                if (cancelAfterBtn) {
+                    cancelAfterBtn.disabled = true;
+                    cancelAfterBtn.innerHTML = `<span class="text-amber-400">Canceling after current file...</span>`;
+                }
+            }
+        }
+        
+        function addActivityLogEntry(stage, file) {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('en-US', { hour12: false });
+            const entry = `[${timeStr}] ${stage}${file ? ': ' + file : ''}`;
+            
+            activityLogEntries.push(entry);
+            if (activityLogEntries.length > 20) {
+                activityLogEntries.shift();
+            }
+            
+            const activityLog = document.getElementById('activityLog');
+            if (activityLog) {
+                activityLog.innerHTML = activityLogEntries.map(e => `<div>${e}</div>`).join('');
+                activityLog.scrollTop = activityLog.scrollHeight;
+            }
+        }
+        
+        function clearActivityLog() {
+            activityLogEntries = [];
+            lastProgressText = '';
+            const activityLog = document.getElementById('activityLog');
+            if (activityLog) activityLog.innerHTML = '';
         }
         
         function onJobComplete(job) {

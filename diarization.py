@@ -494,7 +494,8 @@ def _friendly_speaker_name(speaker_id: str) -> str:
 
 def format_speaker_markdown(
     merged_segments: list[dict],
-    filename: str
+    filename: str,
+    transcript_segments: Optional[list[dict]] = None
 ) -> str:
     """
     Format merged segments as reviewer-friendly markdown.
@@ -502,11 +503,32 @@ def format_speaker_markdown(
     Args:
         merged_segments: Output from merge_transcript_with_speakers
         filename: Original audio filename for header
+        transcript_segments: Original transcript segments (for fallback if no diarization)
     
     Returns:
         Markdown string optimized for human review
     """
     lines = [f"## File: {filename}", ""]
+    
+    # Handle empty merged segments
+    if not merged_segments:
+        if transcript_segments and len(transcript_segments) > 0:
+            # Diarization produced no speaker segments but transcript exists
+            lines.append("> Diarization produced no speaker segments; transcript shown without speaker labels.")
+            lines.append("")
+            for seg in transcript_segments:
+                timestamp = _format_timestamp(seg.get("start", 0))
+                text = seg.get("text", "").strip()
+                if text:
+                    lines.append(f"[{timestamp}] {text}")
+                    lines.append("")
+        else:
+            # No transcript and no diarization
+            lines.append("> No speaker segments detected.")
+            lines.append("")
+            lines.append("This file produced no transcribable content or speaker segments.")
+            lines.append("")
+        return "\n".join(lines)
     
     for seg in merged_segments:
         timestamp = _format_timestamp(seg["start"])

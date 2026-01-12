@@ -30,6 +30,10 @@ os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
 os.environ['NUMEXPR_NUM_THREADS'] = '1'
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
+# Suppress noisy third-party warnings early (before any imports that trigger them)
+from logger import configure_runtime_noise
+configure_runtime_noise()
+
 # Prevent multiprocessing from creating new app instances
 import multiprocessing
 multiprocessing.set_start_method('fork', force=True)
@@ -1590,6 +1594,11 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
             job_info = _active_jobs.get((session_id, job_id), {})
             return job_info.get('cancel_requested', False)
     
+    def is_cancel_after_current():
+        with _active_jobs_lock:
+            job_info = _active_jobs.get((session_id, job_id), {})
+            return job_info.get('cancel_after_current', False)
+    
     def write_error_artifact(code: str, message: str, phase: str, suggestion: str = '', outputs: list = None):
         """Write a job_error.md artifact for reviewer-friendly error reporting."""
         error_filename = 'job_error.md'
@@ -1709,8 +1718,19 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
         total = len(inputs)
         
         for idx, input_info in enumerate(inputs):
+            # Check for immediate cancel
             if is_cancelled():
                 cancel_job(outputs)
+                return
+            
+            # Check for graceful cancel after previous file
+            if idx > 0 and is_cancel_after_current():
+                update_manifest(
+                    status='canceled',
+                    finishedAt=datetime.now(timezone.utc).isoformat(),
+                    outputs=outputs,
+                    progress={'currentFile': 'Canceled after file ' + str(idx), 'percent': int((idx / total) * 100)}
+                )
                 return
             
             filepath = input_info['path']
@@ -1932,7 +1952,7 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                     speaker_md_filename = f"{base_name}{suffix}.speaker.md"
                     speaker_md_path = os.path.join(outputs_dir, speaker_md_filename)
                     speaker_md_content = diarization_module.format_speaker_markdown(
-                        merged_segments, original_name
+                        merged_segments, original_name, transcript_segments=result.get('segments', [])
                     )
                     with open(speaker_md_path, 'w', encoding='utf-8') as f:
                         f.write(speaker_md_content)
@@ -2067,7 +2087,7 @@ def api_get_job(job_id):
 
 @app.route('/api/jobs/<job_id>/cancel', methods=['POST'])
 def api_cancel_job(job_id):
-    """Cancel a running job."""
+    """Cancel a running job immediately."""
     session_id = g.session_id
     
     with _active_jobs_lock:
@@ -2084,6 +2104,36 @@ def api_cancel_job(job_id):
         return jsonify({'error': 'Job not found'}), 404
     
     # Check terminal states (note: 'canceled' is the canonical spelling)
+    if manifest.get('status') in ('complete', 'complete_with_errors', 'failed', 'canceled'):
+        return jsonify({'status': manifest.get('status'), 'message': 'Job already finished'})
+    
+    return jsonify({'status': 'not_running'})
+
+
+@app.route('/api/jobs/<job_id>/cancel-after-current', methods=['POST'])
+def api_cancel_after_current(job_id):
+    """Request graceful cancel after current file completes."""
+    session_id = g.session_id
+    
+    with _active_jobs_lock:
+        job_info = _active_jobs.get((session_id, job_id))
+        if job_info and job_info.get('running'):
+            job_info['cancel_after_current'] = True
+            # Also update manifest so UI can see it
+            manifest_path = session_store.job_manifest_path(session_id, job_id)
+            manifest = session_store.read_json(manifest_path)
+            if manifest:
+                manifest['cancelAfterCurrentFile'] = True
+                session_store.atomic_write_json(manifest_path, manifest)
+            return jsonify({'status': 'pending_cancel', 'message': 'Will cancel after current file'})
+    
+    # Check if job exists
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
     if manifest.get('status') in ('complete', 'complete_with_errors', 'failed', 'canceled'):
         return jsonify({'status': manifest.get('status'), 'message': 'Job already finished'})
     
