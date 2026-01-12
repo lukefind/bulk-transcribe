@@ -609,6 +609,106 @@
                 </div>
             </div>
         </div>
+        
+        <!-- Review Panel (shown when job has outputs) -->
+        <div id="reviewPanel" class="mt-6 hidden">
+            <div class="glass rounded-2xl p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                        <svg class="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                        </svg>
+                        Review Transcript
+                    </h2>
+                    <button onclick="closeReviewPanel()" class="text-gray-400 hover:text-white p-1">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                
+                <!-- Audio Player -->
+                <div id="reviewAudioPlayer" class="mb-4 p-3 bg-surface-800/50 rounded-lg">
+                    <div class="flex items-center gap-3 mb-2">
+                        <button id="audioPlayBtn" onclick="toggleAudioPlayback()" class="w-10 h-10 flex items-center justify-center bg-primary-600 hover:bg-primary-500 rounded-full transition-all">
+                            <svg id="audioPlayIcon" class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M8 5v14l11-7z"></path>
+                            </svg>
+                        </button>
+                        <div class="flex-1">
+                            <input type="range" id="audioScrubber" min="0" max="100" value="0" 
+                                   class="w-full h-2 bg-surface-700 rounded-lg appearance-none cursor-pointer accent-primary-500"
+                                   oninput="seekAudio(this.value)">
+                        </div>
+                        <div class="text-xs text-gray-400 font-mono min-w-[80px] text-right">
+                            <span id="audioCurrentTime">0:00</span> / <span id="audioDuration">0:00</span>
+                        </div>
+                    </div>
+                    <div id="audioFileName" class="text-xs text-gray-500 truncate"></div>
+                </div>
+                
+                <!-- Transcript Controls -->
+                <div class="flex flex-wrap items-center gap-2 mb-4">
+                    <select id="reviewOutputSelect" onchange="loadReviewOutput()" 
+                            class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                    </select>
+                    <input type="text" id="reviewSearchInput" placeholder="Search transcript..." 
+                           class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm flex-1 min-w-[150px]"
+                           oninput="debounceSearch()">
+                    <button onclick="openSpeakerEditor()" id="speakerEditorBtn"
+                            class="px-3 py-1.5 bg-surface-700/50 hover:bg-surface-600/50 border border-gray-600/50 rounded-lg text-gray-300 text-sm flex items-center gap-1.5 hidden">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                        </svg>
+                        Speakers
+                    </button>
+                    <label class="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+                        <input type="checkbox" id="autoScrollCheckbox" checked class="rounded bg-surface-700 border-gray-600 text-primary-500">
+                        Auto-scroll
+                    </label>
+                </div>
+                
+                <!-- Transcript Viewer -->
+                <div id="reviewTranscriptViewer" class="bg-surface-800/30 rounded-lg p-4 max-h-[400px] overflow-y-auto font-mono text-sm">
+                    <div id="reviewTranscriptContent" class="space-y-1">
+                        <p class="text-gray-500 italic">Select an output to preview...</p>
+                    </div>
+                </div>
+                
+                <!-- Truncation warning -->
+                <div id="reviewTruncatedWarning" class="mt-2 text-xs text-amber-400 hidden">
+                    Content truncated. Download the full file for complete transcript.
+                </div>
+            </div>
+        </div>
+        
+        <!-- Speaker Label Editor Modal -->
+        <div id="speakerEditorModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+            <div class="bg-surface-800 border border-gray-700 rounded-2xl p-6 max-w-md w-full max-h-[80vh] overflow-y-auto">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-white">Edit Speaker Labels</h3>
+                    <button onclick="closeSpeakerEditor()" class="text-gray-400 hover:text-white">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                <p class="text-sm text-gray-400 mb-4">Rename speakers to make the transcript easier to read.</p>
+                <div id="speakerLabelsList" class="space-y-3 mb-4">
+                    <p class="text-gray-500 text-sm italic">Loading speakers...</p>
+                </div>
+                <div id="speakerEditorError" class="text-red-400 text-sm mb-3 hidden"></div>
+                <div class="flex gap-2">
+                    <button onclick="resetSpeakerLabels()" class="px-4 py-2 bg-surface-700 hover:bg-surface-600 text-gray-300 rounded-lg text-sm">
+                        Reset
+                    </button>
+                    <button onclick="saveSpeakerLabels()" class="flex-1 px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg text-sm">
+                        Apply Labels
+                    </button>
+                </div>
+            </div>
+        </div>
     </main>
     
     <!-- Footer -->
@@ -2117,10 +2217,36 @@
                 `;
                 resultsList.appendChild(downloadAllDiv);
                 
+                // Add Review button if there are previewable outputs
+                const previewableTypes = ['speaker_markdown', 'transcript_markdown', 'transcript_text', 'diarization_json'];
+                const hasPreviewable = successOutputs.some(o => previewableTypes.includes(o.type));
+                
+                if (hasPreviewable) {
+                    const reviewDiv = document.createElement('div');
+                    reviewDiv.className = 'mb-4';
+                    reviewDiv.innerHTML = `
+                        <button onclick="openReviewPanel(window._lastCompletedJob)" 
+                                class="inline-flex items-center gap-2 px-4 py-2 bg-surface-700 hover:bg-surface-600 text-white rounded-xl transition-all border border-gray-600/50">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                            </svg>
+                            Review Transcript
+                        </button>
+                    `;
+                    resultsList.appendChild(reviewDiv);
+                }
+                
                 // Individual files
                 for (const output of successOutputs) {
                     const div = document.createElement('div');
                     div.className = 'flex items-center justify-between p-3 bg-surface-800/50 rounded-lg';
+                    
+                    const isPreviewable = previewableTypes.includes(output.type);
+                    const previewBtn = isPreviewable 
+                        ? `<button onclick="openReviewPanelWithOutput('${output.id}')" class="text-xs text-green-400 hover:text-green-300 mr-3">Preview</button>`
+                        : '';
+                    
                     div.innerHTML = `
                         <div class="flex items-center gap-2">
                             <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2129,16 +2255,35 @@
                             <span class="text-sm text-gray-300">${output.filename}</span>
                             <span class="text-xs text-gray-500">(${getOutputTypeLabel(output.type)})</span>
                         </div>
-                        <a href="/api/jobs/${job.jobId}/outputs/${output.id}" 
-                           class="text-xs text-primary-400 hover:text-primary-300">Download</a>
+                        <div>
+                            ${previewBtn}
+                            <a href="/api/jobs/${job.jobId}/outputs/${output.id}" 
+                               class="text-xs text-primary-400 hover:text-primary-300">Download</a>
+                        </div>
                     `;
                     resultsList.appendChild(div);
                 }
             }
             
+            // Store job for review panel access
+            window._lastCompletedJob = job;
+            
             // Clear upload queue after successful job
             uploadedFiles = [];
             updateUploadQueueUI();
+        }
+        
+        function openReviewPanelWithOutput(outputId) {
+            if (!window._lastCompletedJob) return;
+            openReviewPanel(window._lastCompletedJob);
+            // Select the specific output after panel opens
+            setTimeout(() => {
+                const select = document.getElementById('reviewOutputSelect');
+                if (select) {
+                    select.value = outputId;
+                    loadReviewOutput();
+                }
+            }, 100);
         }
         
         async function cancelServerJob() {
@@ -2682,6 +2827,443 @@
         // Call on page load
         if (IS_SERVER_MODE) {
             displayBuildVersion();
+        }
+        
+        // =====================================================================
+        // REVIEW PANEL - Transcript preview, audio sync, speaker labels
+        // =====================================================================
+        
+        let reviewAudioElement = null;
+        let reviewJobData = null;
+        let reviewTranscriptLines = [];
+        let reviewSpeakerLabels = {};
+        let reviewCurrentLineIndex = -1;
+        let searchDebounceTimer = null;
+        
+        function openReviewPanel(job) {
+            if (!job || !job.outputs || job.outputs.length === 0) return;
+            
+            reviewJobData = job;
+            const panel = document.getElementById('reviewPanel');
+            panel.classList.remove('hidden');
+            
+            // Populate output selector with previewable outputs
+            const select = document.getElementById('reviewOutputSelect');
+            select.innerHTML = '';
+            
+            const previewableTypes = ['speaker_markdown', 'transcript_markdown', 'transcript_text', 'diarization_json', 'rttm'];
+            const previewableOutputs = job.outputs.filter(o => !o.error && previewableTypes.includes(o.type));
+            
+            if (previewableOutputs.length === 0) {
+                select.innerHTML = '<option value="">No previewable outputs</option>';
+                return;
+            }
+            
+            // Prefer speaker_markdown, then transcript_markdown
+            let defaultOutput = previewableOutputs.find(o => o.type === 'speaker_markdown') 
+                             || previewableOutputs.find(o => o.type === 'transcript_markdown')
+                             || previewableOutputs[0];
+            
+            for (const output of previewableOutputs) {
+                const opt = document.createElement('option');
+                opt.value = output.id;
+                opt.textContent = `${output.filename} (${getOutputTypeLabel(output.type)})`;
+                if (output.id === defaultOutput.id) opt.selected = true;
+                select.appendChild(opt);
+            }
+            
+            // Show speaker editor button if diarization outputs exist
+            const hasDiarization = job.outputs.some(o => o.type === 'speaker_markdown' || o.type === 'diarization_json');
+            document.getElementById('speakerEditorBtn').classList.toggle('hidden', !hasDiarization);
+            
+            // Setup audio player for first input
+            if (job.inputs && job.inputs.length > 0) {
+                setupReviewAudio(job.jobId, job.inputs[0]);
+            }
+            
+            // Load speaker labels
+            loadSpeakerLabels(job.jobId);
+            
+            // Load default output
+            loadReviewOutput();
+        }
+        
+        function closeReviewPanel() {
+            document.getElementById('reviewPanel').classList.add('hidden');
+            if (reviewAudioElement) {
+                reviewAudioElement.pause();
+                reviewAudioElement = null;
+            }
+            reviewJobData = null;
+            reviewTranscriptLines = [];
+            reviewSpeakerLabels = {};
+        }
+        
+        function setupReviewAudio(jobId, input) {
+            if (reviewAudioElement) {
+                reviewAudioElement.pause();
+            }
+            
+            reviewAudioElement = new Audio(`/api/jobs/${jobId}/audio/${input.uploadId}`);
+            reviewAudioElement.preload = 'metadata';
+            
+            document.getElementById('audioFileName').textContent = input.filename;
+            
+            reviewAudioElement.addEventListener('loadedmetadata', () => {
+                document.getElementById('audioDuration').textContent = formatTime(reviewAudioElement.duration);
+                document.getElementById('audioScrubber').max = Math.floor(reviewAudioElement.duration);
+            });
+            
+            reviewAudioElement.addEventListener('timeupdate', () => {
+                const current = reviewAudioElement.currentTime;
+                document.getElementById('audioCurrentTime').textContent = formatTime(current);
+                document.getElementById('audioScrubber').value = Math.floor(current);
+                highlightCurrentLine(current);
+            });
+            
+            reviewAudioElement.addEventListener('play', () => {
+                document.getElementById('audioPlayIcon').innerHTML = '<rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect>';
+            });
+            
+            reviewAudioElement.addEventListener('pause', () => {
+                document.getElementById('audioPlayIcon').innerHTML = '<path d="M8 5v14l11-7z"></path>';
+            });
+            
+            reviewAudioElement.addEventListener('ended', () => {
+                document.getElementById('audioPlayIcon').innerHTML = '<path d="M8 5v14l11-7z"></path>';
+            });
+        }
+        
+        function toggleAudioPlayback() {
+            if (!reviewAudioElement) return;
+            if (reviewAudioElement.paused) {
+                reviewAudioElement.play();
+            } else {
+                reviewAudioElement.pause();
+            }
+        }
+        
+        function seekAudio(value) {
+            if (!reviewAudioElement) return;
+            reviewAudioElement.currentTime = parseFloat(value);
+        }
+        
+        function seekToTimestamp(seconds) {
+            if (!reviewAudioElement) return;
+            reviewAudioElement.currentTime = seconds;
+            reviewAudioElement.play();
+        }
+        
+        function formatTime(seconds) {
+            if (!seconds || isNaN(seconds)) return '0:00';
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+        
+        async function loadReviewOutput() {
+            const select = document.getElementById('reviewOutputSelect');
+            const outputId = select.value;
+            if (!outputId || !reviewJobData) return;
+            
+            const content = document.getElementById('reviewTranscriptContent');
+            content.innerHTML = '<p class="text-gray-500 italic">Loading...</p>';
+            
+            try {
+                const response = await fetch(`/api/jobs/${reviewJobData.jobId}/outputs/${outputId}/text`);
+                if (!response.ok) {
+                    const err = await response.json();
+                    content.innerHTML = `<p class="text-red-400">${err.error || 'Failed to load'}</p>`;
+                    return;
+                }
+                
+                const data = await response.json();
+                
+                // Show truncation warning if needed
+                document.getElementById('reviewTruncatedWarning').classList.toggle('hidden', !data.truncated);
+                
+                // Parse and render transcript
+                const output = reviewJobData.outputs.find(o => o.id === outputId);
+                renderTranscript(data.content, output?.type || 'text');
+                
+            } catch (e) {
+                content.innerHTML = `<p class="text-red-400">Error: ${e.message}</p>`;
+            }
+        }
+        
+        function renderTranscript(content, outputType) {
+            reviewTranscriptLines = parseTranscript(content, outputType);
+            const container = document.getElementById('reviewTranscriptContent');
+            container.innerHTML = '';
+            
+            if (reviewTranscriptLines.length === 0) {
+                container.innerHTML = `<pre class="text-gray-300 whitespace-pre-wrap">${escapeHtml(content)}</pre>`;
+                return;
+            }
+            
+            const searchTerm = document.getElementById('reviewSearchInput').value.toLowerCase();
+            
+            for (const line of reviewTranscriptLines) {
+                // Filter by search
+                if (searchTerm && !line.text.toLowerCase().includes(searchTerm) && 
+                    !(line.speaker && line.speaker.toLowerCase().includes(searchTerm))) {
+                    continue;
+                }
+                
+                const div = document.createElement('div');
+                div.className = 'transcript-line py-1 px-2 rounded hover:bg-surface-700/50 cursor-pointer transition-colors';
+                div.dataset.lineIndex = line.lineIndex;
+                div.dataset.timestamp = line.t;
+                
+                let html = '';
+                if (line.t >= 0) {
+                    html += `<span class="text-primary-400 hover:text-primary-300 cursor-pointer mr-2" onclick="seekToTimestamp(${line.t})">[${formatTime(line.t)}]</span>`;
+                }
+                if (line.speaker) {
+                    const displayLabel = reviewSpeakerLabels[line.speaker] || getDefaultSpeakerLabel(line.speaker);
+                    html += `<span class="text-amber-400 font-medium mr-1">${escapeHtml(displayLabel)}:</span>`;
+                }
+                html += `<span class="text-gray-300">${escapeHtml(line.text)}</span>`;
+                
+                div.innerHTML = html;
+                div.onclick = (e) => {
+                    if (e.target.tagName !== 'SPAN' || !e.target.onclick) {
+                        if (line.t >= 0) seekToTimestamp(line.t);
+                    }
+                };
+                
+                container.appendChild(div);
+            }
+        }
+        
+        function parseTranscript(content, outputType) {
+            const lines = [];
+            
+            if (outputType === 'speaker_markdown') {
+                // Parse speaker markdown: [00:00:12] Speaker 1: text
+                const regex = /\[(\d{1,2}):(\d{2}):?(\d{2})?\]\s*(SPEAKER_\d+|Speaker\s*\d+)?:?\s*(.*)/gm;
+                let match;
+                let lineIndex = 0;
+                
+                while ((match = regex.exec(content)) !== null) {
+                    const hours = match[3] ? parseInt(match[1]) : 0;
+                    const mins = match[3] ? parseInt(match[2]) : parseInt(match[1]);
+                    const secs = match[3] ? parseInt(match[3]) : parseInt(match[2]);
+                    const t = hours * 3600 + mins * 60 + secs;
+                    
+                    let speaker = match[4] || null;
+                    if (speaker && speaker.startsWith('Speaker')) {
+                        const num = parseInt(speaker.replace(/\D/g, '')) - 1;
+                        speaker = `SPEAKER_${num.toString().padStart(2, '0')}`;
+                    }
+                    
+                    lines.push({
+                        t: t,
+                        speaker: speaker,
+                        text: match[5].trim(),
+                        lineIndex: lineIndex++
+                    });
+                }
+            } else if (outputType === 'transcript_markdown' || outputType === 'transcript_text') {
+                // Parse timestamp markdown: [00:00:12] text
+                const regex = /\[(\d{1,2}):(\d{2}):?(\d{2})?\]\s*(.*)/gm;
+                let match;
+                let lineIndex = 0;
+                
+                while ((match = regex.exec(content)) !== null) {
+                    const hours = match[3] ? parseInt(match[1]) : 0;
+                    const mins = match[3] ? parseInt(match[2]) : parseInt(match[1]);
+                    const secs = match[3] ? parseInt(match[3]) : parseInt(match[2]);
+                    const t = hours * 3600 + mins * 60 + secs;
+                    
+                    lines.push({
+                        t: t,
+                        speaker: null,
+                        text: match[4].trim(),
+                        lineIndex: lineIndex++
+                    });
+                }
+            } else if (outputType === 'diarization_json') {
+                // Parse diarization JSON
+                try {
+                    const data = JSON.parse(content);
+                    if (data.segments) {
+                        data.segments.forEach((seg, idx) => {
+                            lines.push({
+                                t: seg.start || 0,
+                                speaker: seg.speaker || null,
+                                text: seg.text || `[${formatTime(seg.start)} - ${formatTime(seg.end)}]`,
+                                lineIndex: idx
+                            });
+                        });
+                    }
+                } catch (e) {
+                    console.error('Failed to parse diarization JSON:', e);
+                }
+            }
+            
+            return lines;
+        }
+        
+        function highlightCurrentLine(currentTime) {
+            if (reviewTranscriptLines.length === 0) return;
+            
+            // Find the line that matches current time
+            let matchIndex = -1;
+            for (let i = reviewTranscriptLines.length - 1; i >= 0; i--) {
+                if (reviewTranscriptLines[i].t <= currentTime) {
+                    matchIndex = i;
+                    break;
+                }
+            }
+            
+            if (matchIndex === reviewCurrentLineIndex) return;
+            reviewCurrentLineIndex = matchIndex;
+            
+            // Update highlighting
+            const container = document.getElementById('reviewTranscriptContent');
+            const lines = container.querySelectorAll('.transcript-line');
+            
+            lines.forEach(line => {
+                const idx = parseInt(line.dataset.lineIndex);
+                if (idx === matchIndex) {
+                    line.classList.add('bg-primary-900/30', 'border-l-2', 'border-primary-500');
+                    
+                    // Auto-scroll if enabled
+                    if (document.getElementById('autoScrollCheckbox').checked) {
+                        line.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+                } else {
+                    line.classList.remove('bg-primary-900/30', 'border-l-2', 'border-primary-500');
+                }
+            });
+        }
+        
+        function debounceSearch() {
+            clearTimeout(searchDebounceTimer);
+            searchDebounceTimer = setTimeout(() => {
+                if (reviewJobData) loadReviewOutput();
+            }, 300);
+        }
+        
+        function getDefaultSpeakerLabel(speakerId) {
+            if (!speakerId) return '';
+            if (speakerId.startsWith('SPEAKER_')) {
+                const num = parseInt(speakerId.split('_')[1]) + 1;
+                return `Speaker ${num}`;
+            }
+            return speakerId;
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Speaker Labels
+        async function loadSpeakerLabels(jobId) {
+            try {
+                const response = await fetch(`/api/jobs/${jobId}/speakers`);
+                if (response.ok) {
+                    const data = await response.json();
+                    reviewSpeakerLabels = data.labels || {};
+                }
+            } catch (e) {
+                console.error('Failed to load speaker labels:', e);
+            }
+        }
+        
+        async function openSpeakerEditor() {
+            if (!reviewJobData) return;
+            
+            document.getElementById('speakerEditorModal').classList.remove('hidden');
+            document.getElementById('speakerEditorError').classList.add('hidden');
+            
+            const list = document.getElementById('speakerLabelsList');
+            list.innerHTML = '<p class="text-gray-500 text-sm italic">Loading...</p>';
+            
+            try {
+                const response = await fetch(`/api/jobs/${reviewJobData.jobId}/speakers`);
+                if (!response.ok) throw new Error('Failed to load speakers');
+                
+                const data = await response.json();
+                reviewSpeakerLabels = data.labels || {};
+                
+                if (data.speakers.length === 0) {
+                    list.innerHTML = '<p class="text-gray-500 text-sm italic">No speakers detected</p>';
+                    return;
+                }
+                
+                list.innerHTML = '';
+                for (const speaker of data.speakers) {
+                    const div = document.createElement('div');
+                    div.className = 'flex items-center gap-2';
+                    div.innerHTML = `
+                        <span class="text-gray-400 text-sm w-24">${speaker.defaultLabel}</span>
+                        <input type="text" 
+                               data-speaker-id="${speaker.id}"
+                               value="${escapeHtml(speaker.label || '')}"
+                               placeholder="${speaker.defaultLabel}"
+                               maxlength="40"
+                               class="flex-1 px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                    `;
+                    list.appendChild(div);
+                }
+            } catch (e) {
+                list.innerHTML = `<p class="text-red-400 text-sm">${e.message}</p>`;
+            }
+        }
+        
+        function closeSpeakerEditor() {
+            document.getElementById('speakerEditorModal').classList.add('hidden');
+        }
+        
+        async function saveSpeakerLabels() {
+            if (!reviewJobData) return;
+            
+            const inputs = document.querySelectorAll('#speakerLabelsList input[data-speaker-id]');
+            const labels = {};
+            
+            inputs.forEach(input => {
+                const id = input.dataset.speakerId;
+                const value = input.value.trim();
+                if (value) labels[id] = value;
+            });
+            
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch(`/api/jobs/${reviewJobData.jobId}/speakers`, {
+                    method: 'PUT',
+                    headers,
+                    body: JSON.stringify({ labels })
+                });
+                
+                if (!response.ok) {
+                    const err = await response.json();
+                    document.getElementById('speakerEditorError').textContent = err.error || 'Failed to save';
+                    document.getElementById('speakerEditorError').classList.remove('hidden');
+                    return;
+                }
+                
+                const data = await response.json();
+                reviewSpeakerLabels = data.labels;
+                
+                // Re-render transcript with new labels
+                loadReviewOutput();
+                closeSpeakerEditor();
+                
+            } catch (e) {
+                document.getElementById('speakerEditorError').textContent = e.message;
+                document.getElementById('speakerEditorError').classList.remove('hidden');
+            }
+        }
+        
+        function resetSpeakerLabels() {
+            const inputs = document.querySelectorAll('#speakerLabelsList input[data-speaker-id]');
+            inputs.forEach(input => input.value = '');
         }
     </script>
     
