@@ -1938,6 +1938,7 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                                             'currentFile': f'{original_name} ({status})',
                                             'currentFileIndex': idx,
                                             'percent': int((idx / total) * 100),
+                                            'stage': 'diarizing',
                                             'chunkIndex': chunk_idx,
                                             'totalChunks': total
                                         })
@@ -2786,13 +2787,24 @@ def api_compute_diarization_policy():
     )
     
     # Generate user-friendly warnings for any clamped values
-    from diarization_policy import get_clamping_warnings
+    from diarization_policy import get_clamping_warnings, estimate_chunk_count
     warnings = get_clamping_warnings(policy) if policy else []
+    
+    # Calculate estimated chunks if file duration is provided
+    file_duration = data.get('fileDurationSeconds')
+    estimated_chunks = None
+    if policy and file_duration and file_duration > 0:
+        estimated_chunks = estimate_chunk_count(
+            file_duration_seconds=file_duration,
+            chunk_seconds=policy['chunkSeconds'],
+            overlap_seconds=policy['overlapSeconds']
+        )
     
     return jsonify({
         'policy': policy,
         'serverConfig': server_config,
-        'warnings': warnings
+        'warnings': warnings,
+        'estimatedChunks': estimated_chunks
     })
 
 

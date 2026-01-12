@@ -1141,11 +1141,24 @@
                 currentDiarizationPolicy = data.policy;
                 diarizationPolicyConfig = data.serverConfig;
                 const warnings = data.warnings || [];
+                const estimatedChunks = data.estimatedChunks;
                 
                 // Update policy preview
                 if (policyPreview && currentDiarizationPolicy) {
                     document.getElementById('policyChunkSeconds').textContent = `${currentDiarizationPolicy.chunkSeconds}s`;
                     document.getElementById('policyOverlapSeconds').textContent = `${currentDiarizationPolicy.overlapSeconds}s`;
+                    
+                    // Show estimated chunks if available
+                    const chunksEl = document.getElementById('policyEstimatedChunks');
+                    const chunkCountEl = document.getElementById('policyChunkCount');
+                    if (chunksEl && chunkCountEl) {
+                        if (estimatedChunks && estimatedChunks > 1) {
+                            chunkCountEl.textContent = estimatedChunks;
+                            chunksEl.classList.remove('hidden');
+                        } else {
+                            chunksEl.classList.add('hidden');
+                        }
+                    }
                     
                     // Show/hide warnings
                     const warningsEl = document.getElementById('policyWarnings');
