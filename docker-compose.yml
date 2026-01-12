@@ -18,12 +18,10 @@ services:
       - OUTPUT_DIR=/data/output
       - PORT=8476
       - HF_TOKEN=${HF_TOKEN}
-    deploy:
-      resources:
-        limits:
-          memory: 8G
-        reservations:
-          memory: 4G
+    # Memory limit for diarization safety
+    # Increase to 16G for longer audio files (>3 min)
+    # Remove this section if you prefer no hard limit
+    mem_limit: 8g
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8476/healthz"]
