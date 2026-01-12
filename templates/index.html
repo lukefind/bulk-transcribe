@@ -391,6 +391,38 @@
                                     </select>
                                 </div>
                                 <p class="text-xs text-gray-500">If you know the exact number of speakers, set "Fixed speakers" for best results.</p>
+                                
+                                <!-- Auto-split for long files -->
+                                <div class="border-t border-gray-700/50 pt-3 mt-3">
+                                    <div class="flex items-center justify-between mb-2">
+                                        <label class="text-sm text-gray-300 flex items-center gap-2">
+                                            <input type="checkbox" id="diarizationAutoSplit" class="rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500">
+                                            Auto-split long audio
+                                        </label>
+                                    </div>
+                                    <p class="text-xs text-gray-500 mb-2" id="autoSplitHelp">Process long files by splitting into chunks. Recommended for CPU.</p>
+                                    
+                                    <div id="autoSplitOptions" class="space-y-2 hidden">
+                                        <div class="flex items-center justify-between">
+                                            <label class="text-xs text-gray-400">Chunk length</label>
+                                            <select id="diarizationChunkSeconds" class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs">
+                                                <option value="60">1 min</option>
+                                                <option value="90">1.5 min</option>
+                                                <option value="120">2 min</option>
+                                                <option value="150" selected>2.5 min</option>
+                                                <option value="180">3 min</option>
+                                            </select>
+                                        </div>
+                                        <div class="flex items-center justify-between">
+                                            <label class="text-xs text-gray-400">Overlap</label>
+                                            <select id="diarizationOverlapSeconds" class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs">
+                                                <option value="2">2 sec</option>
+                                                <option value="5" selected>5 sec</option>
+                                                <option value="10">10 sec</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1048,6 +1080,21 @@
             }
         }
         
+        function updateAutoSplitOptions() {
+            const autoSplitCheckbox = document.getElementById('diarizationAutoSplit');
+            const autoSplitOptions = document.getElementById('autoSplitOptions');
+            if (autoSplitCheckbox && autoSplitOptions) {
+                autoSplitOptions.classList.toggle('hidden', !autoSplitCheckbox.checked);
+            }
+        }
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            const autoSplitCheckbox = document.getElementById('diarizationAutoSplit');
+            if (autoSplitCheckbox) {
+                autoSplitCheckbox.addEventListener('change', updateAutoSplitOptions);
+            }
+        });
+        
         // Load job history for server mode
         async function loadJobHistory() {
             if (!IS_SERVER_MODE) return;
@@ -1392,6 +1439,14 @@
                 if (minSpeakers) options.minSpeakers = parseInt(minSpeakers, 10);
                 if (maxSpeakers) options.maxSpeakers = parseInt(maxSpeakers, 10);
                 if (numSpeakers) options.numSpeakers = parseInt(numSpeakers, 10);
+                
+                // Auto-split options
+                const autoSplit = document.getElementById('diarizationAutoSplit')?.checked || false;
+                options.diarizationAutoSplit = autoSplit;
+                if (autoSplit) {
+                    options.diarizationChunkSeconds = parseInt(document.getElementById('diarizationChunkSeconds')?.value || '150', 10);
+                    options.diarizationOverlapSeconds = parseInt(document.getElementById('diarizationOverlapSeconds')?.value || '5', 10);
+                }
             }
             
             submitBtn.disabled = true;

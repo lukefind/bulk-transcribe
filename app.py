@@ -1477,8 +1477,25 @@ def api_create_job():
             'channels': audio_info.get('channels') if audio_info else None
         })
     
-    # Validate diarization duration limits on CPU
-    if diarization_enabled and requested_backend == 'cpu':
+    # Validate diarization duration limits on CPU (unless auto-split is enabled)
+    diarization_auto_split = options.get('diarizationAutoSplit', False)
+    diarization_chunk_seconds = options.get('diarizationChunkSeconds', 150)
+    diarization_overlap_seconds = options.get('diarizationOverlapSeconds', 5)
+    
+    # Validate auto-split parameters
+    if diarization_auto_split:
+        if diarization_chunk_seconds < 30 or diarization_chunk_seconds > 600:
+            return jsonify({
+                'error': 'Chunk length must be between 30 and 600 seconds',
+                'code': 'INVALID_CHUNK_LENGTH'
+            }), 400
+        if diarization_overlap_seconds >= diarization_chunk_seconds:
+            return jsonify({
+                'error': 'Overlap must be less than chunk length',
+                'code': 'INVALID_OVERLAP'
+            }), 400
+    
+    if diarization_enabled and requested_backend == 'cpu' and not diarization_auto_split:
         too_long_files = []
         for inp in inputs:
             duration = inp.get('durationSec')
@@ -1499,6 +1516,7 @@ def api_create_job():
                 'maxDurationFormatted': format_duration(max_diarization_duration),
                 'tooLongFiles': too_long_files,
                 'suggestions': [
+                    'Enable "Auto-split long audio" to process in chunks',
                     'Split audio into shorter segments (under 3 minutes)',
                     'Disable diarization for this job',
                     'Run on GPU backend if available',
