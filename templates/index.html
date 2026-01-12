@@ -392,8 +392,21 @@
                                 </div>
                                 <p class="text-xs text-gray-500">If you know the exact number of speakers, set "Fixed speakers" for best results.</p>
                                 
-                                <!-- Auto-split for long files -->
+                                <!-- Max diarization length -->
                                 <div class="border-t border-gray-700/50 pt-3 mt-3">
+                                    <div class="flex items-center justify-between mb-2">
+                                        <label class="text-xs text-gray-400">Max diarization length</label>
+                                        <select id="diarizationMaxDuration" class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs">
+                                            <option value="180" selected>3 min</option>
+                                            <option value="300">5 min</option>
+                                            <option value="600">10 min</option>
+                                            <option value="900">15 min</option>
+                                            <option value="1200">20 min</option>
+                                            <option value="1800">30 min</option>
+                                        </select>
+                                    </div>
+                                    <p class="text-xs text-gray-500 mb-3">Files longer than this require auto-split.</p>
+                                    
                                     <div class="flex items-center justify-between mb-2">
                                         <label class="text-sm text-gray-300 flex items-center gap-2">
                                             <input type="checkbox" id="diarizationAutoSplit" class="rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500">
@@ -402,24 +415,19 @@
                                     </div>
                                     <p class="text-xs text-gray-500 mb-2" id="autoSplitHelp">Process long files by splitting into chunks. Recommended for CPU.</p>
                                     
-                                    <div id="autoSplitOptions" class="space-y-2 hidden">
-                                        <div class="flex items-center justify-between">
-                                            <label class="text-xs text-gray-400">Chunk length</label>
-                                            <select id="diarizationChunkSeconds" class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs">
-                                                <option value="60">1 min</option>
-                                                <option value="90">1.5 min</option>
-                                                <option value="120">2 min</option>
-                                                <option value="150" selected>2.5 min</option>
-                                                <option value="180">3 min</option>
-                                            </select>
+                                    <!-- Policy preview (auto-computed) -->
+                                    <div id="policyPreview" class="mt-3 p-2 bg-surface-800/50 rounded text-xs text-gray-400 hidden">
+                                        <div class="flex items-center justify-between mb-1">
+                                            <span>Chunk size:</span>
+                                            <span id="policyChunkSeconds" class="text-gray-300">150s</span>
                                         </div>
-                                        <div class="flex items-center justify-between">
-                                            <label class="text-xs text-gray-400">Overlap</label>
-                                            <select id="diarizationOverlapSeconds" class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs">
-                                                <option value="2">2 sec</option>
-                                                <option value="5" selected>5 sec</option>
-                                                <option value="10">10 sec</option>
-                                            </select>
+                                        <div class="flex items-center justify-between mb-1">
+                                            <span>Overlap:</span>
+                                            <span id="policyOverlapSeconds" class="text-gray-300">5s</span>
+                                        </div>
+                                        <div id="policyEstimatedChunks" class="flex items-center justify-between hidden">
+                                            <span>Est. chunks:</span>
+                                            <span id="policyChunkCount" class="text-gray-300">-</span>
                                         </div>
                                     </div>
                                 </div>
@@ -476,6 +484,25 @@
                     <div class="bg-surface-700/30 rounded-lg p-3">
                         <div class="text-gray-400 text-xs mb-1">Elapsed</div>
                         <div id="jobElapsed" class="text-white font-mono text-lg">00:00</div>
+                    </div>
+                </div>
+                
+                <!-- Diarization policy (shown when diarization enabled) -->
+                <div id="jobDiarizationPolicy" class="bg-surface-700/30 rounded-lg p-3 mb-4 hidden">
+                    <div class="text-xs text-gray-400 mb-2">Diarization Policy</div>
+                    <div class="grid grid-cols-3 gap-2 text-xs">
+                        <div>
+                            <span class="text-gray-500">Max:</span>
+                            <span id="jobPolicyMaxDuration" class="text-gray-300 ml-1">3m</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-500">Chunk:</span>
+                            <span id="jobPolicyChunk" class="text-gray-300 ml-1">150s</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-500">Overlap:</span>
+                            <span id="jobPolicyOverlap" class="text-gray-300 ml-1">5s</span>
+                        </div>
                     </div>
                 </div>
                 
@@ -1080,19 +1107,91 @@
             }
         }
         
-        function updateAutoSplitOptions() {
-            const autoSplitCheckbox = document.getElementById('diarizationAutoSplit');
-            const autoSplitOptions = document.getElementById('autoSplitOptions');
-            if (autoSplitCheckbox && autoSplitOptions) {
-                autoSplitOptions.classList.toggle('hidden', !autoSplitCheckbox.checked);
+        // Diarization policy state
+        let currentDiarizationPolicy = null;
+        let diarizationPolicyConfig = null;
+        
+        async function updateDiarizationPolicy() {
+            const diarizationEnabled = document.getElementById('enableDiarization')?.checked || false;
+            const autoSplit = document.getElementById('diarizationAutoSplit')?.checked || false;
+            const maxDuration = parseInt(document.getElementById('diarizationMaxDuration')?.value || '180', 10);
+            
+            const policyPreview = document.getElementById('policyPreview');
+            
+            if (!diarizationEnabled) {
+                if (policyPreview) policyPreview.classList.add('hidden');
+                currentDiarizationPolicy = null;
+                return;
             }
+            
+            try {
+                const response = await fetch('/api/diarization/policy', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        diarizationEnabled: true,
+                        diarizationAutoSplit: autoSplit,
+                        requestedMaxDurationSeconds: maxDuration
+                    })
+                });
+                
+                const data = await response.json();
+                currentDiarizationPolicy = data.policy;
+                diarizationPolicyConfig = data.serverConfig;
+                
+                // Update policy preview
+                if (policyPreview && currentDiarizationPolicy) {
+                    document.getElementById('policyChunkSeconds').textContent = `${currentDiarizationPolicy.chunkSeconds}s`;
+                    document.getElementById('policyOverlapSeconds').textContent = `${currentDiarizationPolicy.overlapSeconds}s`;
+                    
+                    // Show preview only when auto-split is enabled
+                    policyPreview.classList.toggle('hidden', !autoSplit);
+                }
+                
+                // Update max duration dropdown options based on server config
+                if (diarizationPolicyConfig) {
+                    updateMaxDurationOptions(diarizationPolicyConfig.serverMaxDurationSeconds);
+                }
+            } catch (e) {
+                console.error('Failed to compute diarization policy:', e);
+            }
+        }
+        
+        function updateMaxDurationOptions(serverMax) {
+            const select = document.getElementById('diarizationMaxDuration');
+            if (!select) return;
+            
+            const options = select.querySelectorAll('option');
+            options.forEach(opt => {
+                const val = parseInt(opt.value, 10);
+                opt.disabled = val > serverMax;
+                if (val > serverMax) {
+                    opt.textContent = opt.textContent.replace(/ \(unavailable\)$/, '') + ' (unavailable)';
+                }
+            });
+        }
+        
+        function updateAutoSplitOptions() {
+            updateDiarizationPolicy();
         }
         
         document.addEventListener('DOMContentLoaded', function() {
             const autoSplitCheckbox = document.getElementById('diarizationAutoSplit');
+            const maxDurationSelect = document.getElementById('diarizationMaxDuration');
+            const diarizationCheckbox = document.getElementById('enableDiarization');
+            
             if (autoSplitCheckbox) {
-                autoSplitCheckbox.addEventListener('change', updateAutoSplitOptions);
+                autoSplitCheckbox.addEventListener('change', updateDiarizationPolicy);
             }
+            if (maxDurationSelect) {
+                maxDurationSelect.addEventListener('change', updateDiarizationPolicy);
+            }
+            if (diarizationCheckbox) {
+                diarizationCheckbox.addEventListener('change', updateDiarizationPolicy);
+            }
+            
+            // Initial policy fetch
+            updateDiarizationPolicy();
         });
         
         // Load job history for server mode
@@ -1569,13 +1668,13 @@
                 if (maxSpeakers) options.maxSpeakers = parseInt(maxSpeakers, 10);
                 if (numSpeakers) options.numSpeakers = parseInt(numSpeakers, 10);
                 
-                // Auto-split options
+                // Max duration and auto-split options
+                const maxDuration = parseInt(document.getElementById('diarizationMaxDuration')?.value || '180', 10);
+                options.diarizationMaxDurationSeconds = maxDuration;
+                
                 const autoSplit = document.getElementById('diarizationAutoSplit')?.checked || false;
                 options.diarizationAutoSplit = autoSplit;
-                if (autoSplit) {
-                    options.diarizationChunkSeconds = parseInt(document.getElementById('diarizationChunkSeconds')?.value || '150', 10);
-                    options.diarizationOverlapSeconds = parseInt(document.getElementById('diarizationOverlapSeconds')?.value || '5', 10);
-                }
+                // Note: chunkSeconds and overlapSeconds are auto-computed by backend policy
             }
             
             submitBtn.disabled = true;
@@ -1750,6 +1849,28 @@
                 const jobElapsedEl = document.getElementById('jobElapsed');
                 if (jobElapsedEl) {
                     jobElapsedEl.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+                }
+            }
+            
+            // Update diarization policy display
+            const policyDiv = document.getElementById('jobDiarizationPolicy');
+            const options = job.options || {};
+            const effectivePolicy = options.diarizationEffective;
+            
+            if (policyDiv) {
+                if (options.diarizationEnabled && effectivePolicy) {
+                    policyDiv.classList.remove('hidden');
+                    
+                    const formatDuration = (secs) => {
+                        if (secs >= 60) return `${Math.floor(secs / 60)}m`;
+                        return `${secs}s`;
+                    };
+                    
+                    document.getElementById('jobPolicyMaxDuration').textContent = formatDuration(effectivePolicy.maxDurationSeconds);
+                    document.getElementById('jobPolicyChunk').textContent = `${effectivePolicy.chunkSeconds}s`;
+                    document.getElementById('jobPolicyOverlap').textContent = `${effectivePolicy.overlapSeconds}s`;
+                } else {
+                    policyDiv.classList.add('hidden');
                 }
             }
             
