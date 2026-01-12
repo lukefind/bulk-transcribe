@@ -1508,7 +1508,17 @@ def api_create_job():
 
 def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, outputs_dir: str, backend: str):
     """Run transcription job and update manifest with progress."""
+    from logger import log_event, with_timer
+    
     manifest_path = session_store.job_manifest_path(session_id, job_id)
+    
+    # Log job start
+    log_event('info', 'job_started', 
+             jobId=job_id, 
+             sessionId=session_id,
+             backend=backend,
+             numFiles=len(inputs),
+             options=options)
     
     def update_manifest(**updates):
         manifest = session_store.read_json(manifest_path) or {}
@@ -1681,25 +1691,85 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                 
                 if diarization_enabled:
                     update_manifest(progress={
-                        'currentFile': f'{original_name} (running diarization...)',
+                        'currentFile': f'{original_name} (loading diarization pipeline...)',
                         'currentFileIndex': idx,
                         'percent': int((idx / total) * 100)
                     })
                     
                     try:
                         import diarization
-                        speaker_segments = diarization.run_diarization(
-                            filepath,
-                            min_speakers=options.get('minSpeakers'),
-                            max_speakers=options.get('maxSpeakers'),
-                            num_speakers=options.get('numSpeakers'),
-                            device=device
-                        )
+                        import time
+                        from threading import Thread
+                        from queue import Queue, Empty
                         
-                        # Check for cancellation after diarization
+                        # Add watchdog timeout for diarization
+                        max_diarization_minutes = int(os.environ.get('MAX_DIARIZATION_MINUTES', '30'))
+                        diarization_result = Queue()
+                        diarization_error = Queue()
+                        
+                        def run_diarization_with_timeout():
+                            try:
+                                # Check for cancellation before starting diarization
+                                if is_cancelled():
+                                    return
+                                
+                                update_manifest(progress={
+                                    'currentFile': f'{original_name} (running diarization...)',
+                                    'currentFileIndex': idx,
+                                    'percent': int((idx / total) * 100)
+                                })
+                                
+                                speaker_segments = diarization.run_diarization(
+                                    filepath,
+                                    min_speakers=options.get('minSpeakers'),
+                                    max_speakers=options.get('maxSpeakers'),
+                                    num_speakers=options.get('numSpeakers'),
+                                    device=device,
+                                    job_id=job_id,
+                                    session_id=session_id
+                                )
+                                diarization_result.put(speaker_segments)
+                            except Exception as e:
+                                diarization_error.put(e)
+                        
+                        # Start diarization in thread
+                        diarization_thread = Thread(target=run_diarization_with_timeout)
+                        diarization_thread.start()
+                        
+                        # Wait for completion or timeout
+                        diarization_thread.join(timeout=max_diarization_minutes * 60)
+                        
+                        # Check if still running (timeout)
+                        if diarization_thread.is_alive():
+                            fail_job(
+                                'DIARIZATION_TIMEOUT',
+                                f'Diarization timed out after {max_diarization_minutes} minutes',
+                                'diarization',
+                                'Try with a shorter audio file or increase MAX_DIARIZATION_MINUTES',
+                                outputs
+                            )
+                            return
+                        
+                        # Check for cancellation
                         if is_cancelled():
                             cancel_job(outputs)
                             return
+                        
+                        # Get result or error
+                        try:
+                            speaker_segments = diarization_result.get_nowait()
+                        except Empty:
+                            try:
+                                error = diarization_error.get_nowait()
+                                raise error
+                            except Empty:
+                                fail_job(
+                                    'DIARIZATION_ERROR',
+                                    'Diarization failed without error message',
+                                    'diarization',
+                                    outputs=outputs
+                                )
+                                return
                         
                         update_manifest(progress={
                             'currentFile': f'{original_name} (merging transcript + speakers...)',
@@ -1709,7 +1779,9 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                         
                         merged_segments = diarization.merge_transcript_with_speakers(
                             result.get('segments', []),
-                            speaker_segments
+                            speaker_segments,
+                            job_id=job_id,
+                            session_id=session_id
                         )
                     except ImportError as e:
                         # pyannote not installed - record error but continue without diarization
@@ -1869,6 +1941,14 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
         has_errors = any(o.get('error') for o in outputs)
         final_status = 'complete_with_errors' if has_errors else 'complete'
         
+        # Log job completion
+        log_event('info', 'job_finished', 
+                 jobId=job_id,
+                 sessionId=session_id,
+                 status=final_status,
+                 numOutputs=len(outputs),
+                 numErrors=sum(1 for o in outputs if o.get('error')))
+        
         update_manifest(
             status=final_status,
             finishedAt=datetime.now(timezone.utc).isoformat(),
@@ -1878,6 +1958,12 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
         
     except Exception as e:
         # Catch-all for unexpected errors
+        log_event('error', 'job_failed', 
+                 jobId=job_id,
+                 sessionId=session_id,
+                 error=str(e),
+                 phase='unknown')
+        
         fail_job('WORKER_EXCEPTION', f'Unexpected error: {str(e)[:400]}',
                  phase='unknown',
                  suggestion='Check server logs for details.',
@@ -2185,19 +2271,63 @@ def api_get_runtime():
     
     # Add diarization availability info
     hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
+    
+    # Check diarization availability
     pyannote_available = False
     diarization_reason = None
     
+    # Check if HF token is present
+    hf_token_present = bool(hf_token)
+    env['hfTokenPresent'] = hf_token_present
+    
+    # Check if pyannote can be imported
     try:
         import pyannote.audio
         pyannote_available = True
+        env['diarizationImportOk'] = True
     except (ImportError, AttributeError, Exception) as e:
+        pyannote_available = False
+        env['diarizationImportOk'] = False
         diarization_reason = f'pyannote.audio not available: {type(e).__name__}'
     
-    if pyannote_available and not hf_token:
-        diarization_reason = 'HF_TOKEN environment variable not set'
+    # Check HF access if token is present and pyannote is available
+    hf_access_ok = False
+    hf_access_missing = []
+    hf_access_message = None
     
-    env['diarizationAvailable'] = pyannote_available and bool(hf_token)
+    if hf_token_present and pyannote_available:
+        try:
+            from diarization import check_diarization_access
+            access_info = check_diarization_access(hf_token)
+            hf_access_ok = access_info['ok']
+            hf_access_missing = access_info['missing']
+            hf_access_message = access_info['message']
+        except Exception as e:
+            hf_access_ok = False
+            hf_access_message = f"Failed to check access: {e}"
+    
+    env['hfAccessOk'] = hf_access_ok
+    env['hfAccessMissingRepos'] = hf_access_missing
+    env['hfAccessMessage'] = hf_access_message
+    
+    # Determine overall diarization availability
+    diarization_available = hf_token_present and pyannote_available and hf_access_ok
+    env['diarizationAvailable'] = diarization_available
+    
+    # Set reason if not available
+    if not diarization_available:
+        reasons = []
+        if not hf_token_present:
+            reasons.append('HF_TOKEN environment variable not set')
+        if not pyannote_available:
+            reasons.append('pyannote.audio not available')
+        if hf_token_present and pyannote_available and not hf_access_ok:
+            if hf_access_missing:
+                reasons.append(f"Missing access to: {', '.join(hf_access_missing)}")
+            if hf_access_message:
+                reasons.append(hf_access_message)
+        diarization_reason = '; '.join(reasons)
+    
     if diarization_reason:
         env['diarizationReason'] = diarization_reason
     

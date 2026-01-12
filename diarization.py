@@ -6,7 +6,57 @@ or session dependencies. It is a pure computation module.
 """
 
 import os
-from typing import Optional
+import json
+import tempfile
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
+
+def check_diarization_access(hf_token: str) -> Dict[str, any]:
+    """
+    Verify HuggingFace access to pyannote models without downloading models.
+    
+    Args:
+        hf_token: HuggingFace token
+    
+    Returns:
+        Dict with access information:
+        - ok: bool - True if access to both repos
+        - missing: list[str] - List of repos that can't be accessed
+        - message: str|None - Error message if any
+    """
+    from huggingface_hub import HfApi
+    
+    repos_to_check = [
+        "pyannote/speaker-diarization-3.1",
+        "pyannote/segmentation-3.0"
+    ]
+    
+    missing = []
+    message = None
+    
+    try:
+        api = HfApi(token=hf_token)
+        
+        for repo_id in repos_to_check:
+            try:
+                api.model_info(repo_id=repo_id)
+            except Exception as e:
+                error_msg = str(e)
+                if "401" in error_msg or "403" in error_msg or "Cannot access gated repo" in error_msg:
+                    missing.append(repo_id)
+                else:
+                    message = f"Unexpected error checking {repo_id}: {e}"
+                    return {"ok": False, "missing": missing, "message": message}
+    
+    except Exception as e:
+        message = f"Failed to initialize HfApi: {e}"
+        return {"ok": False, "missing": missing, "message": message}
+    
+    return {
+        "ok": len(missing) == 0,
+        "missing": missing,
+        "message": message
+    }
 
 
 def run_diarization(
@@ -14,7 +64,9 @@ def run_diarization(
     min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None,
     num_speakers: Optional[int] = None,
-    device: str = 'cpu'
+    device: str = 'cpu',
+    job_id: Optional[str] = None,
+    session_id: Optional[str] = None
 ) -> list[dict]:
     """
     Run speaker diarization on an audio file.
@@ -25,6 +77,8 @@ def run_diarization(
         max_speakers: Maximum number of speakers (optional)
         num_speakers: Exact number of speakers if known (optional)
         device: PyTorch device ('cpu', 'cuda', 'mps')
+        job_id: Job ID for logging (optional)
+        session_id: Session ID for logging (optional)
     
     Returns:
         List of speaker segments:
@@ -38,9 +92,24 @@ def run_diarization(
         ImportError: If pyannote.audio is not installed
         RuntimeError: If diarization fails
     """
+    from logger import log_event, with_timer
+    
+    # Log diarization start
+    log_fields = {
+        'stage': 'diarization',
+        'file': os.path.basename(audio_path)
+    }
+    if job_id:
+        log_fields['jobId'] = job_id
+    if session_id:
+        log_fields['sessionId'] = session_id
+    
+    log_event('info', 'diarization_started', **log_fields)
+    
     try:
         from pyannote.audio import Pipeline
     except ImportError as e:
+        log_event('error', 'diarization_import_failed', error=str(e), **log_fields)
         raise ImportError(
             "pyannote.audio is required for speaker diarization. "
             "Install with: pip install pyannote.audio"
@@ -49,19 +118,36 @@ def run_diarization(
     # Get HuggingFace token from environment
     hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
     if not hf_token:
+        log_event('error', 'diarization_no_token', **log_fields)
         raise RuntimeError(
             "HuggingFace token required for pyannote. "
             "Set HF_TOKEN environment variable. "
             "Get token from https://huggingface.co/settings/tokens"
         )
     
-    # Load the diarization pipeline
+    # Log HF cache directory
     try:
-        pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
-            use_auth_token=hf_token
-        )
+        from huggingface_hub import snapshot_download
+        cache_dir = snapshot_download(repo_id="pyannote/speaker-diarization-3.1", 
+                                     use_auth_token=hf_token, 
+                                     allow_patterns=["config.yaml"],
+                                     local_files_only=True)
+        log_event('info', 'diarization_cache_info', cacheDir=os.path.dirname(cache_dir), **log_fields)
+    except:
+        pass  # Cache check is optional
+    
+    # Load the diarization pipeline with logging
+    log_event('info', 'diarization_model_loading_started', model='pyannote/speaker-diarization-3.1', **log_fields)
+    
+    try:
+        with with_timer('diarization_model_loading', **log_fields):
+            pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                use_auth_token=hf_token
+            )
+            
         if pipeline is None:
+            log_event('error', 'diarization_model_none', **log_fields)
             raise RuntimeError(
                 "Pipeline.from_pretrained returned None. "
                 "This may be due to missing model access. "
@@ -70,6 +156,8 @@ def run_diarization(
             )
     except Exception as e:
         error_msg = str(e)
+        log_event('error', 'diarization_model_load_failed', error=error_msg, **log_fields)
+        
         if "Cannot access gated repo" in error_msg:
             raise RuntimeError(
                 "Model access required. Please visit the following URLs and accept the user agreements:\n"
@@ -83,6 +171,7 @@ def run_diarization(
     # Move to device if not CPU
     if device != 'cpu':
         import torch
+        log_event('info', 'diarization_device_move', device=device, **log_fields)
         pipeline.to(torch.device(device))
     
     # Build diarization parameters
@@ -95,10 +184,14 @@ def run_diarization(
         if max_speakers is not None:
             diarize_params['max_speakers'] = max_speakers
     
-    # Run diarization
+    log_event('info', 'diarization_params', params=diarize_params, **log_fields)
+    
+    # Run diarization with timing
     try:
-        diarization = pipeline(audio_path, **diarize_params)
+        with with_timer('diarization_run', **log_fields):
+            diarization = pipeline(audio_path, **diarize_params)
     except Exception as e:
+        log_event('error', 'diarization_run_failed', error=str(e), **log_fields)
         raise RuntimeError(f"Diarization failed: {e}") from e
     
     # Convert to list of segments
@@ -110,13 +203,20 @@ def run_diarization(
             "speaker": speaker
         })
     
+    log_event('info', 'diarization_finished', 
+             numSegments=len(segments), 
+             numSpeakers=len(set(s['speaker'] for s in segments)),
+             **log_fields)
+    
     return segments
 
 
 def merge_transcript_with_speakers(
     transcript_segments: list[dict],
     speaker_segments: list[dict],
-    merge_gap_threshold: float = 1.0
+    merge_gap_threshold: float = 1.0,
+    job_id: Optional[str] = None,
+    session_id: Optional[str] = None
 ) -> list[dict]:
     """
     Merge Whisper transcript segments with speaker diarization.
@@ -125,6 +225,8 @@ def merge_transcript_with_speakers(
         transcript_segments: Whisper segments with {start, end, text}
         speaker_segments: Diarization segments with {start, end, speaker}
         merge_gap_threshold: Max gap (seconds) to merge consecutive same-speaker segments
+        job_id: Job ID for logging (optional)
+        session_id: Session ID for logging (optional)
     
     Returns:
         List of merged segments:
@@ -133,6 +235,20 @@ def merge_transcript_with_speakers(
             ...
         ]
     """
+    from logger import log_event, with_timer
+    
+    # Log merge start
+    log_fields = {
+        'stage': 'merge',
+        'numTranscriptSegments': len(transcript_segments),
+        'numSpeakerSegments': len(speaker_segments)
+    }
+    if job_id:
+        log_fields['jobId'] = job_id
+    if session_id:
+        log_fields['sessionId'] = session_id
+    
+    log_event('info', 'merge_started', **log_fields)
     if not transcript_segments:
         return []
     
@@ -201,6 +317,10 @@ def merge_transcript_with_speakers(
             last["text"] = last["text"] + " " + seg["text"]
         else:
             merged.append(seg.copy())
+    
+    log_event('info', 'merge_finished', 
+             numMergedSegments=len(merged),
+             **log_fields)
     
     return merged
 
