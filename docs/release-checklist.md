@@ -299,6 +299,83 @@ curl -b cookies.txt -X POST http://localhost:8476/api/jobs \
 - [ ] Upload limits enforced
 - [ ] Admin stats accessible
 
+### 8. Diarization (Pyannote) Verification
+
+**Prerequisites**: HF_TOKEN set in environment with access to pyannote models
+
+**Test**: HF access verification via /api/runtime
+
+```bash
+# Check diarization readiness
+curl -s http://localhost:8476/api/runtime | jq '.hfTokenPresent, .hfAccessOk, .diarizationAvailable'
+# Expected: true, true, true
+```
+
+**Test**: End-to-end diarization smoke test
+
+```bash
+# Run smoke test with a real audio file
+./scripts/smoke_diarization.sh ./samples/test.wav
+```
+
+**Expected logs** (structured JSON):
+```json
+{"event":"job_started","jobId":"...","sessionId":"...","backend":"cpu",...}
+{"event":"diarization_started","jobId":"...","file":"test.wav",...}
+{"event":"diarization_model_loading_started","jobId":"...",...}
+{"event":"diarization_model_loading_finished","jobId":"...","durationMs":...}
+{"event":"diarization_finished","jobId":"...","numSegments":...,"numSpeakers":...}
+{"event":"merge_started","jobId":"...",...}
+{"event":"merge_finished","jobId":"...","numMergedSegments":...}
+{"event":"job_finished","jobId":"...","status":"complete",...}
+```
+
+**Expected outputs**:
+- `.speaker.md` - Transcript with speaker labels
+- `.diarization.json` - Raw diarization data
+- `.rttm` - Standard RTTM format
+
+**Test**: Diarization timeout (optional)
+
+```bash
+# Set very short timeout and test
+export MAX_DIARIZATION_MINUTES=0.01
+# Run job - should fail with DIARIZATION_TIMEOUT
+```
+
+**Test: UI feedback**
+
+1. Load UI with invalid HF_TOKEN
+   - Diarization checkbox should be disabled
+   - Warning message should show reason
+
+2. Load UI with valid HF_TOKEN
+   - Diarization checkbox should be enabled
+   - No warning message
+
+3. Run diarization job
+   - Progress should show: "loading diarization pipeline..."
+   - Progress should show: "running diarization..."
+   - Progress should show: "merging transcript + speakers..."
+
+**Pass criteria**:
+- `/api/runtime` accurately reports diarization readiness
+- HF access check works without downloading models
+- Diarization job completes and produces all required outputs
+- Structured logs show all stages with durations
+- Jobs timeout after MAX_DIARIZATION_MINUTES if stuck
+- UI shows clear feedback for availability and progress
+- Error reports are downloadable when diarization fails
+
+- [ ] HF access verification works
+- [ ] Diarization smoke test passes
+- [ ] All required outputs generated
+- [ ] Structured logs present with durations
+- [ ] Timeout enforcement works
+- [ ] UI shows availability feedback
+- [ ] UI shows progress updates
+- [ ] Error reports downloadable
+
 **Verified by**: _______________  
 **Date**: _______________  
 **Version**: _______________
