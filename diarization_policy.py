@@ -210,7 +210,50 @@ def compute_diarization_policy(
         'overlapSeconds': overlap_seconds,
         'derived': derived,
         'clamped': clamped,
+        'serverMaxDurationSeconds': server_max_duration_seconds,
     }
+
+
+def get_clamping_warnings(policy: dict) -> list:
+    """
+    Generate user-friendly warning messages for any clamped values.
+    
+    Args:
+        policy: The computed policy dict from compute_diarization_policy()
+        
+    Returns:
+        List of warning message strings
+    """
+    if not policy:
+        return []
+    
+    warnings = []
+    clamped = policy.get('clamped', {})
+    
+    if clamped.get('maxDurationClamped'):
+        original = clamped.get('maxDurationOriginal')
+        effective = policy.get('maxDurationSeconds')
+        server_max = policy.get('serverMaxDurationSeconds')
+        if original and original > server_max:
+            warnings.append(
+                f"Max duration clamped from {format_duration_human(original)} to server cap ({format_duration_human(server_max)})"
+            )
+        elif original and original < 30:
+            warnings.append(
+                f"Max duration clamped from {original}s to minimum (30s)"
+            )
+    
+    if clamped.get('chunkSecondsClamped'):
+        original = clamped.get('chunkSecondsOriginal')
+        effective = policy.get('chunkSeconds')
+        warnings.append(f"Chunk size adjusted from {original}s to {effective}s (within allowed bounds)")
+    
+    if clamped.get('overlapSecondsClamped'):
+        original = clamped.get('overlapSecondsOriginal')
+        effective = policy.get('overlapSeconds')
+        warnings.append(f"Overlap adjusted from {original}s to {effective}s")
+    
+    return warnings
 
 
 def estimate_chunk_count(
