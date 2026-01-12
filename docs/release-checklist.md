@@ -303,8 +303,19 @@ curl -b cookies.txt -X POST http://localhost:8476/api/jobs \
 
 **Prerequisites**: 
 - HF_TOKEN set in environment with access to pyannote models
-- Container memory limit of at least 8GB (diarization is memory-intensive)
-- For audio files >5 minutes, consider using GPU or increasing memory to 16GB
+- Recommended host memory: 8GB+ for short files, 16GB+ for longer files
+
+**Configuration** (in `.env`):
+```bash
+# Maximum audio duration for CPU diarization (default: 180 = 3 minutes)
+MAX_DIARIZATION_DURATION_SECONDS=180
+
+# Maximum diarization runtime before timeout (default: 30 minutes)
+MAX_DIARIZATION_MINUTES=30
+
+# Maximum converted WAV size (default: 500 MB)
+DIARIZATION_MAX_WAV_MB=500
+```
 
 **Test**: HF access verification via /api/runtime
 
@@ -314,23 +325,41 @@ curl -s http://localhost:8476/api/runtime | jq '.hfTokenPresent, .hfAccessOk, .d
 # Expected: true, true, true
 ```
 
-**Test**: End-to-end diarization smoke test
+**Test**: CPU duration guardrail (MUST PASS)
 
 ```bash
-# Run smoke test with a real audio file
+# Upload a file longer than MAX_DIARIZATION_DURATION_SECONDS (default 3 min)
+# Try to create job with diarization enabled on CPU backend
+# Expected: 400 error with code DIARIZATION_TOO_LONG_CPU
+```
+
+Expected response:
+```json
+{
+  "error": "Audio file(s) too long for CPU diarization. Max duration: 3m 0s",
+  "code": "DIARIZATION_TOO_LONG_CPU",
+  "maxDurationSec": 180,
+  "tooLongFiles": [{"filename": "long.m4a", "durationSec": 430, "durationFormatted": "7m 10s"}],
+  "suggestions": ["Split audio into shorter segments", "Disable diarization", "Run on GPU"]
+}
+```
+
+**Test**: End-to-end diarization smoke test (short file)
+
+```bash
+# Run smoke test with a short audio file (<3 min)
 ./scripts/smoke_diarization.sh ./samples/test.wav
 ```
 
 **Expected logs** (structured JSON):
 ```json
-{"event":"job_started","jobId":"...","sessionId":"...","backend":"cpu",...}
-{"event":"diarization_started","jobId":"...","file":"test.wav",...}
-{"event":"diarization_model_loading_started","jobId":"...",...}
+{"event":"job_started","jobId":"...","backend":"cpu","memoryMB":...}
+{"event":"wav_convert_started","jobId":"...","file":"..."}
+{"event":"wav_convert_finished","jobId":"...","durationMs":...,"outputSizeMB":...}
+{"event":"diarization_started","jobId":"...","memoryMB":...}
 {"event":"diarization_model_loading_finished","jobId":"...","durationMs":...}
-{"event":"diarization_finished","jobId":"...","numSegments":...,"numSpeakers":...}
-{"event":"merge_started","jobId":"...",...}
-{"event":"merge_finished","jobId":"...","numMergedSegments":...}
-{"event":"job_finished","jobId":"...","status":"complete",...}
+{"event":"diarization_finished","jobId":"...","numSegments":...,"memoryMB":...}
+{"event":"job_finished","jobId":"...","status":"complete"}
 ```
 
 **Expected outputs**:
@@ -338,12 +367,12 @@ curl -s http://localhost:8476/api/runtime | jq '.hfTokenPresent, .hfAccessOk, .d
 - `.diarization.json` - Raw diarization data
 - `.rttm` - Standard RTTM format
 
-**Test**: Diarization timeout (optional)
+**Test**: WAV conversion size limit
 
 ```bash
-# Set very short timeout and test
-export MAX_DIARIZATION_MINUTES=0.01
-# Run job - should fail with DIARIZATION_TIMEOUT
+# Set very low limit and test with large file
+export DIARIZATION_MAX_WAV_MB=1
+# Expected: DIARIZATION_WAV_TOO_LARGE error
 ```
 
 **Test: UI feedback**
@@ -356,28 +385,29 @@ export MAX_DIARIZATION_MINUTES=0.01
    - Diarization checkbox should be enabled
    - No warning message
 
-3. Run diarization job
-   - Progress should show: "loading diarization pipeline..."
-   - Progress should show: "running diarization..."
-   - Progress should show: "merging transcript + speakers..."
+3. Try to create job with too-long file
+   - Should show clear error with file durations
+   - Should show suggestions (split audio, disable diarization, use GPU)
+
+4. Run diarization job with short file
+   - Progress should show conversion, diarization, merge stages
 
 **Pass criteria**:
 - `/api/runtime` accurately reports diarization readiness
-- HF access check works without downloading models
-- Diarization job completes and produces all required outputs
-- Structured logs show all stages with durations
-- Jobs timeout after MAX_DIARIZATION_MINUTES if stuck
-- UI shows clear feedback for availability and progress
-- Error reports are downloadable when diarization fails
+- Long files rejected at job creation with `DIARIZATION_TOO_LONG_CPU`
+- Short files complete successfully with all outputs
+- WAV conversion respects size limits
+- Structured logs include memory usage and durations
+- UI shows actionable error messages
 
 - [ ] HF access verification works
-- [ ] Diarization smoke test passes
+- [ ] Duration guardrail rejects long files on CPU
+- [ ] Short file diarization succeeds
 - [ ] All required outputs generated
-- [ ] Structured logs present with durations
-- [ ] Timeout enforcement works
-- [ ] UI shows availability feedback
-- [ ] UI shows progress updates
-- [ ] Error reports downloadable
+- [ ] WAV size limit enforced
+- [ ] Structured logs with memory info
+- [ ] UI shows duration error clearly
+- [ ] Suggestions shown for too-long files
 
 **Verified by**: _______________  
 **Date**: _______________  
