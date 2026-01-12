@@ -342,6 +342,56 @@
                             </select>
                         </div>
                         <p class="text-xs text-gray-500">Max segment length only applies when word timestamps are enabled.</p>
+                        
+                        <!-- Speaker Diarization -->
+                        <div class="mt-4 pt-4 border-t border-gray-700/30">
+                            <label class="flex items-center gap-3 cursor-pointer group mb-3">
+                                <input type="checkbox" id="diarizationEnabled" onchange="updateDiarizationOptions()"
+                                       class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0">
+                                <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Enable speaker diarization</span>
+                            </label>
+                            <p class="text-xs text-gray-500 mb-3">Identifies who spoke when. Requires HuggingFace token (HF_TOKEN env var).</p>
+                            
+                            <div id="diarizationOptions" class="hidden space-y-3 ml-7">
+                                <div class="flex items-center justify-between">
+                                    <label class="text-sm text-gray-300">Min speakers</label>
+                                    <select id="minSpeakers" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                                        <option value="">Auto-detect</option>
+                                        <option value="1">1</option>
+                                        <option value="2">2</option>
+                                        <option value="3">3</option>
+                                        <option value="4">4</option>
+                                        <option value="5">5</option>
+                                    </select>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <label class="text-sm text-gray-300">Max speakers</label>
+                                    <select id="maxSpeakers" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                                        <option value="">Auto-detect</option>
+                                        <option value="2">2</option>
+                                        <option value="3">3</option>
+                                        <option value="4">4</option>
+                                        <option value="5">5</option>
+                                        <option value="6">6</option>
+                                        <option value="8">8</option>
+                                        <option value="10">10</option>
+                                    </select>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <label class="text-sm text-gray-300">Fixed speakers</label>
+                                    <select id="numSpeakers" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                                        <option value="">Auto-detect</option>
+                                        <option value="1">1</option>
+                                        <option value="2">2</option>
+                                        <option value="3">3</option>
+                                        <option value="4">4</option>
+                                        <option value="5">5</option>
+                                        <option value="6">6</option>
+                                    </select>
+                                </div>
+                                <p class="text-xs text-gray-500">If you know the exact number of speakers, set "Fixed speakers" for best results.</p>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -909,6 +959,14 @@
             updateWorkerOptionsUI();
         }
         
+        function updateDiarizationOptions() {
+            const enabled = document.getElementById('diarizationEnabled').checked;
+            const optionsDiv = document.getElementById('diarizationOptions');
+            if (optionsDiv) {
+                optionsDiv.classList.toggle('hidden', !enabled);
+            }
+        }
+        
         // Load job history for server mode
         async function loadJobHistory() {
             if (!IS_SERVER_MODE) return;
@@ -1211,6 +1269,17 @@
             return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
         }
         
+        function getOutputTypeLabel(type) {
+            const labels = {
+                'markdown': 'Transcript',
+                'json': 'JSON',
+                'speaker-markdown': 'Speaker Transcript',
+                'diarization-json': 'Diarization JSON',
+                'rttm': 'RTTM'
+            };
+            return labels[type] || type;
+        }
+        
         async function startServerJob() {
             if (uploadedFiles.length === 0) {
                 showError('No files uploaded. Please upload audio files first.');
@@ -1219,6 +1288,8 @@
             
             const uploadIds = uploadedFiles.map(f => f.id);
             const backendSelect = document.getElementById('processingMode');
+            const diarizationEnabled = document.getElementById('diarizationEnabled')?.checked || false;
+            
             const options = {
                 model: document.getElementById('model').value,
                 language: document.getElementById('language').value,
@@ -1228,7 +1299,18 @@
                 includeTimestamps: document.getElementById('includeTimestamps').checked,
                 wordTimestamps: document.getElementById('wordTimestamps').checked,
                 qualityPreset: document.getElementById('qualityPreset').value,
+                diarizationEnabled: diarizationEnabled,
             };
+            
+            // Add diarization options if enabled
+            if (diarizationEnabled) {
+                const minSpeakers = document.getElementById('minSpeakers')?.value;
+                const maxSpeakers = document.getElementById('maxSpeakers')?.value;
+                const numSpeakers = document.getElementById('numSpeakers')?.value;
+                if (minSpeakers) options.minSpeakers = parseInt(minSpeakers, 10);
+                if (maxSpeakers) options.maxSpeakers = parseInt(maxSpeakers, 10);
+                if (numSpeakers) options.numSpeakers = parseInt(numSpeakers, 10);
+            }
             
             submitBtn.disabled = true;
             submitBtn.innerHTML = '<span class="spinner mr-2"></span> Starting...';
@@ -1438,7 +1520,7 @@
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                             </svg>
                             <span class="text-sm text-gray-300">${output.filename}</span>
-                            <span class="text-xs text-gray-500">(${output.type})</span>
+                            <span class="text-xs text-gray-500">(${getOutputTypeLabel(output.type)})</span>
                         </div>
                         <a href="/api/jobs/${job.jobId}/outputs/${output.id}" 
                            class="text-xs text-primary-400 hover:text-primary-300">Download</a>
