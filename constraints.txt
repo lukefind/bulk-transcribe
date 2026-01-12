@@ -1,0 +1,5 @@
+# Pin torch/torchaudio to versions compatible with pyannote.audio 3.1.0
+torch==2.1.2
+torchaudio==2.1.2
+numpy<2
+huggingface_hub<0.20

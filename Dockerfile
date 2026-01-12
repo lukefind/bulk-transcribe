@@ -10,6 +10,10 @@ LABEL description="Audio transcription using OpenAI Whisper"
 # Build argument to control CPU vs GPU dependencies
 ARG DEVICE=cpu
 
+# Build-time version info (passed from docker-compose or build script)
+ARG BUILD_COMMIT=unknown
+ARG BUILD_TIME=unknown
+
 # Prevent Python from writing pyc files and buffering stdout/stderr
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -27,20 +31,25 @@ RUN useradd --create-home --shell /bin/bash appuser
 WORKDIR /app
 
 # Copy requirements first for better caching
-COPY requirements.txt requirements-server.txt* ./
+COPY requirements.txt requirements-server.txt* constraints.txt* ./
 
 # Install Python dependencies based on DEVICE build arg
 # CPU: use PyTorch CPU-only wheels (no CUDA dependencies)
 # GPU: use default PyTorch wheels with CUDA support
-RUN pip install --no-cache-dir gunicorn && \
-    if [ "$DEVICE" = "cpu" ]; then \
-        echo "Installing CPU-only PyTorch..." && \
-        pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cpu && \
-        pip install --no-cache-dir -r requirements-server.txt; \
+RUN if [ "$DEVICE" = "cpu" ]; then \
+        echo "Installing CPU-only torch/torchaudio..." && \
+        pip install --no-cache-dir \
+            --index-url https://download.pytorch.org/whl/cpu \
+            torch==2.1.2 torchaudio==2.1.2 && \
+        echo "Installing remaining requirements with constraints..." && \
+        pip install --no-cache-dir -r requirements-server.txt -c constraints.txt; \
     else \
-        echo "Installing GPU/CUDA PyTorch..." && \
-        pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu121 && \
-        pip install --no-cache-dir -r requirements-server.txt; \
+        echo "Installing GPU/CUDA torch/torchaudio..." && \
+        pip install --no-cache-dir \
+            --index-url https://download.pytorch.org/whl/cu121 \
+            torch==2.1.2 torchaudio==2.1.2 && \
+        echo "Installing remaining requirements with constraints..." && \
+        pip install --no-cache-dir -r requirements-server.txt -c constraints.txt; \
     fi
 
 # Guardrail: verify no CUDA packages on CPU build
@@ -73,6 +82,10 @@ ENV PORT=8476
 ENV INPUT_DIR=/data/input
 ENV OUTPUT_DIR=/data/output
 ENV DEVICE=cpu
+
+# Build version info (baked into image)
+ENV BUILD_COMMIT=${BUILD_COMMIT}
+ENV BUILD_TIME=${BUILD_TIME}
 
 # Expose port
 EXPOSE 8476
