@@ -30,6 +30,10 @@ os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
 os.environ['NUMEXPR_NUM_THREADS'] = '1'
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
+# Suppress noisy third-party warnings early (before any imports that trigger them)
+from logger import configure_runtime_noise
+configure_runtime_noise()
+
 # Prevent multiprocessing from creating new app instances
 import multiprocessing
 multiprocessing.set_start_method('fork', force=True)
@@ -37,18 +41,40 @@ multiprocessing.set_start_method('fork', force=True)
 import subprocess
 import threading
 import queue
+import secrets
 from dataclasses import replace
-from flask import Flask, render_template, request, jsonify, send_file
+import re
+from flask import Flask, render_template, request, jsonify, send_file, g, Response
 import zipfile
 import io
 import tempfile
 import shutil
 from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
 import json
+from datetime import datetime, timezone
 
 from transcribe_options import TranscribeOptions, get_preset, postprocess_segments
+import session_store
+import compute_backend
 
 app = Flask(__name__)
+
+# Apply ProxyFix for HTTPS detection behind reverse proxy (Caddy, nginx)
+# This ensures request.is_secure works correctly
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+# Configure max upload size from environment
+app.config['MAX_CONTENT_LENGTH'] = session_store.get_max_upload_mb() * 1024 * 1024
+
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    """Handle upload size limit exceeded."""
+    max_mb = session_store.get_max_upload_mb()
+    return jsonify({
+        'error': f'File too large. Maximum upload size is {max_mb}MB.'
+    }), 413
 
 SUPPORTED_FORMATS = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.webm', '.mp4', '.mov', '.avi']
 AVAILABLE_MODELS = ['tiny', 'base', 'small', 'medium', 'large', 'turbo']
@@ -101,6 +127,93 @@ transcription_status = {
 # Thread-safe lock for updating transcription_status
 import threading
 status_lock = threading.Lock()
+
+# Request counter for periodic cleanup
+_request_counter = 0
+_cleanup_interval = 50  # Run cleanup every N requests
+
+
+# =============================================================================
+# Session Middleware
+# =============================================================================
+
+@app.before_request
+def before_request_session():
+    """Ensure session ID exists for all requests."""
+    global _request_counter
+    
+    # Get or generate session ID
+    session_id = request.cookies.get(session_store.COOKIE_NAME)
+    if not session_id:
+        session_id = session_store.new_id(32)
+        g._new_session_id = session_id
+    
+    g.session_id = session_id
+    
+    # Periodic cleanup (exclude current session to prevent mid-request deletion)
+    _request_counter += 1
+    if _request_counter >= _cleanup_interval:
+        _request_counter = 0
+        try:
+            session_store.cleanup_expired_sessions(exclude_session_id=session_id)
+        except Exception:
+            pass  # Don't fail requests due to cleanup errors
+
+
+@app.after_request
+def after_request_session(response):
+    """Set session cookie if new, touch session metadata, and add security headers."""
+    # Set cookie for new sessions
+    if hasattr(g, '_new_session_id'):
+        session_store.set_new_session_cookie(request, response, g._new_session_id)
+    
+    # Touch session to update lastSeenAt (skip for static files and healthz)
+    if hasattr(g, 'session_id') and not request.path.startswith('/static') and request.path != '/healthz':
+        try:
+            session_store.touch_session(g.session_id)
+        except Exception:
+            pass  # Don't fail requests due to session touch errors
+    
+    # Security headers for API endpoints and downloads
+    if request.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+    
+    return response
+
+
+# CSRF-protected endpoints in server mode
+_CSRF_PROTECTED_ENDPOINTS = {
+    'api_upload_files',
+    'api_create_job',
+    'api_cancel_job',
+}
+
+
+def _require_csrf():
+    """Check CSRF token for protected endpoints in server mode."""
+    if not session_store.is_server_mode():
+        return None  # No CSRF in local mode
+    
+    if request.endpoint not in _CSRF_PROTECTED_ENDPOINTS:
+        return None
+    
+    token = request.headers.get('X-CSRF-Token', '')
+    session_id = getattr(g, 'session_id', None)
+    
+    if not session_id or not session_store.validate_csrf_token(session_id, token):
+        return jsonify({'error': 'Invalid or missing CSRF token'}), 403
+    
+    return None
+
+
+@app.before_request
+def before_request_csrf():
+    """Validate CSRF token for protected endpoints."""
+    result = _require_csrf()
+    if result:
+        return result
 
 
 def choose_folder_dialog(prompt="Select a folder"):
@@ -737,12 +850,18 @@ def run_transcription(input_folder: str, output_folder: str, model: str, languag
 def index():
     return render_template('index.html', 
                          models=AVAILABLE_MODELS, 
-                         languages=COMMON_LANGUAGES)
+                         languages=COMMON_LANGUAGES,
+                         app_mode=session_store.get_app_mode(),
+                         is_server_mode=session_store.is_server_mode())
 
 
 @app.route('/start', methods=['POST'])
 def start_transcription():
+    """Start transcription with folder paths. Blocked in server mode."""
     global transcription_status
+    
+    if session_store.is_server_mode():
+        return jsonify({'error': 'Folder-based transcription not available in server mode. Use /api/jobs.'}), 400
     
     if transcription_status['running']:
         return jsonify({'error': 'Transcription already in progress'}), 400
@@ -837,6 +956,10 @@ def healthz():
 
 @app.route('/preview')
 def preview_files():
+    """Preview files in a folder. Blocked in server mode."""
+    if session_store.is_server_mode():
+        return jsonify({'error': 'Folder preview not available in server mode. Use /api/uploads.'}), 404
+    
     input_folder = request.args.get('folder', '')
     if not input_folder or not Path(input_folder).exists():
         return jsonify({'files': [], 'error': 'Folder not found'})
@@ -850,7 +973,10 @@ def preview_files():
 
 @app.route('/browse', methods=['POST'])
 def browse_folder():
-    """Open native folder picker and return selected path."""
+    """Open native folder picker. Blocked in server mode."""
+    if session_store.is_server_mode():
+        return jsonify({'error': 'Folder browser not available in server mode.'}), 404
+    
     data = request.json or {}
     prompt = data.get('prompt', 'Select a folder')
     folder = choose_folder_dialog(prompt)
@@ -1053,8 +1179,11 @@ def delete_model():
 
 
 @app.route('/upload', methods=['POST'])
-def upload_files():
-    """Upload multiple audio files to the input folder."""
+def upload_files_legacy():
+    """Upload files to a folder path. Blocked in server mode."""
+    if session_store.is_server_mode():
+        return jsonify({'error': 'Folder-based upload not available in server mode. Use /api/uploads.'}), 400
+    
     if 'files' not in request.files:
         return jsonify({'error': 'No files provided'}), 400
     
@@ -1104,8 +1233,11 @@ def upload_files():
 
 
 @app.route('/download', methods=['GET'])
-def download_transcriptions():
-    """Download all transcriptions from output folder as a zip file."""
+def download_transcriptions_legacy():
+    """Download from folder path. Blocked in server mode."""
+    if session_store.is_server_mode():
+        return jsonify({'error': 'Folder-based download not available in server mode. Use /api/jobs/<job_id>/download.'}), 404
+    
     output_folder = request.args.get('folder', os.environ.get('OUTPUT_DIR', '/data/output'))
     output_path = Path(output_folder)
     
@@ -1142,8 +1274,11 @@ def download_transcriptions():
 
 
 @app.route('/download/list', methods=['GET'])
-def list_transcriptions():
-    """List available transcription files for download."""
+def list_transcriptions_legacy():
+    """List files in folder. Blocked in server mode."""
+    if session_store.is_server_mode():
+        return jsonify({'error': 'Folder-based listing not available in server mode. Use /api/jobs/<job_id>/outputs.'}), 404
+    
     output_folder = request.args.get('folder', os.environ.get('OUTPUT_DIR', '/data/output'))
     output_path = Path(output_folder)
     
@@ -1169,6 +1304,1898 @@ def list_transcriptions():
         'exists': True,
         'count': len(files)
     })
+
+
+# =============================================================================
+# Session-Isolated API Endpoints (Server Mode)
+# =============================================================================
+
+# In-memory job runners keyed by (session_id, job_id) for cancellation
+_active_jobs = {}
+_active_jobs_lock = threading.Lock()
+
+
+@app.route('/api/uploads', methods=['POST'])
+def api_upload_files():
+    """Upload audio files to session-isolated storage."""
+    if 'files' not in request.files:
+        return jsonify({'error': 'No files provided'}), 400
+    
+    files = request.files.getlist('files')
+    if not files or all(f.filename == '' for f in files):
+        return jsonify({'error': 'No files selected'}), 400
+    
+    # Enforce file count limit
+    max_files = session_store.get_max_files_per_job()
+    if len(files) > max_files:
+        return jsonify({'error': f'Too many files. Maximum {max_files} per upload.'}), 400
+    
+    session_id = g.session_id
+    session_store.ensure_session_dirs(session_id)
+    
+    # Check session disk cap (server mode only)
+    if session_store.is_server_mode():
+        current_usage = session_store.get_session_disk_usage_mb(session_id)
+        max_session_mb = session_store.get_max_session_mb()
+        if current_usage >= max_session_mb:
+            return jsonify({
+                'error': f'Session storage limit reached ({max_session_mb}MB). Delete old jobs or wait for cleanup.'
+            }), 400
+    
+    uploads_path = Path(session_store.uploads_dir(session_id))
+    
+    uploaded = []
+    skipped = []
+    errors = []
+    
+    for file in files:
+        if file.filename == '':
+            continue
+        
+        original_name = file.filename
+        sanitized = session_store.sanitize_filename(original_name)
+        ext = Path(sanitized).suffix.lower()
+        
+        # Check supported format
+        if ext not in SUPPORTED_FORMATS:
+            skipped.append({'name': original_name, 'reason': f'Unsupported format: {ext}'})
+            continue
+        
+        try:
+            upload_id = session_store.new_id(8)
+            stored_name = f"{upload_id}_{sanitized}"
+            filepath = uploads_path / stored_name
+            file.save(str(filepath))
+            
+            uploaded.append({
+                'id': upload_id,
+                'filename': original_name,
+                'storedName': stored_name,
+                'size': filepath.stat().st_size
+            })
+        except Exception as e:
+            errors.append({'name': original_name, 'error': str(e)[:100]})
+    
+    return jsonify({
+        'uploads': uploaded,
+        'skipped': skipped,
+        'errors': errors
+    })
+
+
+@app.route('/api/uploads', methods=['GET'])
+def api_list_uploads():
+    """List uploaded files for current session."""
+    session_id = g.session_id
+    uploads = session_store.list_uploads(session_id)
+    return jsonify({'uploads': uploads})
+
+
+@app.route('/api/jobs', methods=['POST'])
+def api_create_job():
+    """Create and start a transcription job."""
+    session_id = g.session_id
+    
+    # Check for existing running job in this session
+    with _active_jobs_lock:
+        for key, job_info in _active_jobs.items():
+            if key[0] == session_id and job_info.get('running'):
+                return jsonify({'error': 'A job is already running in this session'}), 409
+    
+    data = request.json or {}
+    upload_ids = data.get('uploadIds', [])
+    options = data.get('options', {})
+    
+    if not upload_ids:
+        return jsonify({'error': 'No upload IDs provided'}), 400
+    
+    # Validate and determine backend
+    env = compute_backend.get_cached_environment()
+    requested_backend = options.get('backend', env['recommendedBackend'])
+    
+    is_valid, error = compute_backend.validate_backend(requested_backend)
+    if not is_valid:
+        return jsonify({'error': error}), 400
+    
+    # Validate diarization requirements if enabled
+    diarization_enabled = options.get('diarizationEnabled', False)
+    if diarization_enabled:
+        hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
+        if not hf_token:
+            return jsonify({
+                'error': 'Diarization requires HF_TOKEN environment variable. Get a token from https://huggingface.co/settings/tokens',
+                'code': 'HF_TOKEN_MISSING'
+            }), 400
+        
+        try:
+            import pyannote.audio
+        except ImportError:
+            return jsonify({
+                'error': 'Diarization requires pyannote.audio which is not installed on this server.',
+                'code': 'DIARIZATION_UNAVAILABLE'
+            }), 400
+    
+    # Get diarization duration limit from env
+    max_diarization_duration = int(os.environ.get('MAX_DIARIZATION_DURATION_SECONDS', '180'))
+    
+    # Resolve upload IDs to file paths and probe audio metadata
+    inputs = []
+    for upload_id in upload_ids:
+        filepath = session_store.find_upload_by_id(session_id, upload_id)
+        if not filepath:
+            return jsonify({'error': f'Upload not found: {upload_id}'}), 404
+        
+        # Extract original filename from stored name
+        stored_name = os.path.basename(filepath)
+        parts = stored_name.split('_', 1)
+        original_name = parts[1] if len(parts) > 1 else stored_name
+        
+        # Probe audio metadata
+        audio_info = None
+        try:
+            from audio_utils import get_audio_info, AudioProbeError
+            audio_info = get_audio_info(filepath)
+        except AudioProbeError as e:
+            return jsonify({
+                'error': f'Failed to probe audio file: {original_name}',
+                'code': 'AUDIO_PROBE_FAILED',
+                'details': str(e)
+            }), 400
+        except Exception as e:
+            return jsonify({
+                'error': f'Unexpected error probing audio: {original_name}',
+                'code': 'AUDIO_PROBE_FAILED',
+                'details': str(e)[:200]
+            }), 400
+        
+        inputs.append({
+            'uploadId': upload_id,
+            'path': filepath,
+            'originalFilename': original_name,
+            'durationSec': audio_info.get('durationSec') if audio_info else None,
+            'codec': audio_info.get('codec') if audio_info else None,
+            'sampleRate': audio_info.get('sampleRate') if audio_info else None,
+            'channels': audio_info.get('channels') if audio_info else None
+        })
+    
+    # Compute effective diarization policy using single source of truth
+    diarization_effective = None
+    diarization_warnings = []
+    if diarization_enabled:
+        from diarization_policy import compute_diarization_policy, get_server_policy_config, get_clamping_warnings
+        
+        server_config = get_server_policy_config()
+        diarization_effective = compute_diarization_policy(
+            diarization_enabled=diarization_enabled,
+            diarization_auto_split=options.get('diarizationAutoSplit', False),
+            requested_max_duration_seconds=options.get('diarizationMaxDurationSeconds'),
+            requested_chunk_seconds=options.get('diarizationChunkSeconds'),
+            requested_overlap_seconds=options.get('diarizationOverlapSeconds'),
+            server_max_duration_seconds=server_config['serverMaxDurationSeconds'],
+            default_max_duration_seconds=server_config['defaultMaxDurationSeconds'],
+            min_chunk_seconds=server_config['minChunkSeconds'],
+            max_chunk_seconds=server_config['maxChunkSeconds'],
+            overlap_ratio=server_config['overlapRatio'],
+            min_overlap_seconds=server_config['minOverlapSeconds'],
+            max_overlap_seconds=server_config['maxOverlapSeconds'],
+        )
+        diarization_warnings = get_clamping_warnings(diarization_effective)
+    
+    # Validate diarization duration limits on CPU (unless auto-split is enabled)
+    if diarization_enabled and diarization_effective and requested_backend == 'cpu':
+        effective_max = diarization_effective['maxDurationSeconds']
+        auto_split_enabled = diarization_effective['autoSplit']
+        
+        if not auto_split_enabled:
+            too_long_files = []
+            for inp in inputs:
+                duration = inp.get('durationSec')
+                if duration and duration > effective_max:
+                    from audio_utils import format_duration
+                    too_long_files.append({
+                        'filename': inp['originalFilename'],
+                        'durationSec': duration,
+                        'durationFormatted': format_duration(duration)
+                    })
+            
+            if too_long_files:
+                from audio_utils import format_duration
+                from diarization_policy import get_clamping_warnings
+                server_max = diarization_effective.get('serverMaxDurationSeconds', effective_max)
+                clamped_info = diarization_effective.get('clamped', {})
+                was_clamped = clamped_info.get('maxDurationClamped', False)
+                requested_max = clamped_info.get('maxDurationOriginal')
+                
+                error_response = {
+                    'error': f'Audio file(s) too long for CPU diarization. Max duration: {format_duration(effective_max)}',
+                    'code': 'DIARIZATION_TOO_LONG_CPU',
+                    'effectivePolicy': {
+                        'maxDurationSeconds': effective_max,
+                        'maxDurationFormatted': format_duration(effective_max),
+                        'autoSplit': False,
+                        'chunkSeconds': diarization_effective.get('chunkSeconds'),
+                        'overlapSeconds': diarization_effective.get('overlapSeconds'),
+                    },
+                    'serverMaxDurationSec': server_max,
+                    'serverMaxDurationFormatted': format_duration(server_max),
+                    'tooLongFiles': too_long_files,
+                    'suggestions': [
+                        'Enable "Auto-split long audio" to process in chunks',
+                        f'Increase max duration (server allows up to {format_duration(server_max)})',
+                        'Split audio into shorter segments',
+                        'Disable diarization for this job',
+                        'Run on GPU backend if available'
+                    ]
+                }
+                
+                if was_clamped and requested_max:
+                    error_response['requestedMaxDurationSec'] = requested_max
+                    error_response['requestedMaxDurationFormatted'] = format_duration(requested_max)
+                    error_response['wasClamped'] = True
+                    error_response['clampingWarnings'] = get_clamping_warnings(diarization_effective)
+                
+                return jsonify(error_response), 400
+    
+    # Create job
+    job_id = session_store.new_id(12)
+    dirs = session_store.ensure_job_dirs(session_id, job_id)
+    
+    now = datetime.now(timezone.utc).isoformat()
+    manifest = {
+        'jobId': job_id,
+        'sessionId': session_id,
+        'createdAt': now,
+        'updatedAt': now,
+        'startedAt': None,
+        'finishedAt': None,
+        'status': 'queued',
+        'backend': requested_backend,
+        'environment': {
+            'os': env['os'],
+            'arch': env['arch'],
+            'inDocker': env['inDocker']
+        },
+        'options': {
+            'model': options.get('model', 'base'),
+            'language': options.get('language', ''),
+            'includeSegments': options.get('includeSegments', True),
+            'includeFull': options.get('includeFull', True),
+            'includeTimestamps': options.get('includeTimestamps', True),
+            'wordTimestamps': options.get('wordTimestamps', False),
+            'qualityPreset': options.get('qualityPreset', 'balanced'),
+            'diarizationEnabled': diarization_enabled,
+            'minSpeakers': options.get('minSpeakers') if diarization_enabled else None,
+            'maxSpeakers': options.get('maxSpeakers') if diarization_enabled else None,
+            'numSpeakers': options.get('numSpeakers') if diarization_enabled else None,
+            'diarizationMaxDurationSeconds': options.get('diarizationMaxDurationSeconds') if diarization_enabled else None,
+            'diarizationAutoSplit': options.get('diarizationAutoSplit', False) if diarization_enabled else False,
+            'diarizationChunkSeconds': options.get('diarizationChunkSeconds') if diarization_enabled else None,
+            'diarizationOverlapSeconds': options.get('diarizationOverlapSeconds') if diarization_enabled else None,
+            'diarizationEffective': diarization_effective,
+            'diarizationWarnings': diarization_warnings,
+        },
+        'inputs': inputs,
+        'outputs': [],
+        'progress': {
+            'totalFiles': len(inputs),
+            'currentFileIndex': 0,
+            'currentFile': '',
+            'percent': 0,
+            'stage': 'queued',
+            'stageStartedAt': now
+        },
+        'error': None
+    }
+    
+    session_store.atomic_write_json(session_store.job_manifest_path(session_id, job_id), manifest)
+    
+    # Start job in background thread
+    def run_job():
+        _run_session_job(session_id, job_id, inputs, manifest['options'], dirs['outputs'], requested_backend)
+    
+    with _active_jobs_lock:
+        _active_jobs[(session_id, job_id)] = {'running': True, 'cancel_requested': False}
+    
+    job_thread = threading.Thread(target=run_job, daemon=True)
+    job_thread.start()
+    
+    return jsonify({'jobId': job_id})
+
+
+def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, outputs_dir: str, backend: str):
+    """Run transcription job and update manifest with progress."""
+    from logger import log_event, with_timer
+    
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    
+    # Log job start
+    log_event('info', 'job_started', 
+             jobId=job_id, 
+             sessionId=session_id,
+             backend=backend,
+             numFiles=len(inputs),
+             options=options)
+    
+    def update_manifest(**updates):
+        manifest = session_store.read_json(manifest_path) or {}
+        now = datetime.now(timezone.utc).isoformat()
+        manifest['updatedAt'] = now
+        for key, value in updates.items():
+            if key == 'progress':
+                # Check if stage is changing
+                new_stage = value.get('stage')
+                old_stage = manifest.get('progress', {}).get('stage')
+                if new_stage and new_stage != old_stage:
+                    value['stageStartedAt'] = now
+                manifest.setdefault('progress', {}).update(value)
+            elif key == 'debug':
+                manifest.setdefault('debug', {}).update(value)
+            else:
+                manifest[key] = value
+        session_store.atomic_write_json(manifest_path, manifest)
+        return manifest
+    
+    def is_cancelled():
+        with _active_jobs_lock:
+            job_info = _active_jobs.get((session_id, job_id), {})
+            return job_info.get('cancel_requested', False)
+    
+    def is_cancel_after_current():
+        with _active_jobs_lock:
+            job_info = _active_jobs.get((session_id, job_id), {})
+            return job_info.get('cancel_after_current', False)
+    
+    def write_error_artifact(code: str, message: str, phase: str, suggestion: str = '', outputs: list = None):
+        """Write a job_error.md artifact for reviewer-friendly error reporting."""
+        error_filename = 'job_error.md'
+        error_path = os.path.join(outputs_dir, error_filename)
+        
+        # Get current manifest for effective policy
+        current_manifest = session_store.read_json(manifest_path) or {}
+        effective_policy = current_manifest.get('options', {}).get('diarizationEffective')
+        current_stage = current_manifest.get('progress', {}).get('stage', 'unknown')
+        
+        content = f"""# Job Error Report
+
+**Job ID:** {job_id}
+**Status:** failed
+**Backend:** {backend}
+**Phase:** {phase}
+**Stage at failure:** {current_stage}
+**Timestamp:** {datetime.now(timezone.utc).isoformat()}
+
+## Error
+
+**Code:** `{code}`
+
+**Message:** {message}
+
+"""
+        if suggestion:
+            content += f"""## Suggestion
+
+{suggestion}
+
+"""
+        
+        if effective_policy:
+            content += f"""## Effective Diarization Policy
+
+- **Max Duration:** {effective_policy.get('maxDurationSeconds')}s
+- **Auto-Split:** {effective_policy.get('autoSplit')}
+- **Chunk Size:** {effective_policy.get('chunkSeconds')}s
+- **Overlap:** {effective_policy.get('overlapSeconds')}s
+- **Server Max:** {effective_policy.get('serverMaxDurationSeconds')}s
+
+"""
+        
+        try:
+            with open(error_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            
+            error_output = {
+                'id': session_store.new_id(8),
+                'filename': error_filename,
+                'path': error_path,
+                'type': 'error-report',
+                'sizeBytes': os.path.getsize(error_path)
+            }
+            
+            if outputs is not None:
+                outputs.append(error_output)
+            return error_output
+        except Exception:
+            return None
+    
+    def fail_job(code: str, message: str, phase: str, suggestion: str = '', outputs: list = None):
+        """Terminate job with error, write artifact, and update manifest."""
+        error_output = write_error_artifact(code, message, phase, suggestion, outputs)
+        final_outputs = outputs if outputs else []
+        if error_output and error_output not in final_outputs:
+            final_outputs.append(error_output)
+        
+        update_manifest(
+            status='failed',
+            finishedAt=datetime.now(timezone.utc).isoformat(),
+            error={'code': code, 'message': message},
+            outputs=final_outputs
+        )
+    
+    def cancel_job(outputs: list = None):
+        """Terminate job as canceled, preserving outputs."""
+        update_manifest(
+            status='canceled',
+            finishedAt=datetime.now(timezone.utc).isoformat(),
+            error={'code': 'USER_CANCELED', 'message': 'Job canceled by user'},
+            outputs=outputs or []
+        )
+    
+    try:
+        update_manifest(status='running', startedAt=datetime.now(timezone.utc).isoformat())
+        
+        # Load whisper model
+        model_name = options.get('model', 'base')
+        language = options.get('language', '') or None
+        
+        update_manifest(progress={
+            'currentFile': f'Loading {model_name} model on {backend}...',
+            'stage': 'loading_model'
+        })
+        
+        # Use explicit backend - NO auto-detection
+        device = compute_backend.get_torch_device(backend)
+        
+        # Validate backend is actually available at runtime
+        try:
+            import torch
+            import whisper
+        except ImportError as e:
+            fail_job('DEPENDENCY_ERROR', f'Required library not available: {e}',
+                     phase='initialization',
+                     suggestion='Check that torch and openai-whisper are installed.')
+            return
+        
+        try:
+            if device == 'cuda' and not torch.cuda.is_available():
+                raise RuntimeError('CUDA is not available on this system')
+            if device == 'mps':
+                if not hasattr(torch.backends, 'mps') or not torch.backends.mps.is_available():
+                    raise RuntimeError('Metal (MPS) is not available on this system')
+                if options.get('wordTimestamps', False):
+                    raise RuntimeError('Metal backend does not support word timestamps. Use CPU instead.')
+        except RuntimeError as e:
+            fail_job('BACKEND_RUNTIME_FAILURE', str(e),
+                     phase='backend validation',
+                     suggestion='Try using CPU backend instead.')
+            return
+        
+        try:
+            whisper_model = whisper.load_model(model_name, device=device)
+        except torch.cuda.OutOfMemoryError:
+            fail_job('OUT_OF_MEMORY', f'Not enough GPU memory to load {model_name} model.',
+                     phase='model loading',
+                     suggestion='Try a smaller model (e.g., base or small) or use CPU backend.')
+            return
+        except Exception as e:
+            fail_job('MODEL_LOAD_ERROR', f'Failed to load {model_name} model: {str(e)[:200]}',
+                     phase='model loading',
+                     suggestion='Check model name is valid and sufficient memory is available.')
+            return
+        
+        outputs = []
+        total = len(inputs)
+        
+        for idx, input_info in enumerate(inputs):
+            # Check for immediate cancel
+            if is_cancelled():
+                cancel_job(outputs)
+                return
+            
+            # Check for graceful cancel after previous file
+            if idx > 0 and is_cancel_after_current():
+                update_manifest(
+                    status='canceled',
+                    finishedAt=datetime.now(timezone.utc).isoformat(),
+                    outputs=outputs,
+                    progress={'currentFile': 'Canceled after file ' + str(idx), 'percent': int((idx / total) * 100)}
+                )
+                return
+            
+            filepath = input_info['path']
+            original_name = input_info['originalFilename']
+            upload_id = input_info.get('uploadId', '')
+            base_name = Path(original_name).stem
+            
+            update_manifest(progress={
+                'currentFile': original_name,
+                'currentFileIndex': idx,
+                'percent': int((idx / total) * 100),
+                'stage': 'transcribing'
+            })
+            
+            try:
+                # Transcribe
+                result = whisper.transcribe(
+                    whisper_model,
+                    filepath,
+                    language=language,
+                    word_timestamps=options.get('wordTimestamps', False)
+                )
+                
+                # Check for cancellation between transcription and diarization
+                if is_cancelled():
+                    cancel_job(outputs)
+                    return
+                
+                # Run diarization if enabled
+                diarization_enabled = options.get('diarizationEnabled', False)
+                speaker_segments = None
+                merged_segments = None
+                
+                if diarization_enabled:
+                    update_manifest(progress={
+                        'currentFile': f'{original_name} (loading diarization pipeline...)',
+                        'currentFileIndex': idx,
+                        'percent': int((idx / total) * 100),
+                        'stage': 'diarizing'
+                    })
+                    
+                    try:
+                        import diarization
+                        import time
+                        from threading import Thread
+                        from queue import Queue, Empty
+                        from audio_utils import get_audio_info, split_audio_to_wav_chunks, cleanup_chunks
+                        
+                        # Get effective diarization policy from manifest (single source of truth)
+                        effective_policy = options.get('diarizationEffective') or {}
+                        auto_split = effective_policy.get('autoSplit', False)
+                        chunk_seconds = effective_policy.get('chunkSeconds', 150)
+                        overlap_seconds = effective_policy.get('overlapSeconds', 5)
+                        default_max = int(os.environ.get('DIARIZATION_DEFAULT_MAX_DURATION_SECONDS', '180'))
+                        effective_max_duration = effective_policy.get('maxDurationSeconds', default_max)
+                        
+                        # Get file duration to decide if chunking is needed
+                        file_duration = None
+                        try:
+                            audio_info = get_audio_info(filepath)
+                            file_duration = audio_info.get('durationSec', 0)
+                        except Exception:
+                            pass
+                        
+                        # Determine if we should use chunked diarization
+                        use_chunked = auto_split and file_duration and file_duration > effective_max_duration
+                        
+                        # Log effective policy once per file
+                        log_event('diarization_policy_effective', {
+                            'filename': original_name,
+                            'fileDurationSec': file_duration,
+                            'maxDurationSeconds': effective_max_duration,
+                            'autoSplit': auto_split,
+                            'chunkSeconds': chunk_seconds,
+                            'overlapSeconds': overlap_seconds,
+                            'useChunked': use_chunked,
+                            'derived': effective_policy.get('derived', True),
+                        }, stage='diarization')
+                        
+                        # Add watchdog timeout for diarization
+                        max_diarization_minutes = int(os.environ.get('MAX_DIARIZATION_MINUTES', '30'))
+                        # Increase timeout for chunked diarization
+                        if use_chunked:
+                            estimated_chunks = int(file_duration / (chunk_seconds - overlap_seconds)) + 1
+                            max_diarization_minutes = max(max_diarization_minutes, estimated_chunks * 5)
+                        
+                        diarization_result = Queue()
+                        diarization_error = Queue()
+                        
+                        def run_diarization_with_timeout():
+                            try:
+                                # Check for cancellation before starting diarization
+                                if is_cancelled():
+                                    return
+                                
+                                if use_chunked:
+                                    # Chunked diarization for long files
+                                    update_manifest(progress={
+                                        'currentFile': f'{original_name} (splitting audio for diarization...)',
+                                        'currentFileIndex': idx,
+                                        'percent': int((idx / total) * 100)
+                                    })
+                                    
+                                    # Create chunk directory
+                                    chunk_dir = os.path.join(outputs_dir, 'tmp', 'chunks', upload_id)
+                                    chunks = split_audio_to_wav_chunks(
+                                        filepath, chunk_dir,
+                                        chunk_seconds=chunk_seconds,
+                                        overlap_seconds=overlap_seconds
+                                    )
+                                    
+                                    total_chunks = len(chunks)
+                                    
+                                    def chunk_progress_callback(chunk_idx, total, status):
+                                        if is_cancelled():
+                                            return
+                                        update_manifest(progress={
+                                            'currentFile': f'{original_name} ({status})',
+                                            'currentFileIndex': idx,
+                                            'percent': int((idx / total) * 100),
+                                            'stage': 'diarizing',
+                                            'chunkIndex': chunk_idx,
+                                            'totalChunks': total
+                                        })
+                                    
+                                    # Load pipeline once
+                                    update_manifest(progress={
+                                        'currentFile': f'{original_name} (loading diarization pipeline...)',
+                                        'currentFileIndex': idx,
+                                        'percent': int((idx / total) * 100),
+                                        'totalChunks': total_chunks
+                                    })
+                                    
+                                    pipeline = diarization.load_pipeline(device=device, job_id=job_id, session_id=session_id)
+                                    
+                                    # Run chunked diarization
+                                    speaker_segments = diarization.run_chunked_diarization(
+                                        filepath, chunks, pipeline,
+                                        min_speakers=options.get('minSpeakers'),
+                                        max_speakers=options.get('maxSpeakers'),
+                                        num_speakers=options.get('numSpeakers'),
+                                        job_id=job_id,
+                                        session_id=session_id,
+                                        progress_callback=chunk_progress_callback
+                                    )
+                                    
+                                    # Cleanup chunks unless KEEP_CHUNKS is set
+                                    keep_chunks = os.environ.get('KEEP_CHUNKS', '0') == '1'
+                                    if keep_chunks:
+                                        # Store chunk debug info in manifest
+                                        chunk_debug_info = [{
+                                            'index': c.index,
+                                            'startSec': c.start_sec,
+                                            'endSec': c.end_sec,
+                                            'path': os.path.basename(c.path)
+                                        } for c in chunks]
+                                        update_manifest(debug={'chunks': chunk_debug_info})
+                                    else:
+                                        cleanup_chunks(chunk_dir)
+                                else:
+                                    # Standard diarization for short files
+                                    update_manifest(progress={
+                                        'currentFile': f'{original_name} (running diarization...)',
+                                        'currentFileIndex': idx,
+                                        'percent': int((idx / total) * 100)
+                                    })
+                                    
+                                    speaker_segments = diarization.run_diarization(
+                                        filepath,
+                                        min_speakers=options.get('minSpeakers'),
+                                        max_speakers=options.get('maxSpeakers'),
+                                        num_speakers=options.get('numSpeakers'),
+                                        device=device,
+                                        job_id=job_id,
+                                        session_id=session_id,
+                                        temp_dir=os.path.join(outputs_dir, 'tmp')
+                                    )
+                                
+                                diarization_result.put(speaker_segments)
+                            except Exception as e:
+                                diarization_error.put(e)
+                        
+                        # Start diarization in thread
+                        diarization_thread = Thread(target=run_diarization_with_timeout)
+                        diarization_thread.start()
+                        
+                        # Wait for completion or timeout
+                        diarization_thread.join(timeout=max_diarization_minutes * 60)
+                        
+                        # Check if still running (timeout)
+                        if diarization_thread.is_alive():
+                            fail_job(
+                                'DIARIZATION_TIMEOUT',
+                                f'Diarization timed out after {max_diarization_minutes} minutes',
+                                'diarization',
+                                'Try with a shorter audio file or increase MAX_DIARIZATION_MINUTES',
+                                outputs
+                            )
+                            return
+                        
+                        # Check for cancellation
+                        if is_cancelled():
+                            cancel_job(outputs)
+                            return
+                        
+                        # Get result or error
+                        try:
+                            speaker_segments = diarization_result.get_nowait()
+                        except Empty:
+                            try:
+                                error = diarization_error.get_nowait()
+                                raise error
+                            except Empty:
+                                fail_job(
+                                    'DIARIZATION_ERROR',
+                                    'Diarization failed without error message',
+                                    'diarization',
+                                    outputs=outputs
+                                )
+                                return
+                        
+                        update_manifest(progress={
+                            'currentFile': f'{original_name} (merging transcript + speakers...)',
+                            'currentFileIndex': idx,
+                            'percent': int((idx / total) * 100),
+                            'stage': 'merging'
+                        })
+                        
+                        merged_segments = diarization.merge_transcript_with_speakers(
+                            result.get('segments', []),
+                            speaker_segments,
+                            job_id=job_id,
+                            session_id=session_id
+                        )
+                    except ImportError as e:
+                        # pyannote not installed - record error but continue without diarization
+                        outputs.append({
+                            'id': session_store.new_id(8),
+                            'forUploadId': upload_id,
+                            'inputFilename': original_name,
+                            'error': {'code': 'DIARIZATION_UNAVAILABLE', 'message': str(e)[:200]}
+                        })
+                    except Exception as e:
+                        # Diarization failed - record error but continue with transcript
+                        outputs.append({
+                            'id': session_store.new_id(8),
+                            'forUploadId': upload_id,
+                            'inputFilename': original_name,
+                            'error': {'code': 'DIARIZATION_ERROR', 'message': str(e)[:200]}
+                        })
+                
+                # Check for cancellation before writing outputs
+                if is_cancelled():
+                    cancel_job(outputs)
+                    return
+                
+                update_manifest(progress={
+                    'currentFile': f'{original_name} (writing outputs...)',
+                    'currentFileIndex': idx,
+                    'percent': int((idx / total) * 100),
+                    'stage': 'writing_outputs'
+                })
+                
+                # Generate output files with upload_id suffix to prevent collisions
+                output_id = session_store.new_id(8)
+                suffix = f"_{upload_id[:6]}" if upload_id else ""
+                
+                # Markdown output
+                md_filename = f"{base_name}{suffix}.md"
+                md_path = os.path.join(outputs_dir, md_filename)
+                
+                content = f"# {original_name}\n\n"
+                if options.get('includeFull', True):
+                    content += f"## Full Transcript\n\n{result['text'].strip()}\n\n"
+                
+                if options.get('includeSegments', True) and result.get('segments'):
+                    content += "## Segments\n\n"
+                    for seg in result['segments']:
+                        if options.get('includeTimestamps', True):
+                            start = seg.get('start', 0)
+                            end = seg.get('end', 0)
+                            content += f"**[{start:.2f} - {end:.2f}]** "
+                        content += f"{seg.get('text', '').strip()}\n\n"
+                
+                with open(md_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                
+                outputs.append({
+                    'id': output_id,
+                    'forUploadId': upload_id,
+                    'inputFilename': original_name,
+                    'filename': md_filename,
+                    'path': md_path,
+                    'type': 'markdown',
+                    'sizeBytes': os.path.getsize(md_path)
+                })
+                
+                # JSON output
+                json_filename = f"{base_name}{suffix}.json"
+                json_path = os.path.join(outputs_dir, json_filename)
+                
+                json_output = {
+                    'source': original_name,
+                    'text': result['text'],
+                    'language': result.get('language', ''),
+                    'segments': result.get('segments', [])
+                }
+                
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(json_output, f, indent=2, ensure_ascii=False)
+                
+                outputs.append({
+                    'id': session_store.new_id(8),
+                    'forUploadId': upload_id,
+                    'inputFilename': original_name,
+                    'filename': json_filename,
+                    'path': json_path,
+                    'type': 'json',
+                    'sizeBytes': os.path.getsize(json_path)
+                })
+                
+                # Generate diarization outputs if diarization was run (even if no speakers detected)
+                if diarization_enabled and speaker_segments is not None:
+                    import diarization as diarization_module
+                    
+                    # Speaker markdown (primary reviewer artifact)
+                    speaker_md_filename = f"{base_name}{suffix}.speaker.md"
+                    speaker_md_path = os.path.join(outputs_dir, speaker_md_filename)
+                    speaker_md_content = diarization_module.format_speaker_markdown(
+                        merged_segments, original_name, transcript_segments=result.get('segments', [])
+                    )
+                    with open(speaker_md_path, 'w', encoding='utf-8') as f:
+                        f.write(speaker_md_content)
+                    
+                    outputs.append({
+                        'id': session_store.new_id(8),
+                        'forUploadId': upload_id,
+                        'inputFilename': original_name,
+                        'filename': speaker_md_filename,
+                        'path': speaker_md_path,
+                        'type': 'speaker-markdown',
+                        'sizeBytes': os.path.getsize(speaker_md_path)
+                    })
+                    
+                    # Diarization JSON (structured data)
+                    diar_json_filename = f"{base_name}{suffix}.diarization.json"
+                    diar_json_path = os.path.join(outputs_dir, diar_json_filename)
+                    diar_json_output = diarization_module.format_diarization_json(
+                        speaker_segments, merged_segments, original_name
+                    )
+                    with open(diar_json_path, 'w', encoding='utf-8') as f:
+                        json.dump(diar_json_output, f, indent=2, ensure_ascii=False)
+                    
+                    outputs.append({
+                        'id': session_store.new_id(8),
+                        'forUploadId': upload_id,
+                        'inputFilename': original_name,
+                        'filename': diar_json_filename,
+                        'path': diar_json_path,
+                        'type': 'diarization-json',
+                        'sizeBytes': os.path.getsize(diar_json_path)
+                    })
+                    
+                    # RTTM output (interop/debug)
+                    rttm_filename = f"{base_name}{suffix}.rttm"
+                    rttm_path = os.path.join(outputs_dir, rttm_filename)
+                    rttm_content = diarization_module.format_rttm(speaker_segments, original_name)
+                    with open(rttm_path, 'w', encoding='utf-8') as f:
+                        f.write(rttm_content)
+                    
+                    outputs.append({
+                        'id': session_store.new_id(8),
+                        'forUploadId': upload_id,
+                        'inputFilename': original_name,
+                        'filename': rttm_filename,
+                        'path': rttm_path,
+                        'type': 'rttm',
+                        'sizeBytes': os.path.getsize(rttm_path)
+                    })
+                
+            except Exception as e:
+                # Record error but continue with other files
+                outputs.append({
+                    'id': session_store.new_id(8),
+                    'forUploadId': upload_id,
+                    'inputFilename': original_name,
+                    'error': {'code': 'TRANSCRIBE_ERROR', 'message': str(e)[:200]}
+                })
+        
+        # Determine final status - complete_with_errors if some files failed
+        has_errors = any(o.get('error') for o in outputs)
+        final_status = 'complete_with_errors' if has_errors else 'complete'
+        
+        # Log job completion
+        log_event('info', 'job_finished', 
+                 jobId=job_id,
+                 sessionId=session_id,
+                 status=final_status,
+                 numOutputs=len(outputs),
+                 numErrors=sum(1 for o in outputs if o.get('error')))
+        
+        update_manifest(
+            status=final_status,
+            finishedAt=datetime.now(timezone.utc).isoformat(),
+            outputs=outputs,
+            progress={'currentFileIndex': total, 'percent': 100, 'currentFile': '', 'stage': 'complete'}
+        )
+        
+    except Exception as e:
+        # Catch-all for unexpected errors
+        log_event('error', 'job_failed', 
+                 jobId=job_id,
+                 sessionId=session_id,
+                 error=str(e),
+                 phase='unknown')
+        
+        fail_job('WORKER_EXCEPTION', f'Unexpected error: {str(e)[:400]}',
+                 phase='unknown',
+                 suggestion='Check server logs for details.',
+                 outputs=outputs if 'outputs' in dir() else None)
+    
+    finally:
+        with _active_jobs_lock:
+            if (session_id, job_id) in _active_jobs:
+                _active_jobs[(session_id, job_id)]['running'] = False
+
+
+@app.route('/api/jobs/<job_id>', methods=['GET'])
+def api_get_job(job_id):
+    """Get job status and details."""
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Check for stale running jobs and mark them as failed
+    if session_store.is_job_stale(manifest):
+        session_store.mark_job_stale(session_id, job_id)
+        manifest = session_store.read_json(manifest_path)
+    
+    # Don't expose internal paths
+    safe_manifest = {
+        'jobId': manifest.get('jobId'),
+        'createdAt': manifest.get('createdAt'),
+        'updatedAt': manifest.get('updatedAt'),
+        'startedAt': manifest.get('startedAt'),
+        'finishedAt': manifest.get('finishedAt'),
+        'status': manifest.get('status'),
+        'backend': manifest.get('backend'),
+        'environment': manifest.get('environment'),
+        'options': manifest.get('options'),
+        'inputs': [{'uploadId': i.get('uploadId'), 'filename': i.get('originalFilename'), 'durationSec': i.get('durationSec')} for i in manifest.get('inputs', [])],
+        'outputs': [{'id': o.get('id'), 'forUploadId': o.get('forUploadId'), 'filename': o.get('filename'), 'type': o.get('type'), 'sizeBytes': o.get('sizeBytes'), 'error': o.get('error')} for o in manifest.get('outputs', [])],
+        'progress': manifest.get('progress'),
+        'error': manifest.get('error')
+    }
+    
+    return jsonify(safe_manifest)
+
+
+@app.route('/api/jobs/<job_id>/cancel', methods=['POST'])
+def api_cancel_job(job_id):
+    """Cancel a running job immediately."""
+    session_id = g.session_id
+    
+    with _active_jobs_lock:
+        job_info = _active_jobs.get((session_id, job_id))
+        if job_info and job_info.get('running'):
+            job_info['cancel_requested'] = True
+            return jsonify({'status': 'canceling', 'message': 'Cancel requested'})
+    
+    # Check if job exists
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Check terminal states (note: 'canceled' is the canonical spelling)
+    if manifest.get('status') in ('complete', 'complete_with_errors', 'failed', 'canceled'):
+        return jsonify({'status': manifest.get('status'), 'message': 'Job already finished'})
+    
+    return jsonify({'status': 'not_running'})
+
+
+@app.route('/api/jobs/<job_id>/cancel-after-current', methods=['POST'])
+def api_cancel_after_current(job_id):
+    """Request graceful cancel after current file completes."""
+    session_id = g.session_id
+    
+    with _active_jobs_lock:
+        job_info = _active_jobs.get((session_id, job_id))
+        if job_info and job_info.get('running'):
+            job_info['cancel_after_current'] = True
+            # Also update manifest so UI can see it
+            manifest_path = session_store.job_manifest_path(session_id, job_id)
+            manifest = session_store.read_json(manifest_path)
+            if manifest:
+                manifest['cancelAfterCurrentFile'] = True
+                session_store.atomic_write_json(manifest_path, manifest)
+            return jsonify({'status': 'pending_cancel', 'message': 'Will cancel after current file'})
+    
+    # Check if job exists
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    if manifest.get('status') in ('complete', 'complete_with_errors', 'failed', 'canceled'):
+        return jsonify({'status': manifest.get('status'), 'message': 'Job already finished'})
+    
+    return jsonify({'status': 'not_running'})
+
+
+@app.route('/api/jobs/<job_id>', methods=['DELETE'])
+def api_delete_job(job_id):
+    """Delete a job and its outputs."""
+    session_id = g.session_id
+    
+    # Check if job is running
+    with _active_jobs_lock:
+        if (session_id, job_id) in _active_jobs:
+            job_info = _active_jobs[(session_id, job_id)]
+            if job_info.get('running'):
+                return jsonify({'error': 'Cannot delete a running job'}), 409
+    
+    # Get job directory
+    job_dir = session_store.job_dir(session_id, job_id)
+    if not job_dir or not os.path.exists(job_dir):
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Delete job directory
+    import shutil
+    try:
+        shutil.rmtree(job_dir)
+        return jsonify({'status': 'deleted', 'jobId': job_id})
+    except Exception as e:
+        return jsonify({'error': f'Failed to delete job: {str(e)[:200]}'}), 500
+
+
+@app.route('/api/jobs/clear', methods=['POST'])
+def api_clear_jobs():
+    """Clear old jobs from the session."""
+    session_id = g.session_id
+    data = request.get_json() or {}
+    
+    older_than_hours = data.get('olderThanHours', 24)
+    
+    # Get all jobs for this session
+    jobs_dir = session_store.session_jobs_dir(session_id)
+    if not jobs_dir or not os.path.exists(jobs_dir):
+        return jsonify({'cleared': 0})
+    
+    import shutil
+    from datetime import datetime, timezone, timedelta
+    
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
+    cleared = 0
+    skipped_running = 0
+    
+    for job_id in os.listdir(jobs_dir):
+        job_dir = os.path.join(jobs_dir, job_id)
+        if not os.path.isdir(job_dir):
+            continue
+        
+        # Check if running
+        with _active_jobs_lock:
+            if (session_id, job_id) in _active_jobs:
+                job_info = _active_jobs[(session_id, job_id)]
+                if job_info.get('running'):
+                    skipped_running += 1
+                    continue
+        
+        # Check job age
+        manifest_path = os.path.join(job_dir, 'manifest.json')
+        if os.path.exists(manifest_path):
+            manifest = session_store.read_json(manifest_path)
+            if manifest:
+                created_at = manifest.get('createdAt')
+                if created_at:
+                    try:
+                        job_time = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                        if job_time >= cutoff:
+                            continue  # Job is too recent
+                    except Exception:
+                        pass
+        
+        # Delete job
+        try:
+            shutil.rmtree(job_dir)
+            cleared += 1
+        except Exception:
+            pass
+    
+    return jsonify({
+        'cleared': cleared,
+        'skippedRunning': skipped_running,
+        'olderThanHours': older_than_hours
+    })
+
+
+@app.route('/api/jobs/<job_id>/rerun', methods=['POST'])
+def api_rerun_job(job_id):
+    """Create a new job using the same input files from a previous job."""
+    if not session_store.is_server_mode():
+        return jsonify({'error': 'Rerun only available in server mode'}), 400
+    
+    session_id = g.session_id
+    
+    # Check for existing running job
+    with _active_jobs_lock:
+        for key, job_info in _active_jobs.items():
+            if key[0] == session_id and job_info.get('running'):
+                return jsonify({'error': 'A job is already running in this session'}), 409
+    
+    # Get original job
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    original_manifest = session_store.read_json(manifest_path)
+    
+    if not original_manifest:
+        return jsonify({'error': 'Original job not found'}), 404
+    
+    # Verify input files still exist
+    inputs = []
+    for input_info in original_manifest.get('inputs', []):
+        filepath = input_info.get('path')
+        if not filepath or not os.path.exists(filepath):
+            return jsonify({'error': f'Input file no longer exists: {input_info.get("originalFilename")}'}), 400
+        inputs.append(input_info)
+    
+    if not inputs:
+        return jsonify({'error': 'No input files found in original job'}), 400
+    
+    # Get new options from request or use original
+    data = request.json or {}
+    options = data.get('options', original_manifest.get('options', {}))
+    
+    # Validate and determine backend
+    env = compute_backend.get_cached_environment()
+    requested_backend = options.get('backend', env['recommendedBackend'])
+    
+    is_valid, error = compute_backend.validate_backend(requested_backend)
+    if not is_valid:
+        return jsonify({'error': error}), 400
+    
+    # Create new job
+    new_job_id = session_store.new_id(12)
+    dirs = session_store.ensure_job_dirs(session_id, new_job_id)
+    
+    now = datetime.now(timezone.utc).isoformat()
+    manifest = {
+        'jobId': new_job_id,
+        'sessionId': session_id,
+        'createdAt': now,
+        'updatedAt': now,
+        'startedAt': None,
+        'finishedAt': None,
+        'status': 'queued',
+        'rerunOf': job_id,
+        'backend': requested_backend,
+        'environment': {
+            'os': env['os'],
+            'arch': env['arch'],
+            'inDocker': env['inDocker']
+        },
+        'options': {
+            'model': options.get('model', 'base'),
+            'language': options.get('language', ''),
+            'includeSegments': options.get('includeSegments', True),
+            'includeFull': options.get('includeFull', True),
+            'includeTimestamps': options.get('includeTimestamps', True),
+            'wordTimestamps': options.get('wordTimestamps', False),
+            'qualityPreset': options.get('qualityPreset', 'balanced'),
+        },
+        'inputs': inputs,
+        'outputs': [],
+        'progress': {
+            'totalFiles': len(inputs),
+            'currentFileIndex': 0,
+            'currentFile': '',
+            'percent': 0
+        },
+        'error': None
+    }
+    
+    session_store.atomic_write_json(session_store.job_manifest_path(session_id, new_job_id), manifest)
+    
+    # Start job in background thread
+    def run_job():
+        _run_session_job(session_id, new_job_id, inputs, manifest['options'], dirs['outputs'], requested_backend)
+    
+    with _active_jobs_lock:
+        _active_jobs[(session_id, new_job_id)] = {'running': True, 'cancel_requested': False}
+    
+    job_thread = threading.Thread(target=run_job, daemon=True)
+    job_thread.start()
+    
+    return jsonify({'jobId': new_job_id, 'rerunOf': job_id})
+
+
+# Add rerun to CSRF protected endpoints
+_CSRF_PROTECTED_ENDPOINTS.add('api_rerun_job')
+
+
+@app.route('/api/jobs/<job_id>/outputs', methods=['GET'])
+def api_list_job_outputs(job_id):
+    """List outputs for a job."""
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    outputs = [
+        {'id': o.get('id'), 'filename': o.get('filename'), 'type': o.get('type'), 'size': o.get('size')}
+        for o in manifest.get('outputs', [])
+        if not o.get('error')
+    ]
+    
+    return jsonify({'outputs': outputs})
+
+
+@app.route('/api/jobs/<job_id>/download', methods=['GET'])
+def api_download_job(job_id):
+    """Download all job outputs as a zip file."""
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    outputs = manifest.get('outputs', [])
+    files_to_zip = [o for o in outputs if o.get('path') and not o.get('error')]
+    
+    if not files_to_zip:
+        return jsonify({'error': 'No output files available'}), 404
+    
+    # Verify all files exist and are within job directory
+    job_outputs_path = session_store.job_outputs_dir(session_id, job_id)
+    
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for output in files_to_zip:
+            filepath = output.get('path')
+            if filepath and os.path.exists(filepath) and session_store.is_safe_path(job_outputs_path, filepath):
+                zf.write(filepath, output.get('filename'))
+    
+    zip_buffer.seek(0)
+    
+    timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+    zip_filename = f'transcriptions_{job_id[:8]}_{timestamp}.zip'
+    
+    return send_file(
+        zip_buffer,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=zip_filename
+    )
+
+
+@app.route('/api/jobs/<job_id>/outputs/<output_id>', methods=['GET'])
+def api_download_output(job_id, output_id):
+    """Download a single output file."""
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Find output by ID
+    output = None
+    for o in manifest.get('outputs', []):
+        if o.get('id') == output_id:
+            output = o
+            break
+    
+    if not output or output.get('error'):
+        return jsonify({'error': 'Output not found'}), 404
+    
+    filepath = output.get('path')
+    job_outputs_path = session_store.job_outputs_dir(session_id, job_id)
+    
+    # Security: verify file is within job outputs directory
+    if not filepath or not os.path.exists(filepath) or not session_store.is_safe_path(job_outputs_path, filepath):
+        return jsonify({'error': 'Output file not accessible'}), 404
+    
+    return send_file(
+        filepath,
+        as_attachment=True,
+        download_name=output.get('filename')
+    )
+
+
+@app.route('/api/jobs/<job_id>/audio/<input_id>', methods=['GET'])
+def api_stream_audio(job_id, input_id):
+    """
+    Stream audio file for in-browser playback with Range support.
+    
+    input_id must match an uploadId in the job's inputs list.
+    Supports HTTP Range requests for seeking in audio player.
+    """
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Find input by uploadId
+    input_info = None
+    for inp in manifest.get('inputs', []):
+        if inp.get('uploadId') == input_id:
+            input_info = inp
+            break
+    
+    if not input_info:
+        return jsonify({'error': 'Input not found'}), 404
+    
+    filepath = input_info.get('path')
+    if not filepath or not os.path.exists(filepath):
+        return jsonify({'error': 'Audio file not accessible'}), 404
+    
+    # Security: verify file is within session uploads directory
+    session_uploads_dir = session_store.uploads_dir(session_id)
+    if not session_store.is_safe_path(session_uploads_dir, filepath):
+        return jsonify({'error': 'Access denied'}), 403
+    
+    # Determine content type from extension
+    ext = os.path.splitext(filepath)[1].lower()
+    content_types = {
+        '.mp3': 'audio/mpeg',
+        '.wav': 'audio/wav',
+        '.m4a': 'audio/mp4',
+        '.ogg': 'audio/ogg',
+        '.webm': 'audio/webm',
+        '.mp4': 'audio/mp4',
+        '.flac': 'audio/flac',
+        '.aac': 'audio/aac',
+    }
+    content_type = content_types.get(ext, 'application/octet-stream')
+    
+    file_size = os.path.getsize(filepath)
+    
+    # Handle Range requests for seeking
+    range_header = request.headers.get('Range')
+    if range_header:
+        # Parse Range header (e.g., "bytes=0-1023")
+        try:
+            range_match = re.match(r'bytes=(\d+)-(\d*)', range_header)
+            if range_match:
+                start = int(range_match.group(1))
+                end_str = range_match.group(2)
+                end = int(end_str) if end_str else file_size - 1
+                
+                # Clamp to file size
+                end = min(end, file_size - 1)
+                
+                if start > end or start >= file_size:
+                    return Response('Range not satisfiable', status=416)
+                
+                length = end - start + 1
+                
+                def generate_range():
+                    with open(filepath, 'rb') as f:
+                        f.seek(start)
+                        remaining = length
+                        chunk_size = 64 * 1024  # 64KB chunks
+                        while remaining > 0:
+                            read_size = min(chunk_size, remaining)
+                            data = f.read(read_size)
+                            if not data:
+                                break
+                            remaining -= len(data)
+                            yield data
+                
+                response = Response(
+                    generate_range(),
+                    status=206,
+                    mimetype=content_type,
+                    direct_passthrough=True
+                )
+                response.headers['Content-Range'] = f'bytes {start}-{end}/{file_size}'
+                response.headers['Content-Length'] = length
+                response.headers['Accept-Ranges'] = 'bytes'
+                response.headers['Cache-Control'] = 'no-cache'
+                return response
+        except (ValueError, AttributeError):
+            pass  # Fall through to full file response
+    
+    # Full file response (no Range or invalid Range)
+    def generate_full():
+        with open(filepath, 'rb') as f:
+            chunk_size = 64 * 1024
+            while True:
+                data = f.read(chunk_size)
+                if not data:
+                    break
+                yield data
+    
+    response = Response(
+        generate_full(),
+        status=200,
+        mimetype=content_type,
+        direct_passthrough=True
+    )
+    response.headers['Content-Length'] = file_size
+    response.headers['Accept-Ranges'] = 'bytes'
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
+
+
+@app.route('/api/jobs/<job_id>/outputs/<output_id>/text', methods=['GET'])
+def api_get_output_text(job_id, output_id):
+    """
+    Get text content of an output file for inline preview.
+    
+    Only allows text-like file types (.md, .txt, .json, .rttm, .srt, .vtt).
+    Returns JSON with content and mime type.
+    Supports ?maxBytes= query param to limit response size.
+    """
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Find output by ID
+    output = None
+    for o in manifest.get('outputs', []):
+        if o.get('id') == output_id:
+            output = o
+            break
+    
+    if not output or output.get('error'):
+        return jsonify({'error': 'Output not found'}), 404
+    
+    filepath = output.get('path')
+    job_outputs_path = session_store.job_outputs_dir(session_id, job_id)
+    
+    # Security: verify file is within job outputs directory
+    if not filepath or not os.path.exists(filepath) or not session_store.is_safe_path(job_outputs_path, filepath):
+        return jsonify({'error': 'Output file not accessible'}), 404
+    
+    # Only allow text-like file types
+    ext = os.path.splitext(filepath)[1].lower()
+    allowed_extensions = {
+        '.md': 'text/markdown',
+        '.txt': 'text/plain',
+        '.json': 'application/json',
+        '.rttm': 'text/plain',
+        '.srt': 'text/plain',
+        '.vtt': 'text/vtt',
+    }
+    
+    if ext not in allowed_extensions:
+        return jsonify({'error': 'File type not supported for text preview'}), 400
+    
+    mime_type = allowed_extensions[ext]
+    
+    # Get max bytes limit (default 2MB, max 5MB)
+    max_bytes = min(
+        int(request.args.get('maxBytes', 2 * 1024 * 1024)),
+        5 * 1024 * 1024
+    )
+    
+    file_size = os.path.getsize(filepath)
+    truncated = file_size > max_bytes
+    
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read(max_bytes)
+    except UnicodeDecodeError:
+        return jsonify({'error': 'File is not valid UTF-8 text'}), 400
+    except Exception as e:
+        return jsonify({'error': f'Failed to read file: {str(e)[:100]}'}), 500
+    
+    return jsonify({
+        'content': content,
+        'mime': mime_type,
+        'sizeBytes': file_size,
+        'truncated': truncated,
+        'filename': output.get('filename')
+    })
+
+
+@app.route('/api/jobs/<job_id>/speakers', methods=['GET'])
+def api_get_speakers(job_id):
+    """
+    Get detected speakers and current label mapping for a job.
+    
+    Returns speakers detected from diarization.json or inferred from speaker.md,
+    along with any custom labels that have been set.
+    """
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Get current label mapping from manifest
+    speaker_labels = manifest.get('speakerLabels', {})
+    
+    # Try to detect speakers from diarization.json outputs
+    detected_speakers = set()
+    
+    for output in manifest.get('outputs', []):
+        if output.get('type') == 'diarization_json' and not output.get('error'):
+            filepath = output.get('path')
+            if filepath and os.path.exists(filepath):
+                try:
+                    diarization_data = session_store.read_json(filepath)
+                    if diarization_data and 'segments' in diarization_data:
+                        for seg in diarization_data['segments']:
+                            speaker = seg.get('speaker')
+                            if speaker:
+                                detected_speakers.add(speaker)
+                except Exception:
+                    pass
+    
+    # If no diarization.json, try to infer from speaker.md content
+    if not detected_speakers:
+        for output in manifest.get('outputs', []):
+            if output.get('type') == 'speaker_markdown' and not output.get('error'):
+                filepath = output.get('path')
+                if filepath and os.path.exists(filepath):
+                    try:
+                        with open(filepath, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        # Look for patterns like "SPEAKER_00:" or "Speaker 1:"
+                        import re
+                        # Match SPEAKER_XX format
+                        matches = re.findall(r'\b(SPEAKER_\d+)\b', content)
+                        detected_speakers.update(matches)
+                        # Also match "Speaker N:" format
+                        speaker_n_matches = re.findall(r'\bSpeaker\s+(\d+):', content)
+                        for n in speaker_n_matches:
+                            detected_speakers.add(f'SPEAKER_{int(n)-1:02d}')
+                    except Exception:
+                        pass
+    
+    # Sort speakers for consistent ordering
+    speakers = sorted(list(detected_speakers))
+    
+    # Build response with default labels for any speakers without custom labels
+    speaker_info = []
+    for speaker_id in speakers:
+        speaker_info.append({
+            'id': speaker_id,
+            'label': speaker_labels.get(speaker_id),
+            'defaultLabel': f'Speaker {int(speaker_id.split("_")[1]) + 1}' if '_' in speaker_id else speaker_id
+        })
+    
+    return jsonify({
+        'speakers': speaker_info,
+        'labels': speaker_labels
+    })
+
+
+@app.route('/api/jobs/<job_id>/speakers', methods=['PUT'])
+def api_put_speakers(job_id):
+    """
+    Update speaker label mapping for a job.
+    
+    Body: { "labels": { "SPEAKER_00": "Child", "SPEAKER_01": "Parent" } }
+    Labels are persisted in the job manifest.
+    """
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    data = request.get_json() or {}
+    labels = data.get('labels', {})
+    
+    if not isinstance(labels, dict):
+        return jsonify({'error': 'labels must be an object'}), 400
+    
+    # Validate labels
+    MAX_LABEL_LENGTH = 40
+    ALLOWED_CHARS = re.compile(r'^[\w\s\-\'\.]+$', re.UNICODE)
+    
+    validated_labels = {}
+    for speaker_id, label in labels.items():
+        # Validate speaker ID format
+        if not re.match(r'^SPEAKER_\d+$', speaker_id):
+            return jsonify({'error': f'Invalid speaker ID format: {speaker_id}'}), 400
+        
+        # Validate label
+        if label is None or label == '':
+            # Empty label means remove custom label (use default)
+            continue
+        
+        if not isinstance(label, str):
+            return jsonify({'error': f'Label for {speaker_id} must be a string'}), 400
+        
+        label = label.strip()
+        if len(label) > MAX_LABEL_LENGTH:
+            return jsonify({'error': f'Label for {speaker_id} exceeds {MAX_LABEL_LENGTH} characters'}), 400
+        
+        if not ALLOWED_CHARS.match(label):
+            return jsonify({'error': f'Label for {speaker_id} contains invalid characters'}), 400
+        
+        validated_labels[speaker_id] = label
+    
+    # Update manifest with new labels
+    manifest['speakerLabels'] = validated_labels
+    manifest['updatedAt'] = datetime.now(timezone.utc).isoformat()
+    
+    # Atomic write
+    session_store.atomic_write_json(manifest_path, manifest)
+    
+    return jsonify({
+        'labels': validated_labels,
+        'message': 'Speaker labels updated'
+    })
+
+_CSRF_PROTECTED_ENDPOINTS.add('api_put_speakers')
+
+
+@app.route('/api/session', methods=['GET'])
+def api_get_session():
+    """Get session info including CSRF token (server mode only)."""
+    if not session_store.is_server_mode():
+        return jsonify({'error': 'Not available in local mode'}), 404
+    
+    session_id = g.session_id
+    csrf_token = session_store.get_csrf_token(session_id)
+    
+    response = jsonify({
+        'csrfToken': csrf_token
+    })
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.route('/api/jobs', methods=['GET'])
+def api_list_jobs():
+    """List jobs for current session."""
+    session_id = g.session_id
+    jobs = session_store.list_jobs(session_id, limit=20)
+    return jsonify({'jobs': jobs})
+
+
+@app.route('/api/mode', methods=['GET'])
+def api_get_mode():
+    """Get current application mode."""
+    return jsonify({
+        'mode': session_store.get_app_mode(),
+        'isServer': session_store.is_server_mode(),
+        'isLocal': session_store.is_local_mode()
+    })
+
+
+@app.route('/api/runtime', methods=['GET'])
+def api_get_runtime():
+    """Get runtime environment and supported compute backends."""
+    env = compute_backend.get_cached_environment()
+    
+    # Add diarization availability info
+    hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
+    
+    # Check diarization availability
+    pyannote_available = False
+    diarization_reason = None
+    
+    # Check if HF token is present
+    hf_token_present = bool(hf_token)
+    env['hfTokenPresent'] = hf_token_present
+    
+    # Check if pyannote can be imported
+    try:
+        import pyannote.audio
+        pyannote_available = True
+        env['diarizationImportOk'] = True
+    except (ImportError, AttributeError, Exception) as e:
+        pyannote_available = False
+        env['diarizationImportOk'] = False
+        diarization_reason = f'pyannote.audio not available: {type(e).__name__}'
+    
+    # Check HF access if token is present and pyannote is available
+    hf_access_ok = False
+    hf_access_missing = []
+    hf_access_message = None
+    
+    if hf_token_present and pyannote_available:
+        try:
+            from diarization import check_diarization_access
+            access_info = check_diarization_access(hf_token)
+            hf_access_ok = access_info['ok']
+            hf_access_missing = access_info['missing']
+            hf_access_message = access_info['message']
+        except Exception as e:
+            hf_access_ok = False
+            hf_access_message = f"Failed to check access: {e}"
+    
+    env['hfAccessOk'] = hf_access_ok
+    env['hfAccessMissingRepos'] = hf_access_missing
+    env['hfAccessMessage'] = hf_access_message
+    
+    # Determine overall diarization availability
+    diarization_available = hf_token_present and pyannote_available and hf_access_ok
+    env['diarizationAvailable'] = diarization_available
+    
+    # Set reason if not available
+    if not diarization_available:
+        reasons = []
+        if not hf_token_present:
+            reasons.append('HF_TOKEN environment variable not set')
+        if not pyannote_available:
+            reasons.append('pyannote.audio not available')
+        if hf_token_present and pyannote_available and not hf_access_ok:
+            if hf_access_missing:
+                reasons.append(f"Missing access to: {', '.join(hf_access_missing)}")
+            if hf_access_message:
+                reasons.append(hf_access_message)
+        diarization_reason = '; '.join(reasons)
+    
+    if diarization_reason:
+        env['diarizationReason'] = diarization_reason
+    
+    # Add version info for debugging
+    try:
+        import torch
+        env['torchVersion'] = torch.__version__
+    except:
+        env['torchVersion'] = None
+    
+    try:
+        import torchaudio
+        env['torchaudioVersion'] = torchaudio.__version__
+    except:
+        env['torchaudioVersion'] = None
+    
+    if pyannote_available:
+        try:
+            import pyannote.audio
+            env['pyannoteVersion'] = pyannote.audio.__version__
+        except:
+            env['pyannoteVersion'] = 'installed'
+    else:
+        env['pyannoteVersion'] = None
+    
+    # Add diarization policy configuration (server caps)
+    from diarization_policy import get_server_policy_config
+    env['diarizationPolicy'] = get_server_policy_config()
+    
+    # Add build version info
+    env['buildCommit'] = os.environ.get('BUILD_COMMIT', 'unknown')
+    env['buildTime'] = os.environ.get('BUILD_TIME', 'unknown')
+    
+    return jsonify(env)
+
+
+@app.route('/api/diarization/policy', methods=['POST'])
+def api_compute_diarization_policy():
+    """
+    Compute effective diarization policy from user preferences.
+    
+    This endpoint ensures the UI and backend use the same policy computation.
+    The UI calls this when diarization options change to preview effective values.
+    """
+    data = request.get_json() or {}
+    
+    diarization_enabled = data.get('diarizationEnabled', False)
+    diarization_auto_split = data.get('diarizationAutoSplit', False)
+    requested_max_duration = data.get('requestedMaxDurationSeconds')
+    requested_chunk = data.get('requestedChunkSeconds')
+    requested_overlap = data.get('requestedOverlapSeconds')
+    
+    from diarization_policy import compute_diarization_policy, get_server_policy_config
+    
+    server_config = get_server_policy_config()
+    
+    policy = compute_diarization_policy(
+        diarization_enabled=diarization_enabled,
+        diarization_auto_split=diarization_auto_split,
+        requested_max_duration_seconds=requested_max_duration,
+        requested_chunk_seconds=requested_chunk,
+        requested_overlap_seconds=requested_overlap,
+        server_max_duration_seconds=server_config['serverMaxDurationSeconds'],
+        default_max_duration_seconds=server_config['defaultMaxDurationSeconds'],
+        min_chunk_seconds=server_config['minChunkSeconds'],
+        max_chunk_seconds=server_config['maxChunkSeconds'],
+        overlap_ratio=server_config['overlapRatio'],
+        min_overlap_seconds=server_config['minOverlapSeconds'],
+        max_overlap_seconds=server_config['maxOverlapSeconds'],
+    )
+    
+    # Generate user-friendly warnings for any clamped values
+    from diarization_policy import get_clamping_warnings, estimate_chunk_count
+    warnings = get_clamping_warnings(policy) if policy else []
+    
+    # Calculate estimated chunks if file duration is provided
+    file_duration = data.get('fileDurationSeconds')
+    estimated_chunks = None
+    if policy and file_duration and file_duration > 0:
+        estimated_chunks = estimate_chunk_count(
+            file_duration_seconds=file_duration,
+            chunk_seconds=policy['chunkSeconds'],
+            overlap_seconds=policy['overlapSeconds']
+        )
+    
+    return jsonify({
+        'policy': policy,
+        'serverConfig': server_config,
+        'warnings': warnings,
+        'estimatedChunks': estimated_chunks
+    })
+
+
+@app.route('/api/admin/stats', methods=['GET'])
+def api_admin_stats():
+    """Admin diagnostics endpoint. Requires X-Admin-Token header."""
+    admin_token = os.environ.get('ADMIN_TOKEN', '')
+    if not admin_token:
+        return jsonify({'error': 'Admin endpoint not configured'}), 404
+    
+    provided_token = request.headers.get('X-Admin-Token', '')
+    if not provided_token or not secrets.compare_digest(provided_token, admin_token):
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    import hashlib
+    
+    # Count sessions and jobs
+    sessions_root = os.path.join(session_store.data_root(), 'sessions')
+    session_count = 0
+    jobs_by_status = {}
+    total_disk_mb = 0.0
+    
+    if os.path.exists(sessions_root):
+        for session_id in os.listdir(sessions_root):
+            session_path = os.path.join(sessions_root, session_id)
+            if not os.path.isdir(session_path):
+                continue
+            session_count += 1
+            
+            # Count disk usage
+            for dirpath, dirnames, filenames in os.walk(session_path):
+                for filename in filenames:
+                    try:
+                        total_disk_mb += os.path.getsize(os.path.join(dirpath, filename)) / (1024 * 1024)
+                    except OSError:
+                        pass
+            
+            # Count jobs by status
+            jobs_path = os.path.join(session_path, 'jobs')
+            if os.path.exists(jobs_path):
+                for job_id in os.listdir(jobs_path):
+                    manifest = session_store.read_json(os.path.join(jobs_path, job_id, 'job.json'))
+                    if manifest:
+                        status = manifest.get('status', 'unknown')
+                        jobs_by_status[status] = jobs_by_status.get(status, 0) + 1
+    
+    response = jsonify({
+        'sessionCount': session_count,
+        'jobsByStatus': jobs_by_status,
+        'totalDiskUsageMB': round(total_disk_mb, 2),
+        'limits': {
+            'maxUploadMB': session_store.get_max_upload_mb(),
+            'maxSessionMB': session_store.get_max_session_mb(),
+            'maxFilesPerJob': session_store.get_max_files_per_job(),
+            'sessionTTLHours': session_store.get_session_ttl_hours(),
+            'jobStaleMins': session_store.get_job_stale_minutes()
+        }
+    })
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 def run_with_webview():

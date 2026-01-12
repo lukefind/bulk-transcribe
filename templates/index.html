@@ -48,8 +48,64 @@
     </header>
 
     <main class="max-w-4xl mx-auto px-6 py-8">
+        <!-- Mode indicator -->
+        {% if is_server_mode %}
+        <div class="mb-4 text-xs text-gray-500 flex items-center gap-2">
+            <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+            Server Mode (session-isolated)
+        </div>
+        {% endif %}
+        
         <form id="transcribeForm" class="space-y-6">
-            <!-- Two Column Layout for Folders -->
+            {% if is_server_mode %}
+            <!-- SERVER MODE: Upload-based workflow -->
+            <div class="glass rounded-2xl p-5 card">
+                <label class="flex items-center gap-2 text-sm font-medium text-gray-300 mb-3">
+                    <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                    </svg>
+                    Upload Audio Files
+                </label>
+                
+                <!-- Upload Dropzone -->
+                <div id="uploadDropzone" 
+                     class="border-2 border-dashed border-gray-600/50 rounded-xl p-6 text-center cursor-pointer hover:border-primary-500/50 hover:bg-surface-700/30 transition-all"
+                     onclick="document.getElementById('fileUploadInput').click()">
+                    <input type="file" id="fileUploadInput" multiple accept=".mp3,.wav,.m4a,.flac,.ogg,.webm,.mp4,.mov,.avi" class="hidden" onchange="handleServerUpload(event)">
+                    <svg class="w-10 h-10 mx-auto text-gray-500 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                    </svg>
+                    <p class="text-sm text-gray-300">Drop audio files here or click to upload</p>
+                    <p class="text-xs text-gray-500 mt-2">Supports: MP3, WAV, M4A, FLAC, OGG, WebM, MP4, MOV, AVI</p>
+                </div>
+                
+                <!-- Upload Queue -->
+                <div id="uploadQueue" class="mt-4 hidden">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-sm text-gray-400">Files to transcribe:</span>
+                        <button type="button" onclick="clearUploadQueue()" class="text-xs text-red-400 hover:text-red-300">Clear all</button>
+                    </div>
+                    <div id="uploadQueueList" class="space-y-2 max-h-48 overflow-auto"></div>
+                </div>
+                
+                <div id="uploadStatus" class="mt-3 text-xs text-primary-300 hidden"></div>
+            </div>
+            
+            <!-- Job History (Server Mode) -->
+            <div id="jobHistory" class="glass rounded-2xl p-5 card hidden">
+                <div class="flex items-center justify-between mb-3">
+                    <label class="flex items-center gap-2 text-sm font-medium text-gray-300">
+                        <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        Recent Jobs
+                    </label>
+                    <button type="button" onclick="loadJobHistory()" class="text-xs text-primary-400 hover:text-primary-300">Refresh</button>
+                </div>
+                <div id="jobHistoryList" class="space-y-2 max-h-48 overflow-auto"></div>
+            </div>
+            {% else %}
+            <!-- LOCAL MODE: Folder-based workflow -->
             <div class="grid md:grid-cols-2 gap-4">
                 <!-- Input Folder -->
                 <div class="glass rounded-2xl p-5 card">
@@ -69,19 +125,6 @@
                         </button>
                     </div>
                     <div id="filePreview" class="mt-2 text-xs text-primary-300 hidden"></div>
-                    
-                    <!-- Upload Dropzone -->
-                    <div id="uploadDropzone" 
-                         class="mt-3 border-2 border-dashed border-gray-600/50 rounded-xl p-4 text-center cursor-pointer hover:border-primary-500/50 hover:bg-surface-700/30 transition-all"
-                         onclick="document.getElementById('fileUploadInput').click()">
-                        <input type="file" id="fileUploadInput" multiple accept=".mp3,.wav,.m4a,.flac,.ogg,.webm,.mp4,.mov,.avi" class="hidden" onchange="handleFileUpload(event)">
-                        <svg class="w-6 h-6 mx-auto text-gray-500 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
-                        </svg>
-                        <p class="text-xs text-gray-400">Drop audio files here or click to upload</p>
-                        <p class="text-xs text-gray-500 mt-1">Supports: MP3, WAV, M4A, FLAC, OGG, WebM, MP4, MOV, AVI</p>
-                    </div>
-                    <div id="uploadStatus" class="mt-2 text-xs text-primary-300 hidden"></div>
                 </div>
 
                 <!-- Output Folder -->
@@ -122,6 +165,7 @@
                     <div id="downloadStatus" class="mt-2 text-xs text-gray-400 hidden"></div>
                 </div>
             </div>
+            {% endif %}
 
             <!-- Settings Row -->
             <div class="grid md:grid-cols-2 gap-4">
@@ -298,6 +342,98 @@
                             </select>
                         </div>
                         <p class="text-xs text-gray-500">Max segment length only applies when word timestamps are enabled.</p>
+                        
+                        <!-- Speaker Diarization -->
+                        <div class="mt-4 pt-4 border-t border-gray-700/30">
+                            <label class="flex items-center gap-3 cursor-pointer group mb-3">
+                                <input type="checkbox" id="diarizationEnabled" onchange="updateDiarizationOptions()"
+                                       class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0">
+                                <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Enable speaker diarization</span>
+                            </label>
+                            <p class="text-xs text-gray-500 mb-3">Identifies who spoke when. Requires HuggingFace token (HF_TOKEN env var).</p>
+                            <p id="diarizationReason" class="hidden text-xs text-amber-400 mb-3"></p>
+                            
+                            <div id="diarizationOptions" class="hidden space-y-3 ml-7">
+                                <div class="flex items-center justify-between">
+                                    <label class="text-sm text-gray-300">Min speakers</label>
+                                    <select id="minSpeakers" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                                        <option value="">Auto-detect</option>
+                                        <option value="1">1</option>
+                                        <option value="2">2</option>
+                                        <option value="3">3</option>
+                                        <option value="4">4</option>
+                                        <option value="5">5</option>
+                                    </select>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <label class="text-sm text-gray-300">Max speakers</label>
+                                    <select id="maxSpeakers" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                                        <option value="">Auto-detect</option>
+                                        <option value="2">2</option>
+                                        <option value="3">3</option>
+                                        <option value="4">4</option>
+                                        <option value="5">5</option>
+                                        <option value="6">6</option>
+                                        <option value="8">8</option>
+                                        <option value="10">10</option>
+                                    </select>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <label class="text-sm text-gray-300">Fixed speakers</label>
+                                    <select id="numSpeakers" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                                        <option value="">Auto-detect</option>
+                                        <option value="1">1</option>
+                                        <option value="2">2</option>
+                                        <option value="3">3</option>
+                                        <option value="4">4</option>
+                                        <option value="5">5</option>
+                                        <option value="6">6</option>
+                                    </select>
+                                </div>
+                                <p class="text-xs text-gray-500">If you know the exact number of speakers, set "Fixed speakers" for best results.</p>
+                                
+                                <!-- Max diarization length -->
+                                <div class="border-t border-gray-700/50 pt-3 mt-3">
+                                    <div class="flex items-center justify-between mb-2">
+                                        <label class="text-xs text-gray-400">Max diarization length</label>
+                                        <select id="diarizationMaxDuration" class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs">
+                                            <option value="180" selected>3 min</option>
+                                            <option value="300">5 min</option>
+                                            <option value="600">10 min</option>
+                                            <option value="900">15 min</option>
+                                            <option value="1200">20 min</option>
+                                            <option value="1800">30 min</option>
+                                        </select>
+                                    </div>
+                                    <p class="text-xs text-gray-500 mb-3">Files longer than this require auto-split.</p>
+                                    
+                                    <div class="flex items-center justify-between mb-2">
+                                        <label class="text-sm text-gray-300 flex items-center gap-2">
+                                            <input type="checkbox" id="diarizationAutoSplit" class="rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500">
+                                            Auto-split long audio
+                                        </label>
+                                    </div>
+                                    <p class="text-xs text-gray-500 mb-2" id="autoSplitHelp">Process long files by splitting into chunks. Recommended for CPU.</p>
+                                    
+                                    <!-- Policy preview (auto-computed) -->
+                                    <div id="policyPreview" class="mt-3 p-2 bg-surface-800/50 rounded text-xs text-gray-400 hidden">
+                                        <div class="flex items-center justify-between mb-1">
+                                            <span>Chunk size:</span>
+                                            <span id="policyChunkSeconds" class="text-gray-300">150s</span>
+                                        </div>
+                                        <div class="flex items-center justify-between mb-1">
+                                            <span>Overlap:</span>
+                                            <span id="policyOverlapSeconds" class="text-gray-300">5s</span>
+                                        </div>
+                                        <div id="policyEstimatedChunks" class="flex items-center justify-between hidden">
+                                            <span>Est. chunks:</span>
+                                            <span id="policyChunkCount" class="text-gray-300">-</span>
+                                        </div>
+                                        <div id="policyWarnings" class="mt-2 hidden"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -325,40 +461,106 @@
             </div>
         </form>
 
-        <!-- Progress Section -->
+        <!-- Job Control Panel -->
         <div id="progressSection" class="mt-8 hidden">
             <div class="glass rounded-2xl p-6">
+                <!-- Header with job info -->
                 <div class="flex items-center justify-between mb-4">
-                    <h2 class="text-lg font-semibold text-white flex items-center gap-2">
-                        <svg class="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                        </svg>
-                        Progress
-                    </h2>
+                    <div class="flex items-center gap-3">
+                        <div class="w-3 h-3 rounded-full bg-primary-400 animate-pulse" id="jobStatusDot"></div>
+                        <h2 class="text-lg font-semibold text-white">Active Job</h2>
+                        <span id="jobIdBadge" class="text-xs font-mono text-gray-400 bg-surface-700/50 px-2 py-0.5 rounded"></span>
+                    </div>
                     <div class="flex items-center gap-2">
-                        <span id="activeJobs" class="text-sm text-gray-400 bg-surface-700/50 px-3 py-1 rounded-full">Jobs: 0</span>
-                        <span id="progressCount" class="text-sm text-gray-400 bg-surface-700/50 px-3 py-1 rounded-full">0 / 0</span>
+                        <span id="jobStatusBadge" class="text-xs font-semibold px-2.5 py-1 rounded-full bg-primary-500/20 text-primary-300">RUNNING</span>
                     </div>
                 </div>
                 
-                <div class="w-full bg-surface-700/50 rounded-full h-2 mb-4 overflow-hidden">
-                    <div id="progressBar" class="bg-gradient-to-r from-primary-500 to-primary-400 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                <!-- Timing info -->
+                <div class="grid grid-cols-2 gap-4 mb-4 text-sm">
+                    <div class="bg-surface-700/30 rounded-lg p-3">
+                        <div class="text-gray-400 text-xs mb-1">Started</div>
+                        <div id="jobStartTime" class="text-white font-mono">--:--:--</div>
+                    </div>
+                    <div class="bg-surface-700/30 rounded-lg p-3">
+                        <div class="text-gray-400 text-xs mb-1">Elapsed</div>
+                        <div id="jobElapsed" class="text-white font-mono text-lg">00:00</div>
+                    </div>
                 </div>
                 
-                <div id="currentFile" class="text-sm text-gray-300 flex items-center gap-2">
-                    <span class="spinner"></span>
-                    <span>Starting...</span>
+                <!-- Diarization policy (shown when diarization enabled) -->
+                <div id="jobDiarizationPolicy" class="bg-surface-700/30 rounded-lg p-3 mb-4 hidden">
+                    <div class="text-xs text-gray-400 mb-2">Diarization Policy</div>
+                    <div class="grid grid-cols-3 gap-2 text-xs">
+                        <div>
+                            <span class="text-gray-500">Max:</span>
+                            <span id="jobPolicyMaxDuration" class="text-gray-300 ml-1">3m</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-500">Chunk:</span>
+                            <span id="jobPolicyChunk" class="text-gray-300 ml-1">150s</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-500">Overlap:</span>
+                            <span id="jobPolicyOverlap" class="text-gray-300 ml-1">5s</span>
+                        </div>
+                    </div>
                 </div>
                 
-                <!-- Per-file progress bar -->
-                <div id="fileProgressSection" class="mt-4 hidden">
-                    <div class="flex items-center justify-between text-xs text-gray-400 mb-1">
-                        <span>Current file progress</span>
-                        <span id="fileProgressPercent">0%</span>
+                <!-- File progress -->
+                <div class="mb-4">
+                    <div class="flex items-center justify-between text-sm mb-2">
+                        <span id="filePosition" class="text-gray-300">File 0 of 0</span>
+                        <span id="progressPercent" class="text-gray-400">0%</span>
                     </div>
-                    <div class="w-full bg-surface-700/50 rounded-full h-1.5 overflow-hidden">
-                        <div id="fileProgressBar" class="bg-gradient-to-r from-green-500 to-emerald-400 h-1.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+                    <div class="w-full bg-surface-700/50 rounded-full h-2.5 overflow-hidden">
+                        <div id="progressBar" class="bg-gradient-to-r from-primary-500 to-primary-400 h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
                     </div>
+                </div>
+                
+                <!-- Current file and stage -->
+                <div class="bg-surface-700/30 rounded-lg p-3 mb-4">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="spinner"></span>
+                        <span id="currentStage" class="text-sm text-primary-300 font-medium">Starting...</span>
+                        <span id="stageElapsed" class="text-xs text-gray-500"></span>
+                    </div>
+                    <div id="currentFile" class="text-sm text-gray-300 font-mono truncate"></div>
+                </div>
+                
+                <!-- Cancel controls -->
+                <div class="flex gap-2" id="cancelControls">
+                    <button type="button" id="cancelAfterBtn" onclick="cancelAfterCurrentFile()"
+                            class="flex-1 py-2.5 px-4 bg-amber-600/20 hover:bg-amber-600/40 border border-amber-500/30 text-amber-300 font-medium rounded-lg transition-all text-sm">
+                        <span class="flex items-center justify-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            Cancel After File
+                        </span>
+                        <span class="text-xs text-amber-400/70 block mt-0.5">Finish current, then stop</span>
+                    </button>
+                    <button type="button" id="forceStopBtn" onclick="forceStopNow()"
+                            class="flex-1 py-2.5 px-4 bg-red-600/20 hover:bg-red-600/40 border border-red-500/30 text-red-300 font-medium rounded-lg transition-all text-sm">
+                        <span class="flex items-center justify-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                            Force Stop Now
+                        </span>
+                        <span class="text-xs text-red-400/70 block mt-0.5">Stop immediately</span>
+                    </button>
+                </div>
+                
+                <!-- Activity timeline -->
+                <div id="activityTimeline" class="mt-4 border-t border-gray-700/50 pt-4">
+                    <div class="text-xs text-gray-400 mb-2 flex items-center gap-1">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        Activity
+                    </div>
+                    <div id="activityLog" class="text-xs font-mono text-gray-400 space-y-1 max-h-32 overflow-y-auto"></div>
                 </div>
                 
                 <!-- Live transcription preview -->
@@ -407,6 +609,106 @@
                 </div>
             </div>
         </div>
+        
+        <!-- Review Panel (shown when job has outputs) -->
+        <div id="reviewPanel" class="mt-6 hidden">
+            <div class="glass rounded-2xl p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                        <svg class="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                        </svg>
+                        Review Transcript
+                    </h2>
+                    <button onclick="closeReviewPanel()" class="text-gray-400 hover:text-white p-1">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                
+                <!-- Audio Player -->
+                <div id="reviewAudioPlayer" class="mb-4 p-3 bg-surface-800/50 rounded-lg">
+                    <div class="flex items-center gap-3 mb-2">
+                        <button id="audioPlayBtn" onclick="toggleAudioPlayback()" class="w-10 h-10 flex items-center justify-center bg-primary-600 hover:bg-primary-500 rounded-full transition-all">
+                            <svg id="audioPlayIcon" class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M8 5v14l11-7z"></path>
+                            </svg>
+                        </button>
+                        <div class="flex-1">
+                            <input type="range" id="audioScrubber" min="0" max="100" value="0" 
+                                   class="w-full h-2 bg-surface-700 rounded-lg appearance-none cursor-pointer accent-primary-500"
+                                   oninput="seekAudio(this.value)">
+                        </div>
+                        <div class="text-xs text-gray-400 font-mono min-w-[80px] text-right">
+                            <span id="audioCurrentTime">0:00</span> / <span id="audioDuration">0:00</span>
+                        </div>
+                    </div>
+                    <div id="audioFileName" class="text-xs text-gray-500 truncate"></div>
+                </div>
+                
+                <!-- Transcript Controls -->
+                <div class="flex flex-wrap items-center gap-2 mb-4">
+                    <select id="reviewOutputSelect" onchange="loadReviewOutput()" 
+                            class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                    </select>
+                    <input type="text" id="reviewSearchInput" placeholder="Search transcript..." 
+                           class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm flex-1 min-w-[150px]"
+                           oninput="debounceSearch()">
+                    <button onclick="openSpeakerEditor()" id="speakerEditorBtn"
+                            class="px-3 py-1.5 bg-surface-700/50 hover:bg-surface-600/50 border border-gray-600/50 rounded-lg text-gray-300 text-sm flex items-center gap-1.5 hidden">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                        </svg>
+                        Speakers
+                    </button>
+                    <label class="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+                        <input type="checkbox" id="autoScrollCheckbox" checked class="rounded bg-surface-700 border-gray-600 text-primary-500">
+                        Auto-scroll
+                    </label>
+                </div>
+                
+                <!-- Transcript Viewer -->
+                <div id="reviewTranscriptViewer" class="bg-surface-800/30 rounded-lg p-4 max-h-[400px] overflow-y-auto font-mono text-sm">
+                    <div id="reviewTranscriptContent" class="space-y-1">
+                        <p class="text-gray-500 italic">Select an output to preview...</p>
+                    </div>
+                </div>
+                
+                <!-- Truncation warning -->
+                <div id="reviewTruncatedWarning" class="mt-2 text-xs text-amber-400 hidden">
+                    Content truncated. Download the full file for complete transcript.
+                </div>
+            </div>
+        </div>
+        
+        <!-- Speaker Label Editor Modal -->
+        <div id="speakerEditorModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+            <div class="bg-surface-800 border border-gray-700 rounded-2xl p-6 max-w-md w-full max-h-[80vh] overflow-y-auto">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-white">Edit Speaker Labels</h3>
+                    <button onclick="closeSpeakerEditor()" class="text-gray-400 hover:text-white">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                <p class="text-sm text-gray-400 mb-4">Rename speakers to make the transcript easier to read.</p>
+                <div id="speakerLabelsList" class="space-y-3 mb-4">
+                    <p class="text-gray-500 text-sm italic">Loading speakers...</p>
+                </div>
+                <div id="speakerEditorError" class="text-red-400 text-sm mb-3 hidden"></div>
+                <div class="flex gap-2">
+                    <button onclick="resetSpeakerLabels()" class="px-4 py-2 bg-surface-700 hover:bg-surface-600 text-gray-300 rounded-lg text-sm">
+                        Reset
+                    </button>
+                    <button onclick="saveSpeakerLabels()" class="flex-1 px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg text-sm">
+                        Apply Labels
+                    </button>
+                </div>
+            </div>
+        </div>
     </main>
     
     <!-- Footer -->
@@ -417,6 +719,10 @@
     </footer>
 
     <script>
+        // App mode from server
+        const APP_MODE = '{{ app_mode }}';
+        const IS_SERVER_MODE = {{ 'true' if is_server_mode else 'false' }};
+        
         const form = document.getElementById('transcribeForm');
         const submitBtn = document.getElementById('submitBtn');
         const progressSection = document.getElementById('progressSection');
@@ -428,6 +734,17 @@
         let modelsData = [];
         const cancelAfterBtn = document.getElementById('cancelAfterBtn');
         const forceStopBtn = document.getElementById('forceStopBtn');
+        
+        // Server mode state
+        let uploadedFiles = [];  // Array of {id, filename, size}
+        let currentJobId = null;
+        let jobPollInterval = null;
+        let csrfToken = null;  // CSRF token for server mode POSTs
+        
+        // Runtime environment (from /api/runtime)
+        let runtimeEnv = null;
+        let supportedBackends = ['cpu'];
+        let recommendedBackend = 'cpu';
 
         // Load models on page load (handled in restoreSavedSettings section below)
 
@@ -632,18 +949,24 @@
         }
 
         async function cancelAfterCurrentFile() {
+            if (!currentJobId) return;
             try {
                 const btn = document.getElementById('cancelAfterBtn');
                 btn.disabled = true;
-                btn.textContent = 'Stopping after file...';
-                const response = await fetch('/cancel', { 
+                btn.innerHTML = '<span class="text-amber-400">Canceling after current file...</span>';
+                
+                const headers = {};
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch(`/api/jobs/${currentJobId}/cancel-after-current`, { 
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mode: 'after_file' })
+                    headers
                 });
                 const data = await response.json();
                 if (data.error) {
                     console.error('Cancel failed:', data.error);
+                    btn.disabled = false;
+                    btn.innerHTML = 'Cancel After File';
                 }
             } catch (e) {
                 console.error('Cancel failed:', e);
@@ -651,15 +974,19 @@
         }
 
         async function forceStopNow() {
+            if (!currentJobId) return;
             try {
                 const btn = document.getElementById('forceStopBtn');
                 btn.disabled = true;
-                btn.textContent = 'Stopping...';
+                btn.innerHTML = '<span class="text-red-400">Stopping...</span>';
                 document.getElementById('cancelAfterBtn').disabled = true;
-                const response = await fetch('/cancel', { 
+                
+                const headers = {};
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch(`/api/jobs/${currentJobId}/cancel`, { 
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mode: 'force' })
+                    headers
                 });
                 const data = await response.json();
                 if (data.error) {
@@ -789,11 +1116,391 @@
             }
         }
 
+        // Fetch CSRF token for server mode
+        async function fetchCsrfToken() {
+            if (!IS_SERVER_MODE) return;
+            try {
+                const response = await fetch('/api/session');
+                const data = await response.json();
+                csrfToken = data.csrfToken;
+            } catch (e) {
+                console.error('Failed to fetch CSRF token:', e);
+            }
+        }
+        
+        // Fetch runtime environment and backend capabilities
+        async function fetchRuntime() {
+            try {
+                const response = await fetch('/api/runtime');
+                runtimeEnv = await response.json();
+                supportedBackends = runtimeEnv.supportedBackends || ['cpu'];
+                recommendedBackend = runtimeEnv.recommendedBackend || 'cpu';
+                updateBackendUI();
+            } catch (e) {
+                console.error('Failed to fetch runtime info:', e);
+            }
+        }
+        
+        function updateBackendUI() {
+            const backendSelect = document.getElementById('processingMode');
+            if (!backendSelect) return;
+            
+            // Clear and rebuild options based on supported backends
+            backendSelect.innerHTML = '';
+            
+            const backendLabels = {
+                'cpu': 'CPU',
+                'metal': 'Metal (Apple GPU)',
+                'cuda': 'CUDA (NVIDIA GPU)'
+            };
+            
+            supportedBackends.forEach(backend => {
+                const option = document.createElement('option');
+                option.value = backend;
+                option.textContent = backendLabels[backend] || backend;
+                if (backend === recommendedBackend) {
+                    option.textContent += ' (Recommended)';
+                }
+                backendSelect.appendChild(option);
+            });
+            
+            // Select recommended backend
+            backendSelect.value = recommendedBackend;
+            
+            // Update platform info display
+            const platformInfo = document.getElementById('platformInfo');
+            if (platformInfo && runtimeEnv) {
+                const dockerLabel = runtimeEnv.inDocker ? ' (Docker)' : '';
+                platformInfo.textContent = `${runtimeEnv.os} ${runtimeEnv.arch}${dockerLabel}`;
+            }
+            
+            updateWorkerOptionsUI();
+            updateDiarizationAvailability();
+        }
+        
+        function updateDiarizationAvailability() {
+            const checkbox = document.getElementById('diarizationEnabled');
+            const reasonEl = document.getElementById('diarizationReason');
+            if (!checkbox || !runtimeEnv) return;
+            
+            const available = runtimeEnv.diarizationAvailable;
+            checkbox.disabled = !available;
+            
+            if (reasonEl) {
+                if (!available && runtimeEnv.diarizationReason) {
+                    reasonEl.textContent = runtimeEnv.diarizationReason;
+                    reasonEl.classList.remove('hidden');
+                } else {
+                    reasonEl.classList.add('hidden');
+                }
+            }
+            
+            if (!available) {
+                checkbox.checked = false;
+                updateDiarizationOptions();
+            }
+        }
+        
+        function updateDiarizationOptions() {
+            const enabled = document.getElementById('diarizationEnabled').checked;
+            const optionsDiv = document.getElementById('diarizationOptions');
+            if (optionsDiv) {
+                optionsDiv.classList.toggle('hidden', !enabled);
+            }
+        }
+        
+        // Diarization policy state
+        let currentDiarizationPolicy = null;
+        let diarizationPolicyConfig = null;
+        
+        async function updateDiarizationPolicy() {
+            const diarizationEnabled = document.getElementById('enableDiarization')?.checked || false;
+            const autoSplit = document.getElementById('diarizationAutoSplit')?.checked || false;
+            const maxDuration = parseInt(document.getElementById('diarizationMaxDuration')?.value || '180', 10);
+            
+            const policyPreview = document.getElementById('policyPreview');
+            
+            if (!diarizationEnabled) {
+                if (policyPreview) policyPreview.classList.add('hidden');
+                currentDiarizationPolicy = null;
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/diarization/policy', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        diarizationEnabled: true,
+                        diarizationAutoSplit: autoSplit,
+                        requestedMaxDurationSeconds: maxDuration
+                    })
+                });
+                
+                const data = await response.json();
+                currentDiarizationPolicy = data.policy;
+                diarizationPolicyConfig = data.serverConfig;
+                const warnings = data.warnings || [];
+                const estimatedChunks = data.estimatedChunks;
+                
+                // Update policy preview
+                if (policyPreview && currentDiarizationPolicy) {
+                    document.getElementById('policyChunkSeconds').textContent = `${currentDiarizationPolicy.chunkSeconds}s`;
+                    document.getElementById('policyOverlapSeconds').textContent = `${currentDiarizationPolicy.overlapSeconds}s`;
+                    
+                    // Show estimated chunks if available
+                    const chunksEl = document.getElementById('policyEstimatedChunks');
+                    const chunkCountEl = document.getElementById('policyChunkCount');
+                    if (chunksEl && chunkCountEl) {
+                        if (estimatedChunks && estimatedChunks > 1) {
+                            chunkCountEl.textContent = estimatedChunks;
+                            chunksEl.classList.remove('hidden');
+                        } else {
+                            chunksEl.classList.add('hidden');
+                        }
+                    }
+                    
+                    // Show/hide warnings
+                    const warningsEl = document.getElementById('policyWarnings');
+                    if (warningsEl) {
+                        if (warnings.length > 0) {
+                            warningsEl.innerHTML = warnings.map(w => `<div class="text-amber-400 text-xs">${w}</div>`).join('');
+                            warningsEl.classList.remove('hidden');
+                        } else {
+                            warningsEl.classList.add('hidden');
+                        }
+                    }
+                    
+                    // Show preview only when auto-split is enabled
+                    policyPreview.classList.toggle('hidden', !autoSplit);
+                }
+                
+                // Update max duration dropdown options based on server config
+                if (diarizationPolicyConfig) {
+                    updateMaxDurationOptions(diarizationPolicyConfig.serverMaxDurationSeconds);
+                }
+            } catch (e) {
+                console.error('Failed to compute diarization policy:', e);
+            }
+        }
+        
+        function updateMaxDurationOptions(serverMax) {
+            const select = document.getElementById('diarizationMaxDuration');
+            if (!select) return;
+            
+            const options = select.querySelectorAll('option');
+            options.forEach(opt => {
+                const val = parseInt(opt.value, 10);
+                opt.disabled = val > serverMax;
+                if (val > serverMax) {
+                    opt.textContent = opt.textContent.replace(/ \(unavailable\)$/, '') + ' (unavailable)';
+                }
+            });
+        }
+        
+        function updateAutoSplitOptions() {
+            updateDiarizationPolicy();
+        }
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            const autoSplitCheckbox = document.getElementById('diarizationAutoSplit');
+            const maxDurationSelect = document.getElementById('diarizationMaxDuration');
+            const diarizationCheckbox = document.getElementById('enableDiarization');
+            
+            if (autoSplitCheckbox) {
+                autoSplitCheckbox.addEventListener('change', updateDiarizationPolicy);
+            }
+            if (maxDurationSelect) {
+                maxDurationSelect.addEventListener('change', updateDiarizationPolicy);
+            }
+            if (diarizationCheckbox) {
+                diarizationCheckbox.addEventListener('change', updateDiarizationPolicy);
+            }
+            
+            // Initial policy fetch
+            updateDiarizationPolicy();
+        });
+        
+        // Load job history for server mode
+        async function loadJobHistory() {
+            if (!IS_SERVER_MODE) return;
+            try {
+                const response = await fetch('/api/jobs');
+                const data = await response.json();
+                renderJobHistory(data.jobs || []);
+            } catch (e) {
+                console.error('Failed to load job history:', e);
+            }
+        }
+        
+        function renderJobHistory(jobs) {
+            const container = document.getElementById('jobHistory');
+            if (!container) return;
+            
+            if (jobs.length === 0) {
+                container.classList.add('hidden');
+                return;
+            }
+            
+            container.classList.remove('hidden');
+            const list = document.getElementById('jobHistoryList');
+            list.innerHTML = '';
+            
+            jobs.slice(0, 10).forEach(job => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center justify-between p-3 bg-surface-800/50 rounded-lg hover:bg-surface-700/50 transition-all group';
+                
+                const statusColors = {
+                    'complete': 'text-green-400',
+                    'complete_with_errors': 'text-amber-400',
+                    'running': 'text-yellow-400',
+                    'failed': 'text-red-400',
+                    'canceled': 'text-gray-400',
+                    'queued': 'text-blue-400'
+                };
+                const statusColor = statusColors[job.status] || 'text-gray-400';
+                const isRunning = job.status === 'running' || job.status === 'queued';
+                
+                const date = job.createdAt ? new Date(job.createdAt).toLocaleString() : '';
+                
+                div.innerHTML = `
+                    <div class="flex items-center gap-3 cursor-pointer flex-1" onclick="loadJob('${job.jobId}')">
+                        <span class="w-2 h-2 rounded-full ${statusColor.replace('text-', 'bg-')} ${isRunning ? 'animate-pulse' : ''}"></span>
+                        <div>
+                            <div class="text-sm text-gray-300">${job.inputCount} file(s)</div>
+                            <div class="text-xs text-gray-500">${date}</div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs ${statusColor}">${job.status.replace('_', ' ')}</span>
+                        ${!isRunning ? `
+                            <button onclick="event.stopPropagation(); deleteJob('${job.jobId}')" 
+                                    class="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 transition-all"
+                                    title="Delete job">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                </svg>
+                            </button>
+                        ` : ''}
+                    </div>
+                `;
+                list.appendChild(div);
+            });
+            
+            // Add clear old jobs button if there are jobs
+            if (jobs.length > 0) {
+                const clearBtn = document.createElement('button');
+                clearBtn.className = 'mt-3 w-full py-2 text-xs text-gray-500 hover:text-gray-300 hover:bg-surface-700/50 rounded-lg transition-all';
+                clearBtn.innerHTML = 'Clear old jobs (>24h)';
+                clearBtn.onclick = () => clearOldJobs();
+                list.appendChild(clearBtn);
+            }
+        }
+        
+        async function deleteJob(jobId) {
+            if (!confirm('Delete this job and all its outputs?')) return;
+            
+            try {
+                const headers = {};
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch(`/api/jobs/${jobId}`, {
+                    method: 'DELETE',
+                    headers
+                });
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    showError(data.error || 'Failed to delete job');
+                    return;
+                }
+                
+                // Refresh job history
+                loadJobHistory();
+                
+                // If this was the current job, clear it
+                if (currentJobId === jobId) {
+                    currentJobId = null;
+                    progressSection.classList.add('hidden');
+                    resultsSection.classList.add('hidden');
+                }
+            } catch (e) {
+                showError(`Failed to delete job: ${e.message}`);
+            }
+        }
+        
+        async function clearOldJobs() {
+            if (!confirm('Clear all jobs older than 24 hours?')) return;
+            
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch('/api/jobs/clear', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ olderThanHours: 24 })
+                });
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    showError(data.error || 'Failed to clear jobs');
+                    return;
+                }
+                
+                // Refresh job history
+                loadJobHistory();
+                
+                if (data.cleared > 0) {
+                    // Show brief success message
+                    console.log(`Cleared ${data.cleared} old jobs`);
+                }
+            } catch (e) {
+                showError(`Failed to clear jobs: ${e.message}`);
+            }
+        }
+        
+        async function loadJob(jobId) {
+            try {
+                const response = await fetch(`/api/jobs/${jobId}`);
+                const job = await response.json();
+                
+                if (job.error) {
+                    showError(job.error);
+                    return;
+                }
+                
+                currentJobId = jobId;
+                saveSelectedJob(jobId);
+                
+                if (job.status === 'running' || job.status === 'queued') {
+                    progressSection.classList.remove('hidden');
+                    resultsSection.classList.add('hidden');
+                    clearActivityLog();
+                    addActivityLogEntry('Viewing job', '');
+                    pollJobStatus();
+                } else {
+                    onJobComplete(job);
+                }
+            } catch (e) {
+                showError(`Failed to load job: ${e.message}`);
+            }
+        }
+
         // Call restore after models are loaded
         document.addEventListener('DOMContentLoaded', () => {
+            // Fetch runtime environment first (affects backend options)
+            fetchRuntime();
+            
             loadModels().then(() => {
                 restoreSavedSettings();
             });
+            
+            // Server mode initialization
+            if (IS_SERVER_MODE) {
+                fetchCsrfToken();
+                loadJobHistoryAndRestore();
+            }
             
             // Save language when changed
             document.getElementById('language').addEventListener('change', (e) => {
@@ -813,6 +1520,51 @@
                 saveToStorage(STORAGE_KEYS.outputFolder, document.getElementById('outputFolder').value);
             });
         });
+        
+        async function loadJobHistoryAndRestore() {
+            if (!IS_SERVER_MODE) return;
+            
+            try {
+                const response = await fetch('/api/jobs');
+                const data = await response.json();
+                const jobs = data.jobs || [];
+                
+                renderJobHistory(jobs);
+                
+                // Find any running job
+                const runningJob = jobs.find(j => j.status === 'running' || j.status === 'queued');
+                
+                if (runningJob) {
+                    // Auto-attach to running job
+                    currentJobId = runningJob.jobId;
+                    saveSelectedJob(runningJob.jobId);
+                    progressSection.classList.remove('hidden');
+                    resultsSection.classList.add('hidden');
+                    clearActivityLog();
+                    addActivityLogEntry('Reconnected to running job', '');
+                    pollJobStatus();
+                } else {
+                    // Try to restore last selected job from localStorage
+                    const savedJobId = localStorage.getItem('bt_selectedJobId');
+                    if (savedJobId) {
+                        const savedJob = jobs.find(j => j.jobId === savedJobId);
+                        if (savedJob) {
+                            loadJob(savedJobId);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to load job history:', e);
+            }
+        }
+        
+        function saveSelectedJob(jobId) {
+            if (jobId) {
+                localStorage.setItem('bt_selectedJobId', jobId);
+            } else {
+                localStorage.removeItem('bt_selectedJobId');
+            }
+        }
 
         async function browseInput() {
             try {
@@ -891,7 +1643,711 @@
             }
         }
 
-        // File Upload handling
+        // =============================================================================
+        // SERVER MODE: Upload and Job Functions
+        // =============================================================================
+        
+        async function handleServerUpload(event) {
+            const files = event.target.files;
+            if (!files || files.length === 0) return;
+            await uploadToServer(files);
+        }
+        
+        async function uploadToServer(files) {
+            const uploadStatus = document.getElementById('uploadStatus');
+            uploadStatus.textContent = `Uploading ${files.length} file(s)...`;
+            uploadStatus.classList.remove('hidden');
+            uploadStatus.classList.remove('text-red-400');
+            
+            const formData = new FormData();
+            for (const file of files) {
+                formData.append('files', file);
+            }
+            
+            try {
+                const headers = {};
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch('/api/uploads', {
+                    method: 'POST',
+                    headers,
+                    body: formData
+                });
+                const data = await response.json();
+                
+                if (data.error) {
+                    uploadStatus.textContent = `Error: ${data.error}`;
+                    uploadStatus.classList.add('text-red-400');
+                    return;
+                }
+                
+                // Add to upload queue
+                for (const upload of data.uploads) {
+                    uploadedFiles.push(upload);
+                }
+                
+                let msg = `Uploaded ${data.uploads.length} file(s)`;
+                if (data.skipped && data.skipped.length > 0) {
+                    msg += ` (${data.skipped.length} skipped)`;
+                }
+                uploadStatus.textContent = msg;
+                
+                updateUploadQueueUI();
+            } catch (e) {
+                uploadStatus.textContent = `Upload failed: ${e.message}`;
+                uploadStatus.classList.add('text-red-400');
+            }
+            
+            document.getElementById('fileUploadInput').value = '';
+        }
+        
+        function updateUploadQueueUI() {
+            const queue = document.getElementById('uploadQueue');
+            const list = document.getElementById('uploadQueueList');
+            
+            if (uploadedFiles.length === 0) {
+                queue.classList.add('hidden');
+                return;
+            }
+            
+            queue.classList.remove('hidden');
+            list.innerHTML = '';
+            
+            uploadedFiles.forEach((file, idx) => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center justify-between p-2 bg-surface-800/50 rounded-lg text-sm';
+                div.innerHTML = `
+                    <div class="flex items-center gap-2 truncate">
+                        <svg class="w-4 h-4 text-primary-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
+                        </svg>
+                        <span class="truncate text-gray-300">${file.filename}</span>
+                        <span class="text-xs text-gray-500">(${formatBytes(file.size)})</span>
+                    </div>
+                    <button type="button" onclick="removeFromQueue(${idx})" class="text-gray-500 hover:text-red-400 p-1">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                `;
+                list.appendChild(div);
+            });
+        }
+        
+        function removeFromQueue(idx) {
+            uploadedFiles.splice(idx, 1);
+            updateUploadQueueUI();
+        }
+        
+        function clearUploadQueue() {
+            uploadedFiles = [];
+            updateUploadQueueUI();
+        }
+        
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+        
+        function getOutputTypeLabel(type) {
+            const labels = {
+                'markdown': 'Transcript',
+                'json': 'JSON',
+                'speaker-markdown': 'Speaker Transcript',
+                'diarization-json': 'Diarization JSON',
+                'rttm': 'RTTM',
+                'error-report': 'Error Report'
+            };
+            return labels[type] || type;
+        }
+        
+        async function startServerJob() {
+            if (uploadedFiles.length === 0) {
+                showError('No files uploaded. Please upload audio files first.');
+                return;
+            }
+            
+            const uploadIds = uploadedFiles.map(f => f.id);
+            const backendSelect = document.getElementById('processingMode');
+            const diarizationEnabled = document.getElementById('diarizationEnabled')?.checked || false;
+            
+            const options = {
+                model: document.getElementById('model').value,
+                language: document.getElementById('language').value,
+                backend: backendSelect ? backendSelect.value : recommendedBackend,
+                includeSegments: document.getElementById('includeSegments').checked,
+                includeFull: document.getElementById('includeFull').checked,
+                includeTimestamps: document.getElementById('includeTimestamps').checked,
+                wordTimestamps: document.getElementById('wordTimestamps').checked,
+                qualityPreset: document.getElementById('qualityPreset').value,
+                diarizationEnabled: diarizationEnabled,
+            };
+            
+            // Add diarization options if enabled
+            if (diarizationEnabled) {
+                const minSpeakers = document.getElementById('minSpeakers')?.value;
+                const maxSpeakers = document.getElementById('maxSpeakers')?.value;
+                const numSpeakers = document.getElementById('numSpeakers')?.value;
+                if (minSpeakers) options.minSpeakers = parseInt(minSpeakers, 10);
+                if (maxSpeakers) options.maxSpeakers = parseInt(maxSpeakers, 10);
+                if (numSpeakers) options.numSpeakers = parseInt(numSpeakers, 10);
+                
+                // Max duration and auto-split options
+                const maxDuration = parseInt(document.getElementById('diarizationMaxDuration')?.value || '180', 10);
+                options.diarizationMaxDurationSeconds = maxDuration;
+                
+                const autoSplit = document.getElementById('diarizationAutoSplit')?.checked || false;
+                options.diarizationAutoSplit = autoSplit;
+                // Note: chunkSeconds and overlapSeconds are auto-computed by backend policy
+            }
+            
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="spinner mr-2"></span> Starting...';
+            hideError();
+            
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch('/api/jobs', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ uploadIds, options })
+                });
+                const data = await response.json();
+                
+                if (data.error) {
+                    // Handle specific error codes with detailed UI
+                    if (data.code === 'DIARIZATION_TOO_LONG_CPU') {
+                        showDiarizationTooLongError(data);
+                    } else {
+                        showError(data.error);
+                    }
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '<span class="flex items-center justify-center gap-2"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>Start Transcription</span>';
+                    return;
+                }
+                
+                currentJobId = data.jobId;
+                saveSelectedJob(data.jobId);
+                progressSection.classList.remove('hidden');
+                resultsSection.classList.add('hidden');
+                clearActivityLog();
+                addActivityLogEntry('Job started', '');
+                
+                // Start polling for job status
+                pollJobStatus();
+                
+            } catch (e) {
+                showError(`Failed to start job: ${e.message}`);
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<span class="flex items-center justify-center gap-2"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>Start Transcription</span>';
+            }
+        }
+        
+        function pollJobStatus() {
+            if (jobPollInterval) clearInterval(jobPollInterval);
+            
+            jobPollInterval = setInterval(async () => {
+                if (!currentJobId) {
+                    clearInterval(jobPollInterval);
+                    return;
+                }
+                
+                try {
+                    const response = await fetch(`/api/jobs/${currentJobId}`);
+                    const job = await response.json();
+                    
+                    if (job.error) {
+                        clearInterval(jobPollInterval);
+                        showError(job.error);
+                        resetSubmitButton();
+                        return;
+                    }
+                    
+                    updateJobProgress(job);
+                    
+                    if (job.status === 'complete' || job.status === 'complete_with_errors' || job.status === 'failed' || job.status === 'canceled') {
+                        clearInterval(jobPollInterval);
+                        onJobComplete(job);
+                    }
+                } catch (e) {
+                    console.error('Failed to poll job status:', e);
+                }
+            }, 1000);
+        }
+        
+        async function retryJob(jobId) {
+            if (!IS_SERVER_MODE) return;
+            
+            try {
+                const headers = {'Content-Type': 'application/json'};
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch(`/api/jobs/${jobId}/rerun`, {
+                    method: 'POST',
+                    headers
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    const errorMsg = data.error?.message || data.error || 'Failed to retry job';
+                    showError(errorMsg);
+                    return;
+                }
+                
+                // Start polling the new job
+                currentJobId = data.jobId;
+                saveSelectedJob(data.jobId);
+                resultsSection.classList.add('hidden');
+                progressSection.classList.remove('hidden');
+                hideError();
+                clearActivityLog();
+                addActivityLogEntry('Job restarted', '');
+                pollJobStatus();
+                loadJobHistory();
+            } catch (e) {
+                showError(`Failed to retry job: ${e.message}`);
+            }
+        }
+        
+        // Track activity log entries
+        let activityLogEntries = [];
+        let lastProgressText = '';
+        
+        function updateJobProgress(job) {
+            const progress = job.progress || {};
+            const percent = progress.percent || 0;
+            const currentFileIndex = progress.currentFileIndex || 0;
+            const totalFiles = progress.totalFiles || 0;
+            const currentFile = progress.currentFile || '';
+            const backend = job.backend || 'cpu';
+            
+            // Update job ID badge
+            const jobIdBadge = document.getElementById('jobIdBadge');
+            if (jobIdBadge) {
+                jobIdBadge.textContent = job.jobId ? job.jobId.substring(0, 12) + '...' : '';
+            }
+            
+            // Update status badge
+            const statusBadge = document.getElementById('jobStatusBadge');
+            if (statusBadge) {
+                const statusColors = {
+                    'running': 'bg-primary-500/20 text-primary-300',
+                    'queued': 'bg-gray-500/20 text-gray-300',
+                    'complete': 'bg-green-500/20 text-green-300',
+                    'complete_with_errors': 'bg-amber-500/20 text-amber-300',
+                    'failed': 'bg-red-500/20 text-red-300',
+                    'canceled': 'bg-gray-500/20 text-gray-300'
+                };
+                statusBadge.className = `text-xs font-semibold px-2.5 py-1 rounded-full ${statusColors[job.status] || statusColors.running}`;
+                statusBadge.textContent = (job.status || 'running').toUpperCase().replace('_', ' ');
+            }
+            
+            // Update status dot
+            const statusDot = document.getElementById('jobStatusDot');
+            if (statusDot) {
+                if (job.status === 'running') {
+                    statusDot.className = 'w-3 h-3 rounded-full bg-primary-400 animate-pulse';
+                } else if (job.status === 'complete') {
+                    statusDot.className = 'w-3 h-3 rounded-full bg-green-400';
+                } else if (job.status === 'failed') {
+                    statusDot.className = 'w-3 h-3 rounded-full bg-red-400';
+                } else {
+                    statusDot.className = 'w-3 h-3 rounded-full bg-gray-400';
+                }
+            }
+            
+            // Update timing info
+            if (job.startedAt) {
+                const startTime = new Date(job.startedAt);
+                const jobStartTimeEl = document.getElementById('jobStartTime');
+                if (jobStartTimeEl) {
+                    jobStartTimeEl.textContent = startTime.toLocaleTimeString();
+                }
+                
+                const elapsed = Math.floor((Date.now() - startTime.getTime()) / 1000);
+                const mins = Math.floor(elapsed / 60);
+                const secs = elapsed % 60;
+                const jobElapsedEl = document.getElementById('jobElapsed');
+                if (jobElapsedEl) {
+                    jobElapsedEl.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+                }
+            }
+            
+            // Update diarization policy display
+            const policyDiv = document.getElementById('jobDiarizationPolicy');
+            const options = job.options || {};
+            const effectivePolicy = options.diarizationEffective;
+            
+            if (policyDiv) {
+                if (options.diarizationEnabled && effectivePolicy) {
+                    policyDiv.classList.remove('hidden');
+                    
+                    const formatDuration = (secs) => {
+                        if (secs >= 60) return `${Math.floor(secs / 60)}m`;
+                        return `${secs}s`;
+                    };
+                    
+                    document.getElementById('jobPolicyMaxDuration').textContent = formatDuration(effectivePolicy.maxDurationSeconds);
+                    document.getElementById('jobPolicyChunk').textContent = `${effectivePolicy.chunkSeconds}s`;
+                    document.getElementById('jobPolicyOverlap').textContent = `${effectivePolicy.overlapSeconds}s`;
+                } else {
+                    policyDiv.classList.add('hidden');
+                }
+            }
+            
+            // Update progress bar
+            document.getElementById('progressBar').style.width = `${percent}%`;
+            
+            // Update file position
+            const filePositionEl = document.getElementById('filePosition');
+            if (filePositionEl) {
+                filePositionEl.textContent = `File ${currentFileIndex + 1} of ${totalFiles}`;
+            }
+            
+            const progressPercentEl = document.getElementById('progressPercent');
+            if (progressPercentEl) {
+                progressPercentEl.textContent = `${percent}%`;
+            }
+            
+            // Update current stage and file
+            const currentStageEl = document.getElementById('currentStage');
+            const currentFileEl = document.getElementById('currentFile');
+            const stageElapsedEl = document.getElementById('stageElapsed');
+            
+            // Use stage from manifest progress if available
+            const manifestStage = progress.stage;
+            const stageStartedAt = progress.stageStartedAt;
+            
+            const stageLabels = {
+                'queued': 'Queued',
+                'loading_model': 'Loading model...',
+                'transcribing': 'Transcribing...',
+                'diarizing': 'Running diarization...',
+                'merging': 'Merging transcript + speakers...',
+                'writing_outputs': 'Writing outputs...',
+                'complete': 'Complete'
+            };
+            
+            let stage = stageLabels[manifestStage] || 'Processing...';
+            let fileName = currentFile;
+            
+            // Fallback to parsing from currentFile if no manifest stage
+            if (!manifestStage) {
+                if (currentFile.includes('Loading')) {
+                    stage = currentFile;
+                    fileName = '';
+                } else if (currentFile.includes('(running diarization')) {
+                    stage = 'Running diarization...';
+                    fileName = currentFile.replace(' (running diarization...)', '');
+                } else if (currentFile.includes('(merging')) {
+                    stage = 'Merging transcript + speakers...';
+                    fileName = currentFile.replace(/\s*\(merging.*\)/, '');
+                } else if (currentFile.includes('(loading diarization')) {
+                    stage = 'Loading diarization pipeline...';
+                    fileName = currentFile.replace(/\s*\(loading.*\)/, '');
+                } else if (currentFile) {
+                    stage = 'Transcribing...';
+                    fileName = currentFile;
+                }
+            } else {
+                // Clean up fileName if it has stage info embedded
+                fileName = currentFile.replace(/\s*\([^)]+\)\s*$/, '');
+            }
+            
+            // Show chunk progress for diarization
+            if (manifestStage === 'diarizing' && progress.chunkIndex !== undefined && progress.totalChunks) {
+                stage = `Diarizing chunk ${progress.chunkIndex + 1}/${progress.totalChunks}`;
+            }
+            
+            if (currentStageEl) currentStageEl.textContent = stage;
+            if (currentFileEl) currentFileEl.textContent = fileName;
+            
+            // Update stage elapsed time
+            if (stageElapsedEl && stageStartedAt) {
+                const stageStart = new Date(stageStartedAt);
+                const stageElapsed = Math.floor((Date.now() - stageStart.getTime()) / 1000);
+                const stageMins = Math.floor(stageElapsed / 60);
+                const stageSecs = stageElapsed % 60;
+                stageElapsedEl.textContent = `(${stageMins}:${stageSecs.toString().padStart(2, '0')} in stage)`;
+            }
+            
+            // Add to activity log if progress changed
+            if (currentFile && currentFile !== lastProgressText) {
+                lastProgressText = currentFile;
+                addActivityLogEntry(stage, fileName);
+            }
+            
+            // Show cancel pending state
+            if (job.cancelAfterCurrentFile) {
+                const cancelAfterBtn = document.getElementById('cancelAfterBtn');
+                if (cancelAfterBtn) {
+                    cancelAfterBtn.disabled = true;
+                    cancelAfterBtn.innerHTML = `<span class="text-amber-400">Canceling after current file...</span>`;
+                }
+            }
+        }
+        
+        function addActivityLogEntry(stage, file) {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('en-US', { hour12: false });
+            const entry = `[${timeStr}] ${stage}${file ? ': ' + file : ''}`;
+            
+            activityLogEntries.push(entry);
+            if (activityLogEntries.length > 20) {
+                activityLogEntries.shift();
+            }
+            
+            const activityLog = document.getElementById('activityLog');
+            if (activityLog) {
+                activityLog.innerHTML = activityLogEntries.map(e => `<div>${e}</div>`).join('');
+                activityLog.scrollTop = activityLog.scrollHeight;
+            }
+        }
+        
+        function clearActivityLog() {
+            activityLogEntries = [];
+            lastProgressText = '';
+            const activityLog = document.getElementById('activityLog');
+            if (activityLog) activityLog.innerHTML = '';
+        }
+        
+        function onJobComplete(job) {
+            // Store job for review panel access (must be set before buttons are created)
+            window._lastCompletedJob = job;
+            
+            progressSection.classList.add('hidden');
+            resetSubmitButton();
+            
+            // Show results section for all terminal states
+            resultsSection.classList.remove('hidden');
+            const resultsList = document.getElementById('resultsList');
+            resultsList.innerHTML = '';
+            
+            // Show error message prominently for failed/canceled jobs
+            if (job.status === 'failed' || job.status === 'canceled') {
+                const errorMsg = job.error?.message || job.error || (job.status === 'canceled' ? 'Job was canceled by user' : 'Job failed');
+                const errorCode = job.error?.code || 'UNKNOWN';
+                
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'mb-4 p-4 bg-red-900/30 border border-red-500/50 rounded-xl';
+                errorDiv.innerHTML = `
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-red-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <div>
+                            <div class="text-red-400 font-medium">Job ${job.status === 'canceled' ? 'Canceled' : 'Failed'}</div>
+                            <div class="text-red-300 text-sm mt-1">${errorMsg}</div>
+                            <div class="text-red-400/60 text-xs mt-1">Error code: ${errorCode}</div>
+                        </div>
+                    </div>
+                `;
+                resultsList.appendChild(errorDiv);
+                
+                // Check for error report artifact
+                const errorReport = (job.outputs || []).find(o => o.type === 'error-report');
+                if (errorReport) {
+                    const errorReportDiv = document.createElement('div');
+                    errorReportDiv.className = 'mb-4';
+                    errorReportDiv.innerHTML = `
+                        <a href="/api/jobs/${job.jobId}/outputs/${errorReport.id}" 
+                           class="inline-flex items-center gap-2 px-3 py-1.5 bg-red-900/30 hover:bg-red-900/50 text-red-300 text-sm rounded-lg transition-all border border-red-500/30">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                            </svg>
+                            Download Error Report
+                        </a>
+                    `;
+                    resultsList.appendChild(errorReportDiv);
+                }
+                
+                // Add Retry button
+                if (IS_SERVER_MODE && currentJobId) {
+                    const retryDiv = document.createElement('div');
+                    retryDiv.className = 'mb-4';
+                    retryDiv.innerHTML = `
+                        <button onclick="retryJob('${job.jobId}')" 
+                                class="inline-flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-all">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                            Retry Job
+                        </button>
+                    `;
+                    resultsList.appendChild(retryDiv);
+                }
+            }
+            
+            // Show partial success message for complete_with_errors
+            if (job.status === 'complete_with_errors') {
+                const warnDiv = document.createElement('div');
+                warnDiv.className = 'mb-4 p-4 bg-amber-900/30 border border-amber-500/50 rounded-xl';
+                warnDiv.innerHTML = `
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-amber-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                        </svg>
+                        <div>
+                            <div class="text-amber-400 font-medium">Completed with Errors</div>
+                            <div class="text-amber-300 text-sm mt-1">Some files failed to process. Successfully completed files are available for download.</div>
+                        </div>
+                    </div>
+                `;
+                resultsList.appendChild(warnDiv);
+            }
+            
+            const outputs = job.outputs || [];
+            const successOutputs = outputs.filter(o => !o.error);
+            
+            if (successOutputs.length > 0) {
+                // Download all button
+                const downloadAllDiv = document.createElement('div');
+                downloadAllDiv.className = 'mb-4';
+                downloadAllDiv.innerHTML = `
+                    <a href="/api/jobs/${job.jobId}/download" 
+                       class="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-xl transition-all">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                        </svg>
+                        Download All (${successOutputs.length} files)
+                    </a>
+                `;
+                resultsList.appendChild(downloadAllDiv);
+                
+                // Add Review button if there are previewable outputs
+                const previewableTypes = ['speaker-markdown', 'markdown', 'diarization-json', 'json', 'rttm'];
+                const hasPreviewable = successOutputs.some(o => previewableTypes.includes(o.type));
+                
+                if (hasPreviewable) {
+                    const reviewDiv = document.createElement('div');
+                    reviewDiv.className = 'mb-4';
+                    reviewDiv.innerHTML = `
+                        <button onclick="openReviewPanel(window._lastCompletedJob)" 
+                                class="inline-flex items-center gap-2 px-4 py-2 bg-surface-700 hover:bg-surface-600 text-white rounded-xl transition-all border border-gray-600/50">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                            </svg>
+                            Review Transcript
+                        </button>
+                    `;
+                    resultsList.appendChild(reviewDiv);
+                }
+                
+                // Individual files
+                for (const output of successOutputs) {
+                    const div = document.createElement('div');
+                    div.className = 'flex items-center justify-between p-3 bg-surface-800/50 rounded-lg';
+                    
+                    const isPreviewable = previewableTypes.includes(output.type);
+                    const previewBtn = isPreviewable 
+                        ? `<button onclick="openReviewPanelWithOutput('${output.id}')" class="text-xs text-green-400 hover:text-green-300 mr-3">Preview</button>`
+                        : '';
+                    
+                    div.innerHTML = `
+                        <div class="flex items-center gap-2">
+                            <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <span class="text-sm text-gray-300">${output.filename}</span>
+                            <span class="text-xs text-gray-500">(${getOutputTypeLabel(output.type)})</span>
+                        </div>
+                        <div>
+                            ${previewBtn}
+                            <a href="/api/jobs/${job.jobId}/outputs/${output.id}" 
+                               class="text-xs text-primary-400 hover:text-primary-300">Download</a>
+                        </div>
+                    `;
+                    resultsList.appendChild(div);
+                }
+            }
+            
+            // Clear upload queue after successful job
+            uploadedFiles = [];
+            updateUploadQueueUI();
+        }
+        
+        function openReviewPanelWithOutput(outputId) {
+            if (!window._lastCompletedJob) return;
+            openReviewPanel(window._lastCompletedJob);
+            // Select the specific output after panel opens
+            setTimeout(() => {
+                const select = document.getElementById('reviewOutputSelect');
+                if (select) {
+                    select.value = outputId;
+                    loadReviewOutput();
+                }
+            }, 100);
+        }
+        
+        async function cancelServerJob() {
+            if (!currentJobId) return;
+            
+            try {
+                const headers = {};
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                await fetch(`/api/jobs/${currentJobId}/cancel`, { method: 'POST', headers });
+            } catch (e) {
+                console.error('Failed to cancel job:', e);
+            }
+        }
+        
+        function resetSubmitButton() {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<span class="flex items-center justify-center gap-2"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>Start Transcription</span>';
+        }
+        
+        function showError(msg) {
+            errorSection.classList.remove('hidden');
+            document.getElementById('errorMessage').textContent = msg;
+        }
+        
+        function showDiarizationTooLongError(data) {
+            // Build detailed error message for diarization duration limit
+            let html = `<div class="space-y-3">
+                <p class="font-semibold text-red-400">${data.error}</p>
+                <div class="text-sm">
+                    <p class="text-gray-300 mb-2">Maximum duration for CPU diarization: <span class="font-mono text-amber-400">${data.maxDurationFormatted || data.maxDurationSec + 's'}</span></p>`;
+            
+            if (data.tooLongFiles && data.tooLongFiles.length > 0) {
+                html += `<p class="text-gray-400 mb-1">Files exceeding limit:</p>
+                    <ul class="list-disc list-inside text-gray-300 ml-2">`;
+                data.tooLongFiles.forEach(f => {
+                    html += `<li><span class="font-mono">${f.filename}</span> - <span class="text-amber-400">${f.durationFormatted || f.durationSec + 's'}</span></li>`;
+                });
+                html += `</ul>`;
+            }
+            
+            if (data.suggestions && data.suggestions.length > 0) {
+                html += `<p class="text-gray-400 mt-3 mb-1">Suggestions:</p>
+                    <ul class="list-disc list-inside text-gray-300 ml-2">`;
+                data.suggestions.forEach(s => {
+                    html += `<li>${s}</li>`;
+                });
+                html += `</ul>`;
+            }
+            
+            html += `</div></div>`;
+            
+            errorSection.classList.remove('hidden');
+            document.getElementById('errorMessage').innerHTML = html;
+        }
+        
+        function hideError() {
+            errorSection.classList.add('hidden');
+        }
+        
+        // =============================================================================
+        // LOCAL MODE: Legacy Upload Functions
+        // =============================================================================
+        
         async function handleFileUpload(event) {
             const files = event.target.files;
             if (!files || files.length === 0) return;
@@ -929,13 +2385,11 @@
                     uploadStatus.textContent = msg;
                     uploadStatus.classList.remove('text-red-400');
                     
-                    // Update input folder if it was empty
                     if (!document.getElementById('inputFolder').value) {
                         document.getElementById('inputFolder').value = data.folder;
                         saveToStorage(STORAGE_KEYS.inputFolder, data.folder);
                     }
                     
-                    // Refresh file preview
                     previewFiles();
                 }
             } catch (e) {
@@ -943,32 +2397,36 @@
                 uploadStatus.classList.add('text-red-400');
             }
             
-            // Clear the file input
             document.getElementById('fileUploadInput').value = '';
         }
 
         // Drag and drop handling
         const dropzone = document.getElementById('uploadDropzone');
-        
-        dropzone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            dropzone.classList.add('border-primary-500', 'bg-surface-700/50');
-        });
-        
-        dropzone.addEventListener('dragleave', (e) => {
-            e.preventDefault();
-            dropzone.classList.remove('border-primary-500', 'bg-surface-700/50');
-        });
-        
-        dropzone.addEventListener('drop', async (e) => {
-            e.preventDefault();
-            dropzone.classList.remove('border-primary-500', 'bg-surface-700/50');
+        if (dropzone) {
+            dropzone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropzone.classList.add('border-primary-500', 'bg-surface-700/50');
+            });
             
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                await uploadFiles(files);
-            }
-        });
+            dropzone.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                dropzone.classList.remove('border-primary-500', 'bg-surface-700/50');
+            });
+            
+            dropzone.addEventListener('drop', async (e) => {
+                e.preventDefault();
+                dropzone.classList.remove('border-primary-500', 'bg-surface-700/50');
+                
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    if (IS_SERVER_MODE) {
+                        await uploadToServer(files);
+                    } else {
+                        await uploadFiles(files);
+                    }
+                }
+            });
+        }
 
         // Download handling
         async function downloadTranscriptions() {
@@ -1035,6 +2493,13 @@
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             
+            // Server mode uses job-based API
+            if (IS_SERVER_MODE) {
+                await startServerJob();
+                return;
+            }
+            
+            // Local mode uses folder-based API
             const inputFolder = document.getElementById('inputFolder').value;
             const outputFolder = document.getElementById('outputFolder').value;
             const model = document.getElementById('model').value;
@@ -1343,6 +2808,471 @@
         function hideError() {
             errorSection.classList.add('hidden');
         }
+        
+        // Display build version in footer
+        async function displayBuildVersion() {
+            try {
+                const response = await fetch('/api/runtime');
+                const data = await response.json();
+                const versionEl = document.getElementById('buildVersion');
+                if (versionEl && data.buildCommit && data.buildCommit !== 'unknown') {
+                    versionEl.textContent = `Build: ${data.buildCommit}`;
+                    versionEl.title = `Built: ${data.buildTime || 'unknown'}`;
+                }
+            } catch (e) {
+                console.error('Failed to fetch build version:', e);
+            }
+        }
+        
+        // Call on page load
+        if (IS_SERVER_MODE) {
+            displayBuildVersion();
+        }
+        
+        // =====================================================================
+        // REVIEW PANEL - Transcript preview, audio sync, speaker labels
+        // =====================================================================
+        
+        let reviewAudioElement = null;
+        let reviewJobData = null;
+        let reviewTranscriptLines = [];
+        let reviewSpeakerLabels = {};
+        let reviewCurrentLineIndex = -1;
+        let searchDebounceTimer = null;
+        
+        function openReviewPanel(job) {
+            if (!job || !job.outputs || job.outputs.length === 0) return;
+            
+            reviewJobData = job;
+            const panel = document.getElementById('reviewPanel');
+            panel.classList.remove('hidden');
+            
+            // Populate output selector with previewable outputs
+            const select = document.getElementById('reviewOutputSelect');
+            select.innerHTML = '';
+            
+            const previewableTypes = ['speaker-markdown', 'markdown', 'diarization-json', 'json', 'rttm'];
+            const previewableOutputs = job.outputs.filter(o => !o.error && previewableTypes.includes(o.type));
+            
+            if (previewableOutputs.length === 0) {
+                select.innerHTML = '<option value="">No previewable outputs</option>';
+                return;
+            }
+            
+            // Prefer speaker-markdown, then markdown
+            let defaultOutput = previewableOutputs.find(o => o.type === 'speaker-markdown') 
+                             || previewableOutputs.find(o => o.type === 'markdown')
+                             || previewableOutputs[0];
+            
+            for (const output of previewableOutputs) {
+                const opt = document.createElement('option');
+                opt.value = output.id;
+                opt.textContent = `${output.filename} (${getOutputTypeLabel(output.type)})`;
+                if (output.id === defaultOutput.id) opt.selected = true;
+                select.appendChild(opt);
+            }
+            
+            // Show speaker editor button if diarization outputs exist
+            const hasDiarization = job.outputs.some(o => o.type === 'speaker-markdown' || o.type === 'diarization-json');
+            document.getElementById('speakerEditorBtn').classList.toggle('hidden', !hasDiarization);
+            
+            // Setup audio player for first input
+            if (job.inputs && job.inputs.length > 0) {
+                setupReviewAudio(job.jobId, job.inputs[0]);
+            }
+            
+            // Load speaker labels
+            loadSpeakerLabels(job.jobId);
+            
+            // Load default output
+            loadReviewOutput();
+        }
+        
+        function closeReviewPanel() {
+            document.getElementById('reviewPanel').classList.add('hidden');
+            if (reviewAudioElement) {
+                reviewAudioElement.pause();
+                reviewAudioElement = null;
+            }
+            reviewJobData = null;
+            reviewTranscriptLines = [];
+            reviewSpeakerLabels = {};
+        }
+        
+        function setupReviewAudio(jobId, input) {
+            if (reviewAudioElement) {
+                reviewAudioElement.pause();
+            }
+            
+            reviewAudioElement = new Audio(`/api/jobs/${jobId}/audio/${input.uploadId}`);
+            reviewAudioElement.preload = 'metadata';
+            
+            document.getElementById('audioFileName').textContent = input.filename;
+            
+            reviewAudioElement.addEventListener('loadedmetadata', () => {
+                document.getElementById('audioDuration').textContent = formatTime(reviewAudioElement.duration);
+                document.getElementById('audioScrubber').max = Math.floor(reviewAudioElement.duration);
+            });
+            
+            reviewAudioElement.addEventListener('timeupdate', () => {
+                const current = reviewAudioElement.currentTime;
+                document.getElementById('audioCurrentTime').textContent = formatTime(current);
+                document.getElementById('audioScrubber').value = Math.floor(current);
+                highlightCurrentLine(current);
+            });
+            
+            reviewAudioElement.addEventListener('play', () => {
+                document.getElementById('audioPlayIcon').innerHTML = '<rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect>';
+            });
+            
+            reviewAudioElement.addEventListener('pause', () => {
+                document.getElementById('audioPlayIcon').innerHTML = '<path d="M8 5v14l11-7z"></path>';
+            });
+            
+            reviewAudioElement.addEventListener('ended', () => {
+                document.getElementById('audioPlayIcon').innerHTML = '<path d="M8 5v14l11-7z"></path>';
+            });
+        }
+        
+        function toggleAudioPlayback() {
+            if (!reviewAudioElement) return;
+            if (reviewAudioElement.paused) {
+                reviewAudioElement.play();
+            } else {
+                reviewAudioElement.pause();
+            }
+        }
+        
+        function seekAudio(value) {
+            if (!reviewAudioElement) return;
+            reviewAudioElement.currentTime = parseFloat(value);
+        }
+        
+        function seekToTimestamp(seconds) {
+            if (!reviewAudioElement) return;
+            reviewAudioElement.currentTime = seconds;
+            reviewAudioElement.play();
+        }
+        
+        function formatTime(seconds) {
+            if (!seconds || isNaN(seconds)) return '0:00';
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+        
+        async function loadReviewOutput() {
+            const select = document.getElementById('reviewOutputSelect');
+            const outputId = select.value;
+            if (!outputId || !reviewJobData) return;
+            
+            const content = document.getElementById('reviewTranscriptContent');
+            content.innerHTML = '<p class="text-gray-500 italic">Loading...</p>';
+            
+            try {
+                const response = await fetch(`/api/jobs/${reviewJobData.jobId}/outputs/${outputId}/text`);
+                if (!response.ok) {
+                    const err = await response.json();
+                    content.innerHTML = `<p class="text-red-400">${err.error || 'Failed to load'}</p>`;
+                    return;
+                }
+                
+                const data = await response.json();
+                
+                // Show truncation warning if needed
+                document.getElementById('reviewTruncatedWarning').classList.toggle('hidden', !data.truncated);
+                
+                // Parse and render transcript
+                const output = reviewJobData.outputs.find(o => o.id === outputId);
+                renderTranscript(data.content, output?.type || 'text');
+                
+            } catch (e) {
+                content.innerHTML = `<p class="text-red-400">Error: ${e.message}</p>`;
+            }
+        }
+        
+        function renderTranscript(content, outputType) {
+            reviewTranscriptLines = parseTranscript(content, outputType);
+            const container = document.getElementById('reviewTranscriptContent');
+            container.innerHTML = '';
+            
+            if (reviewTranscriptLines.length === 0) {
+                container.innerHTML = `<pre class="text-gray-300 whitespace-pre-wrap">${escapeHtml(content)}</pre>`;
+                return;
+            }
+            
+            const searchTerm = document.getElementById('reviewSearchInput').value.toLowerCase();
+            
+            for (const line of reviewTranscriptLines) {
+                // Filter by search
+                if (searchTerm && !line.text.toLowerCase().includes(searchTerm) && 
+                    !(line.speaker && line.speaker.toLowerCase().includes(searchTerm))) {
+                    continue;
+                }
+                
+                const div = document.createElement('div');
+                div.className = 'transcript-line py-1 px-2 rounded hover:bg-surface-700/50 cursor-pointer transition-colors';
+                div.dataset.lineIndex = line.lineIndex;
+                div.dataset.timestamp = line.t;
+                
+                let html = '';
+                if (line.t >= 0) {
+                    html += `<span class="text-primary-400 hover:text-primary-300 cursor-pointer mr-2" onclick="seekToTimestamp(${line.t})">[${formatTime(line.t)}]</span>`;
+                }
+                if (line.speaker) {
+                    const displayLabel = reviewSpeakerLabels[line.speaker] || getDefaultSpeakerLabel(line.speaker);
+                    html += `<span class="text-amber-400 font-medium mr-1">${escapeHtml(displayLabel)}:</span>`;
+                }
+                html += `<span class="text-gray-300">${escapeHtml(line.text)}</span>`;
+                
+                div.innerHTML = html;
+                div.onclick = (e) => {
+                    if (e.target.tagName !== 'SPAN' || !e.target.onclick) {
+                        if (line.t >= 0) seekToTimestamp(line.t);
+                    }
+                };
+                
+                container.appendChild(div);
+            }
+        }
+        
+        function parseTranscript(content, outputType) {
+            const lines = [];
+            
+            if (outputType === 'speaker-markdown') {
+                // Parse speaker markdown: [00:00:12] Speaker 1: text
+                const regex = /\[(\d{1,2}):(\d{2}):?(\d{2})?\]\s*(SPEAKER_\d+|Speaker\s*\d+)?:?\s*(.*)/gm;
+                let match;
+                let lineIndex = 0;
+                
+                while ((match = regex.exec(content)) !== null) {
+                    const hours = match[3] ? parseInt(match[1]) : 0;
+                    const mins = match[3] ? parseInt(match[2]) : parseInt(match[1]);
+                    const secs = match[3] ? parseInt(match[3]) : parseInt(match[2]);
+                    const t = hours * 3600 + mins * 60 + secs;
+                    
+                    let speaker = match[4] || null;
+                    if (speaker && speaker.startsWith('Speaker')) {
+                        const num = parseInt(speaker.replace(/\D/g, '')) - 1;
+                        speaker = `SPEAKER_${num.toString().padStart(2, '0')}`;
+                    }
+                    
+                    lines.push({
+                        t: t,
+                        speaker: speaker,
+                        text: match[5].trim(),
+                        lineIndex: lineIndex++
+                    });
+                }
+            } else if (outputType === 'markdown') {
+                // Parse timestamp markdown: [00:00:12] text
+                const regex = /\[(\d{1,2}):(\d{2}):?(\d{2})?\]\s*(.*)/gm;
+                let match;
+                let lineIndex = 0;
+                
+                while ((match = regex.exec(content)) !== null) {
+                    const hours = match[3] ? parseInt(match[1]) : 0;
+                    const mins = match[3] ? parseInt(match[2]) : parseInt(match[1]);
+                    const secs = match[3] ? parseInt(match[3]) : parseInt(match[2]);
+                    const t = hours * 3600 + mins * 60 + secs;
+                    
+                    lines.push({
+                        t: t,
+                        speaker: null,
+                        text: match[4].trim(),
+                        lineIndex: lineIndex++
+                    });
+                }
+            } else if (outputType === 'diarization-json' || outputType === 'json') {
+                // Parse diarization JSON
+                try {
+                    const data = JSON.parse(content);
+                    if (data.segments) {
+                        data.segments.forEach((seg, idx) => {
+                            lines.push({
+                                t: seg.start || 0,
+                                speaker: seg.speaker || null,
+                                text: seg.text || `[${formatTime(seg.start)} - ${formatTime(seg.end)}]`,
+                                lineIndex: idx
+                            });
+                        });
+                    }
+                } catch (e) {
+                    console.error('Failed to parse diarization JSON:', e);
+                }
+            }
+            
+            return lines;
+        }
+        
+        function highlightCurrentLine(currentTime) {
+            if (reviewTranscriptLines.length === 0) return;
+            
+            // Find the line that matches current time
+            let matchIndex = -1;
+            for (let i = reviewTranscriptLines.length - 1; i >= 0; i--) {
+                if (reviewTranscriptLines[i].t <= currentTime) {
+                    matchIndex = i;
+                    break;
+                }
+            }
+            
+            if (matchIndex === reviewCurrentLineIndex) return;
+            reviewCurrentLineIndex = matchIndex;
+            
+            // Update highlighting
+            const container = document.getElementById('reviewTranscriptContent');
+            const lines = container.querySelectorAll('.transcript-line');
+            
+            lines.forEach(line => {
+                const idx = parseInt(line.dataset.lineIndex);
+                if (idx === matchIndex) {
+                    line.classList.add('bg-primary-900/30', 'border-l-2', 'border-primary-500');
+                    
+                    // Auto-scroll if enabled
+                    if (document.getElementById('autoScrollCheckbox').checked) {
+                        line.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+                } else {
+                    line.classList.remove('bg-primary-900/30', 'border-l-2', 'border-primary-500');
+                }
+            });
+        }
+        
+        function debounceSearch() {
+            clearTimeout(searchDebounceTimer);
+            searchDebounceTimer = setTimeout(() => {
+                if (reviewJobData) loadReviewOutput();
+            }, 300);
+        }
+        
+        function getDefaultSpeakerLabel(speakerId) {
+            if (!speakerId) return '';
+            if (speakerId.startsWith('SPEAKER_')) {
+                const num = parseInt(speakerId.split('_')[1]) + 1;
+                return `Speaker ${num}`;
+            }
+            return speakerId;
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Speaker Labels
+        async function loadSpeakerLabels(jobId) {
+            try {
+                const response = await fetch(`/api/jobs/${jobId}/speakers`);
+                if (response.ok) {
+                    const data = await response.json();
+                    reviewSpeakerLabels = data.labels || {};
+                }
+            } catch (e) {
+                console.error('Failed to load speaker labels:', e);
+            }
+        }
+        
+        async function openSpeakerEditor() {
+            if (!reviewJobData) return;
+            
+            document.getElementById('speakerEditorModal').classList.remove('hidden');
+            document.getElementById('speakerEditorError').classList.add('hidden');
+            
+            const list = document.getElementById('speakerLabelsList');
+            list.innerHTML = '<p class="text-gray-500 text-sm italic">Loading...</p>';
+            
+            try {
+                const response = await fetch(`/api/jobs/${reviewJobData.jobId}/speakers`);
+                if (!response.ok) throw new Error('Failed to load speakers');
+                
+                const data = await response.json();
+                reviewSpeakerLabels = data.labels || {};
+                
+                if (data.speakers.length === 0) {
+                    list.innerHTML = '<p class="text-gray-500 text-sm italic">No speakers detected</p>';
+                    return;
+                }
+                
+                list.innerHTML = '';
+                for (const speaker of data.speakers) {
+                    const div = document.createElement('div');
+                    div.className = 'flex items-center gap-2';
+                    div.innerHTML = `
+                        <span class="text-gray-400 text-sm w-24">${speaker.defaultLabel}</span>
+                        <input type="text" 
+                               data-speaker-id="${speaker.id}"
+                               value="${escapeHtml(speaker.label || '')}"
+                               placeholder="${speaker.defaultLabel}"
+                               maxlength="40"
+                               class="flex-1 px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                    `;
+                    list.appendChild(div);
+                }
+            } catch (e) {
+                list.innerHTML = `<p class="text-red-400 text-sm">${e.message}</p>`;
+            }
+        }
+        
+        function closeSpeakerEditor() {
+            document.getElementById('speakerEditorModal').classList.add('hidden');
+        }
+        
+        async function saveSpeakerLabels() {
+            if (!reviewJobData) return;
+            
+            const inputs = document.querySelectorAll('#speakerLabelsList input[data-speaker-id]');
+            const labels = {};
+            
+            inputs.forEach(input => {
+                const id = input.dataset.speakerId;
+                const value = input.value.trim();
+                if (value) labels[id] = value;
+            });
+            
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch(`/api/jobs/${reviewJobData.jobId}/speakers`, {
+                    method: 'PUT',
+                    headers,
+                    body: JSON.stringify({ labels })
+                });
+                
+                if (!response.ok) {
+                    const err = await response.json();
+                    document.getElementById('speakerEditorError').textContent = err.error || 'Failed to save';
+                    document.getElementById('speakerEditorError').classList.remove('hidden');
+                    return;
+                }
+                
+                const data = await response.json();
+                reviewSpeakerLabels = data.labels;
+                
+                // Re-render transcript with new labels
+                loadReviewOutput();
+                closeSpeakerEditor();
+                
+            } catch (e) {
+                document.getElementById('speakerEditorError').textContent = e.message;
+                document.getElementById('speakerEditorError').classList.remove('hidden');
+            }
+        }
+        
+        function resetSpeakerLabels() {
+            const inputs = document.querySelectorAll('#speakerLabelsList input[data-speaker-id]');
+            inputs.forEach(input => input.value = '');
+        }
     </script>
+    
+    <!-- Footer with version info -->
+    <footer class="border-t border-primary-900/30 mt-8 py-4">
+        <div class="max-w-4xl mx-auto px-6 flex justify-between items-center text-xs text-gray-500">
+            <span>Bulk Transcribe</span>
+            <span id="buildVersion" class="cursor-help"></span>
+        </div>
+    </footer>
 </body>
 </html>

@@ -59,10 +59,17 @@ output/
 !package.json
 
 # Session data - NEVER COMMIT (contains user audio/transcripts)
-data/
-Test File/
-test.wav
 cookies.txt
+data/
+sessions/
+
+# Test audio files
+Test File/
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
 
 # Any session/project exports
 *.btproj.zip

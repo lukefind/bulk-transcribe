@@ -10,11 +10,20 @@ services:
       - "8476:8476"
     volumes:
       - ./data:/data
+    env_file:
+      - .env
     environment:
-      - PORT=8476
+      # Core settings (override .env if needed)
+      - DEVICE=cpu
       - INPUT_DIR=/data/input
       - OUTPUT_DIR=/data/output
-      - DEVICE=cpu
+      - PORT=8476
+      # Note: HF_TOKEN and DIARIZATION_* vars come from .env via env_file
+      # Do NOT duplicate them here - that causes ${VAR} expansion issues
+    # Memory limit for diarization safety
+    # Increase to 16G for longer audio files (>3 min)
+    # Remove this section if you prefer no hard limit
+    mem_limit: 8g
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8476/healthz"]
