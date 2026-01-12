@@ -58,6 +58,15 @@ output/
 *.json
 !package.json
 
+# Session data - NEVER COMMIT (contains user audio/transcripts)
+data/
+Test File/
+test.wav
+cookies.txt
+
+# Any session/project exports
+*.btproj.zip
+
 # Whisper models (large files)
 *.pt
 
