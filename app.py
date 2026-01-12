@@ -1793,9 +1793,31 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                         import time
                         from threading import Thread
                         from queue import Queue, Empty
+                        from audio_utils import get_audio_info, split_audio_to_wav_chunks, cleanup_chunks
+                        
+                        # Check if we need chunked diarization
+                        auto_split = options.get('diarizationAutoSplit', False)
+                        chunk_seconds = options.get('diarizationChunkSeconds', 150)
+                        overlap_seconds = options.get('diarizationOverlapSeconds', 5)
+                        
+                        # Get file duration to decide if chunking is needed
+                        file_duration = None
+                        try:
+                            audio_info = get_audio_info(filepath)
+                            file_duration = audio_info.get('durationSec', 0)
+                        except Exception:
+                            pass
+                        
+                        # Determine if we should use chunked diarization
+                        use_chunked = auto_split and file_duration and file_duration > max_diarization_duration
                         
                         # Add watchdog timeout for diarization
                         max_diarization_minutes = int(os.environ.get('MAX_DIARIZATION_MINUTES', '30'))
+                        # Increase timeout for chunked diarization
+                        if use_chunked:
+                            estimated_chunks = int(file_duration / (chunk_seconds - overlap_seconds)) + 1
+                            max_diarization_minutes = max(max_diarization_minutes, estimated_chunks * 5)
+                        
                         diarization_result = Queue()
                         diarization_error = Queue()
                         
@@ -1805,22 +1827,78 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                                 if is_cancelled():
                                     return
                                 
-                                update_manifest(progress={
-                                    'currentFile': f'{original_name} (running diarization...)',
-                                    'currentFileIndex': idx,
-                                    'percent': int((idx / total) * 100)
-                                })
+                                if use_chunked:
+                                    # Chunked diarization for long files
+                                    update_manifest(progress={
+                                        'currentFile': f'{original_name} (splitting audio for diarization...)',
+                                        'currentFileIndex': idx,
+                                        'percent': int((idx / total) * 100)
+                                    })
+                                    
+                                    # Create chunk directory
+                                    chunk_dir = os.path.join(outputs_dir, 'tmp', 'chunks', upload_id)
+                                    chunks = split_audio_to_wav_chunks(
+                                        filepath, chunk_dir,
+                                        chunk_seconds=chunk_seconds,
+                                        overlap_seconds=overlap_seconds
+                                    )
+                                    
+                                    total_chunks = len(chunks)
+                                    
+                                    def chunk_progress_callback(chunk_idx, total, status):
+                                        if is_cancelled():
+                                            return
+                                        update_manifest(progress={
+                                            'currentFile': f'{original_name} ({status})',
+                                            'currentFileIndex': idx,
+                                            'percent': int((idx / total) * 100),
+                                            'chunkIndex': chunk_idx,
+                                            'totalChunks': total
+                                        })
+                                    
+                                    # Load pipeline once
+                                    update_manifest(progress={
+                                        'currentFile': f'{original_name} (loading diarization pipeline...)',
+                                        'currentFileIndex': idx,
+                                        'percent': int((idx / total) * 100),
+                                        'totalChunks': total_chunks
+                                    })
+                                    
+                                    pipeline = diarization.load_pipeline(device=device, job_id=job_id, session_id=session_id)
+                                    
+                                    # Run chunked diarization
+                                    speaker_segments = diarization.run_chunked_diarization(
+                                        filepath, chunks, pipeline,
+                                        min_speakers=options.get('minSpeakers'),
+                                        max_speakers=options.get('maxSpeakers'),
+                                        num_speakers=options.get('numSpeakers'),
+                                        job_id=job_id,
+                                        session_id=session_id,
+                                        progress_callback=chunk_progress_callback
+                                    )
+                                    
+                                    # Cleanup chunks unless KEEP_CHUNKS is set
+                                    if os.environ.get('KEEP_CHUNKS', '0') != '1':
+                                        cleanup_chunks(chunk_dir)
+                                else:
+                                    # Standard diarization for short files
+                                    update_manifest(progress={
+                                        'currentFile': f'{original_name} (running diarization...)',
+                                        'currentFileIndex': idx,
+                                        'percent': int((idx / total) * 100)
+                                    })
+                                    
+                                    speaker_segments = diarization.run_diarization(
+                                        filepath,
+                                        min_speakers=options.get('minSpeakers'),
+                                        max_speakers=options.get('maxSpeakers'),
+                                        num_speakers=options.get('numSpeakers'),
+                                        device=device,
+                                        job_id=job_id,
+                                        session_id=session_id,
+                                        temp_dir=os.path.join(outputs_dir, 'tmp')
+                                    )
                                 
-                                speaker_segments = diarization.run_diarization(
-                                    filepath,
-                                    min_speakers=options.get('minSpeakers'),
-                                    max_speakers=options.get('maxSpeakers'),
-                                    num_speakers=options.get('numSpeakers'),
-                                    device=device,
-                                    job_id=job_id,
-                                    session_id=session_id,
-                                    temp_dir=os.path.join(outputs_dir, 'tmp')
-                                )
                                 diarization_result.put(speaker_segments)
                             except Exception as e:
                                 diarization_error.put(e)

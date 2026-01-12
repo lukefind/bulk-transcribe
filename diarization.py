@@ -163,6 +163,94 @@ def _convert_to_wav(
         raise
 
 
+def load_pipeline(
+    device: str = 'cpu',
+    job_id: Optional[str] = None,
+    session_id: Optional[str] = None
+):
+    """
+    Load the pyannote diarization pipeline.
+    
+    Args:
+        device: PyTorch device ('cpu', 'cuda', 'mps')
+        job_id: Job ID for logging (optional)
+        session_id: Session ID for logging (optional)
+    
+    Returns:
+        Loaded pyannote Pipeline
+    
+    Raises:
+        ImportError: If pyannote.audio is not installed
+        RuntimeError: If pipeline loading fails
+    """
+    from logger import log_event, with_timer
+    
+    log_fields = {'stage': 'diarization'}
+    if job_id:
+        log_fields['jobId'] = job_id
+    if session_id:
+        log_fields['sessionId'] = session_id
+    
+    try:
+        from pyannote.audio import Pipeline
+    except ImportError as e:
+        log_event('error', 'diarization_import_failed', error=str(e), **log_fields)
+        raise ImportError(
+            "pyannote.audio is required for speaker diarization. "
+            "Install with: pip install pyannote.audio"
+        ) from e
+    
+    # Get HuggingFace token from environment
+    hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
+    if not hf_token:
+        log_event('error', 'diarization_no_token', **log_fields)
+        raise RuntimeError(
+            "HuggingFace token required for pyannote. "
+            "Set HF_TOKEN environment variable. "
+            "Get token from https://huggingface.co/settings/tokens"
+        )
+    
+    # Load the diarization pipeline with logging
+    log_event('info', 'diarization_model_loading_started', model='pyannote/speaker-diarization-3.1', **log_fields)
+    
+    try:
+        with with_timer('diarization_model_loading', **log_fields):
+            pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                use_auth_token=hf_token
+            )
+            
+        if pipeline is None:
+            log_event('error', 'diarization_model_none', **log_fields)
+            raise RuntimeError(
+                "Pipeline.from_pretrained returned None. "
+                "This may be due to missing model access. "
+                "Please ensure you have accepted the user agreement at: "
+                "https://huggingface.co/pyannote/speaker-diarization-3.1"
+            )
+    except Exception as e:
+        error_msg = str(e)
+        log_event('error', 'diarization_model_load_failed', error=error_msg, **log_fields)
+        
+        if "Cannot access gated repo" in error_msg:
+            raise RuntimeError(
+                "Model access required. Please visit the following URLs and accept the user agreements:\n"
+                "  - https://huggingface.co/pyannote/speaker-diarization-3.1\n"
+                "  - https://huggingface.co/pyannote/segmentation-3.0\n"
+                "Then restart the container."
+            ) from e
+        else:
+            raise RuntimeError(f"Failed to load diarization model: {e}") from e
+    
+    # Move to device if not CPU
+    if device != 'cpu':
+        import torch
+        log_event('info', 'diarization_device_move', device=device, **log_fields)
+        pipeline.to(torch.device(device))
+    
+    return pipeline
+
+
 def run_diarization(
     audio_path: str,
     min_speakers: Optional[int] = None,
@@ -238,73 +326,8 @@ def run_diarization(
     
     log_event('info', 'diarization_started', **log_fields)
     
-    try:
-        from pyannote.audio import Pipeline
-    except ImportError as e:
-        log_event('error', 'diarization_import_failed', error=str(e), **log_fields)
-        raise ImportError(
-            "pyannote.audio is required for speaker diarization. "
-            "Install with: pip install pyannote.audio"
-        ) from e
-    
-    # Get HuggingFace token from environment
-    hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
-    if not hf_token:
-        log_event('error', 'diarization_no_token', **log_fields)
-        raise RuntimeError(
-            "HuggingFace token required for pyannote. "
-            "Set HF_TOKEN environment variable. "
-            "Get token from https://huggingface.co/settings/tokens"
-        )
-    
-    # Log HF cache directory
-    try:
-        from huggingface_hub import snapshot_download
-        cache_dir = snapshot_download(repo_id="pyannote/speaker-diarization-3.1", 
-                                     use_auth_token=hf_token, 
-                                     allow_patterns=["config.yaml"],
-                                     local_files_only=True)
-        log_event('info', 'diarization_cache_info', cacheDir=os.path.dirname(cache_dir), **log_fields)
-    except:
-        pass  # Cache check is optional
-    
-    # Load the diarization pipeline with logging
-    log_event('info', 'diarization_model_loading_started', model='pyannote/speaker-diarization-3.1', **log_fields)
-    
-    try:
-        with with_timer('diarization_model_loading', **log_fields):
-            pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1",
-                use_auth_token=hf_token
-            )
-            
-        if pipeline is None:
-            log_event('error', 'diarization_model_none', **log_fields)
-            raise RuntimeError(
-                "Pipeline.from_pretrained returned None. "
-                "This may be due to missing model access. "
-                "Please ensure you have accepted the user agreement at: "
-                "https://huggingface.co/pyannote/speaker-diarization-3.1"
-            )
-    except Exception as e:
-        error_msg = str(e)
-        log_event('error', 'diarization_model_load_failed', error=error_msg, **log_fields)
-        
-        if "Cannot access gated repo" in error_msg:
-            raise RuntimeError(
-                "Model access required. Please visit the following URLs and accept the user agreements:\n"
-                "  - https://huggingface.co/pyannote/speaker-diarization-3.1\n"
-                "  - https://huggingface.co/pyannote/segmentation-3.0\n"
-                "Then restart the container."
-            ) from e
-        else:
-            raise RuntimeError(f"Failed to load diarization model: {e}") from e
-    
-    # Move to device if not CPU
-    if device != 'cpu':
-        import torch
-        log_event('info', 'diarization_device_move', device=device, **log_fields)
-        pipeline.to(torch.device(device))
+    # Load pipeline
+    pipeline = load_pipeline(device=device, job_id=job_id, session_id=session_id)
     
     # Build diarization parameters
     diarize_params = {}
@@ -490,6 +513,234 @@ def _friendly_speaker_name(speaker_id: str) -> str:
             pass
     
     return speaker_id
+
+
+def merge_chunk_speaker_segments(
+    all_chunk_segments: list[list[dict]],
+    chunk_infos: list[dict],
+    overlap_seconds: float = 5.0,
+    max_speakers: int = 6
+) -> list[dict]:
+    """
+    Merge speaker segments from multiple chunks into a single timeline.
+    
+    This function handles:
+    1. Shifting chunk-local timestamps to global timeline
+    2. Reconciling speaker identities across chunks using time continuity
+    3. Merging overlapping segments from chunk boundaries
+    
+    Args:
+        all_chunk_segments: List of speaker segment lists, one per chunk
+        chunk_infos: List of chunk info dicts with startSec, endSec
+        overlap_seconds: Overlap duration between chunks
+        max_speakers: Maximum number of global speakers to track
+    
+    Returns:
+        Merged list of speaker segments in global timeline
+    """
+    if not all_chunk_segments:
+        return []
+    
+    # Build global speaker mapping using time continuity heuristic
+    # Track which chunk-local speakers map to which global speakers
+    global_speakers = []  # List of global speaker IDs
+    speaker_mapping = {}  # (chunk_idx, local_speaker) -> global_speaker
+    
+    all_global_segments = []
+    
+    for chunk_idx, (chunk_segments, chunk_info) in enumerate(zip(all_chunk_segments, chunk_infos)):
+        chunk_start = chunk_info.get('startSec', 0)
+        
+        for seg in chunk_segments:
+            local_speaker = seg.get('speaker', 'SPEAKER_00')
+            local_start = seg.get('start', 0)
+            local_end = seg.get('end', 0)
+            
+            # Shift to global timeline
+            global_start = chunk_start + local_start
+            global_end = chunk_start + local_end
+            
+            # Map local speaker to global speaker
+            mapping_key = (chunk_idx, local_speaker)
+            
+            if mapping_key not in speaker_mapping:
+                # Try to find a matching global speaker from previous chunk
+                # based on time continuity (speaker active near chunk boundary)
+                matched_global = None
+                
+                if chunk_idx > 0:
+                    prev_chunk_end = chunk_infos[chunk_idx - 1].get('endSec', 0)
+                    boundary_window = overlap_seconds * 1.5
+                    
+                    # Look for segments near the boundary in previous chunk
+                    for prev_seg in all_global_segments:
+                        if prev_seg['end'] >= prev_chunk_end - boundary_window:
+                            # Check if this segment's speaker is a candidate
+                            if global_start <= prev_seg['end'] + boundary_window:
+                                matched_global = prev_seg['speaker']
+                                break
+                
+                if matched_global and len(global_speakers) < max_speakers:
+                    speaker_mapping[mapping_key] = matched_global
+                else:
+                    # Create new global speaker
+                    new_speaker = f"SPEAKER_{len(global_speakers):02d}"
+                    if len(global_speakers) < max_speakers:
+                        global_speakers.append(new_speaker)
+                        speaker_mapping[mapping_key] = new_speaker
+                    else:
+                        # Reuse last speaker if at max
+                        speaker_mapping[mapping_key] = global_speakers[-1]
+            
+            global_speaker = speaker_mapping[mapping_key]
+            
+            all_global_segments.append({
+                'speaker': global_speaker,
+                'start': round(global_start, 3),
+                'end': round(global_end, 3)
+            })
+    
+    # Sort by start time
+    all_global_segments.sort(key=lambda x: x['start'])
+    
+    # Merge overlapping segments from same speaker
+    merged = []
+    for seg in all_global_segments:
+        if not merged:
+            merged.append(seg.copy())
+            continue
+        
+        last = merged[-1]
+        
+        # Check for overlap or small gap with same speaker
+        if last['speaker'] == seg['speaker'] and seg['start'] <= last['end'] + 0.5:
+            # Extend the previous segment
+            last['end'] = max(last['end'], seg['end'])
+        else:
+            merged.append(seg.copy())
+    
+    return merged
+
+
+def run_chunked_diarization(
+    audio_path: str,
+    chunks: list,
+    pipeline,
+    min_speakers: Optional[int] = None,
+    max_speakers: Optional[int] = None,
+    num_speakers: Optional[int] = None,
+    job_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    progress_callback: Optional[callable] = None
+) -> list[dict]:
+    """
+    Run diarization on audio chunks and merge results.
+    
+    Args:
+        audio_path: Path to original audio file (for logging)
+        chunks: List of ChunkInfo objects from split_audio_to_wav_chunks
+        pipeline: Loaded pyannote Pipeline
+        min_speakers: Minimum speakers hint
+        max_speakers: Maximum speakers hint
+        num_speakers: Fixed number of speakers
+        job_id: Job ID for logging
+        session_id: Session ID for logging
+        progress_callback: Optional callback(chunk_idx, total_chunks, status)
+    
+    Returns:
+        Merged speaker segments in global timeline
+    """
+    from logger import log_event
+    
+    log_fields = {'stage': 'chunked_diarization'}
+    if job_id:
+        log_fields['jobId'] = job_id
+    if session_id:
+        log_fields['sessionId'] = session_id
+    
+    all_chunk_segments = []
+    chunk_infos = []
+    total_chunks = len(chunks)
+    
+    log_event('info', 'chunked_diarization_started',
+              totalChunks=total_chunks,
+              **log_fields)
+    
+    # Build pipeline params
+    params = {}
+    if num_speakers is not None:
+        params['num_speakers'] = num_speakers
+    else:
+        if min_speakers is not None:
+            params['min_speakers'] = min_speakers
+        if max_speakers is not None:
+            params['max_speakers'] = max_speakers
+    
+    for chunk in chunks:
+        chunk_idx = chunk.index
+        chunk_path = chunk.path
+        
+        if progress_callback:
+            progress_callback(chunk_idx, total_chunks, f'Diarizing chunk {chunk_idx + 1}/{total_chunks}')
+        
+        log_event('info', 'chunk_diarization_started',
+                  chunkIndex=chunk_idx,
+                  totalChunks=total_chunks,
+                  chunkPath=os.path.basename(chunk_path),
+                  **log_fields)
+        
+        try:
+            # Run diarization on chunk
+            if params:
+                diarization = pipeline(chunk_path, **params)
+            else:
+                diarization = pipeline(chunk_path)
+            
+            # Extract segments
+            chunk_segments = []
+            for turn, _, speaker in diarization.itertracks(yield_label=True):
+                chunk_segments.append({
+                    'speaker': speaker,
+                    'start': round(turn.start, 3),
+                    'end': round(turn.end, 3)
+                })
+            
+            all_chunk_segments.append(chunk_segments)
+            chunk_infos.append(chunk.to_dict())
+            
+            log_event('info', 'chunk_diarization_finished',
+                      chunkIndex=chunk_idx,
+                      numSegments=len(chunk_segments),
+                      **log_fields)
+            
+        except Exception as e:
+            log_event('error', 'chunk_diarization_failed',
+                      chunkIndex=chunk_idx,
+                      error=str(e)[:200],
+                      **log_fields)
+            # Continue with empty segments for this chunk
+            all_chunk_segments.append([])
+            chunk_infos.append(chunk.to_dict())
+    
+    # Merge all chunk segments
+    overlap_seconds = 5.0  # Default, could be passed in
+    if len(chunk_infos) >= 2:
+        # Estimate overlap from chunk boundaries
+        overlap_seconds = max(0, chunk_infos[0].get('endSec', 0) - chunk_infos[1].get('startSec', 0))
+    
+    merged_segments = merge_chunk_speaker_segments(
+        all_chunk_segments,
+        chunk_infos,
+        overlap_seconds=overlap_seconds,
+        max_speakers=max_speakers or 6
+    )
+    
+    log_event('info', 'chunked_diarization_finished',
+              totalChunks=total_chunks,
+              totalSegments=len(merged_segments),
+              **log_fields)
+    
+    return merged_segments
 
 
 def format_speaker_markdown(
