@@ -429,6 +429,7 @@
                                             <span>Est. chunks:</span>
                                             <span id="policyChunkCount" class="text-gray-300">-</span>
                                         </div>
+                                        <div id="policyWarnings" class="mt-2 hidden"></div>
                                     </div>
                                 </div>
                             </div>
@@ -522,6 +523,7 @@
                     <div class="flex items-center gap-2 mb-1">
                         <span class="spinner"></span>
                         <span id="currentStage" class="text-sm text-primary-300 font-medium">Starting...</span>
+                        <span id="stageElapsed" class="text-xs text-gray-500"></span>
                     </div>
                     <div id="currentFile" class="text-sm text-gray-300 font-mono truncate"></div>
                 </div>
@@ -1138,11 +1140,23 @@
                 const data = await response.json();
                 currentDiarizationPolicy = data.policy;
                 diarizationPolicyConfig = data.serverConfig;
+                const warnings = data.warnings || [];
                 
                 // Update policy preview
                 if (policyPreview && currentDiarizationPolicy) {
                     document.getElementById('policyChunkSeconds').textContent = `${currentDiarizationPolicy.chunkSeconds}s`;
                     document.getElementById('policyOverlapSeconds').textContent = `${currentDiarizationPolicy.overlapSeconds}s`;
+                    
+                    // Show/hide warnings
+                    const warningsEl = document.getElementById('policyWarnings');
+                    if (warningsEl) {
+                        if (warnings.length > 0) {
+                            warningsEl.innerHTML = warnings.map(w => `<div class="text-amber-400 text-xs">${w}</div>`).join('');
+                            warningsEl.classList.remove('hidden');
+                        } else {
+                            warningsEl.classList.add('hidden');
+                        }
+                    }
                     
                     // Show preview only when auto-split is enabled
                     policyPreview.classList.toggle('hidden', !autoSplit);
@@ -1891,30 +1905,64 @@
             // Update current stage and file
             const currentStageEl = document.getElementById('currentStage');
             const currentFileEl = document.getElementById('currentFile');
+            const stageElapsedEl = document.getElementById('stageElapsed');
             
-            // Parse stage from currentFile text
-            let stage = 'Processing...';
+            // Use stage from manifest progress if available
+            const manifestStage = progress.stage;
+            const stageStartedAt = progress.stageStartedAt;
+            
+            const stageLabels = {
+                'queued': 'Queued',
+                'loading_model': 'Loading model...',
+                'transcribing': 'Transcribing...',
+                'diarizing': 'Running diarization...',
+                'merging': 'Merging transcript + speakers...',
+                'writing_outputs': 'Writing outputs...',
+                'complete': 'Complete'
+            };
+            
+            let stage = stageLabels[manifestStage] || 'Processing...';
             let fileName = currentFile;
             
-            if (currentFile.includes('Loading')) {
-                stage = currentFile;
-                fileName = '';
-            } else if (currentFile.includes('(running diarization')) {
-                stage = 'Running diarization...';
-                fileName = currentFile.replace(' (running diarization...)', '');
-            } else if (currentFile.includes('(merging')) {
-                stage = 'Merging transcript + speakers...';
-                fileName = currentFile.replace(/\s*\(merging.*\)/, '');
-            } else if (currentFile.includes('(loading diarization')) {
-                stage = 'Loading diarization pipeline...';
-                fileName = currentFile.replace(/\s*\(loading.*\)/, '');
-            } else if (currentFile) {
-                stage = 'Transcribing...';
-                fileName = currentFile;
+            // Fallback to parsing from currentFile if no manifest stage
+            if (!manifestStage) {
+                if (currentFile.includes('Loading')) {
+                    stage = currentFile;
+                    fileName = '';
+                } else if (currentFile.includes('(running diarization')) {
+                    stage = 'Running diarization...';
+                    fileName = currentFile.replace(' (running diarization...)', '');
+                } else if (currentFile.includes('(merging')) {
+                    stage = 'Merging transcript + speakers...';
+                    fileName = currentFile.replace(/\s*\(merging.*\)/, '');
+                } else if (currentFile.includes('(loading diarization')) {
+                    stage = 'Loading diarization pipeline...';
+                    fileName = currentFile.replace(/\s*\(loading.*\)/, '');
+                } else if (currentFile) {
+                    stage = 'Transcribing...';
+                    fileName = currentFile;
+                }
+            } else {
+                // Clean up fileName if it has stage info embedded
+                fileName = currentFile.replace(/\s*\([^)]+\)\s*$/, '');
+            }
+            
+            // Show chunk progress for diarization
+            if (manifestStage === 'diarizing' && progress.chunkIndex !== undefined && progress.totalChunks) {
+                stage = `Diarizing chunk ${progress.chunkIndex + 1}/${progress.totalChunks}`;
             }
             
             if (currentStageEl) currentStageEl.textContent = stage;
             if (currentFileEl) currentFileEl.textContent = fileName;
+            
+            // Update stage elapsed time
+            if (stageElapsedEl && stageStartedAt) {
+                const stageStart = new Date(stageStartedAt);
+                const stageElapsed = Math.floor((Date.now() - stageStart.getTime()) / 1000);
+                const stageMins = Math.floor(stageElapsed / 60);
+                const stageSecs = stageElapsed % 60;
+                stageElapsedEl.textContent = `(${stageMins}:${stageSecs.toString().padStart(2, '0')} in stage)`;
+            }
             
             // Add to activity log if progress changed
             if (currentFile && currentFile !== lastProgressText) {
