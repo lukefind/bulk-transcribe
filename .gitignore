@@ -58,6 +58,11 @@ output/
 *.json
 !package.json
 
+# Session data and test artifacts
+cookies.txt
+data/
+sessions/
+
 # Whisper models (large files)
 *.pt
 
