@@ -1,3 +1,5 @@
-# Pin torch/torchaudio to prevent pyannote from upgrading them
-torch==2.9.1
-torchaudio==2.9.1
+# Pin torch/torchaudio to versions compatible with pyannote.audio 3.1.0
+torch==2.1.2
+torchaudio==2.1.2
+numpy<2
+huggingface_hub<0.20
