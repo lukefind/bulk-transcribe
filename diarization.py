@@ -62,9 +62,23 @@ def run_diarization(
             use_auth_token=hf_token
         )
         if pipeline is None:
-            raise RuntimeError("Pipeline.from_pretrained returned None")
+            raise RuntimeError(
+                "Pipeline.from_pretrained returned None. "
+                "This may be due to missing model access. "
+                "Please ensure you have accepted the user agreement at: "
+                "https://huggingface.co/pyannote/speaker-diarization-3.1"
+            )
     except Exception as e:
-        raise RuntimeError(f"Failed to load diarization model: {e}") from e
+        error_msg = str(e)
+        if "Cannot access gated repo" in error_msg:
+            raise RuntimeError(
+                "Model access required. Please visit the following URLs and accept the user agreements:\n"
+                "  - https://huggingface.co/pyannote/speaker-diarization-3.1\n"
+                "  - https://huggingface.co/pyannote/segmentation-3.0\n"
+                "Then restart the container."
+            ) from e
+        else:
+            raise RuntimeError(f"Failed to load diarization model: {e}") from e
     
     # Move to device if not CPU
     if device != 'cpu':
