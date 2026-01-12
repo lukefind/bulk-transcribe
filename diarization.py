@@ -603,9 +603,37 @@ def merge_chunk_speaker_segments(
     # Sort by start time
     all_global_segments.sort(key=lambda x: x['start'])
     
-    # Merge overlapping segments from same speaker
-    merged = []
+    segments_before_dedup = len(all_global_segments)
+    
+    # Remove duplicate segments from overlap regions
+    # A segment is considered duplicate if it overlaps significantly with an existing segment
+    deduplicated = []
     for seg in all_global_segments:
+        is_duplicate = False
+        for existing in deduplicated:
+            # Check for significant time overlap (>50% of shorter segment)
+            overlap_start = max(seg['start'], existing['start'])
+            overlap_end = min(seg['end'], existing['end'])
+            overlap_duration = max(0, overlap_end - overlap_start)
+            
+            seg_duration = seg['end'] - seg['start']
+            existing_duration = existing['end'] - existing['start']
+            min_duration = min(seg_duration, existing_duration)
+            
+            if min_duration > 0 and overlap_duration / min_duration > 0.5:
+                # Same speaker and significant overlap = duplicate
+                if seg['speaker'] == existing['speaker']:
+                    is_duplicate = True
+                    # Extend existing segment if this one goes further
+                    existing['end'] = max(existing['end'], seg['end'])
+                    break
+        
+        if not is_duplicate:
+            deduplicated.append(seg.copy())
+    
+    # Merge adjacent segments from same speaker
+    merged = []
+    for seg in deduplicated:
         if not merged:
             merged.append(seg.copy())
             continue
@@ -619,7 +647,14 @@ def merge_chunk_speaker_segments(
         else:
             merged.append(seg.copy())
     
-    return merged
+    segments_after_dedup = len(merged)
+    duplicates_removed = segments_before_dedup - segments_after_dedup
+    
+    return merged, {
+        'segmentsBeforeDedup': segments_before_dedup,
+        'segmentsAfterDedup': segments_after_dedup,
+        'duplicatesRemoved': duplicates_removed
+    }
 
 
 def run_chunked_diarization(
@@ -728,16 +763,19 @@ def run_chunked_diarization(
         # Estimate overlap from chunk boundaries
         overlap_seconds = max(0, chunk_infos[0].get('endSec', 0) - chunk_infos[1].get('startSec', 0))
     
-    merged_segments = merge_chunk_speaker_segments(
+    merged_segments, dedup_stats = merge_chunk_speaker_segments(
         all_chunk_segments,
         chunk_infos,
         overlap_seconds=overlap_seconds,
         max_speakers=max_speakers or 6
     )
     
-    log_event('info', 'chunked_diarization_finished',
+    log_event('info', 'stitch_finished',
               totalChunks=total_chunks,
               totalSegments=len(merged_segments),
+              segmentsBeforeDedup=dedup_stats.get('segmentsBeforeDedup', 0),
+              segmentsAfterDedup=dedup_stats.get('segmentsAfterDedup', 0),
+              duplicatesRemoved=dedup_stats.get('duplicatesRemoved', 0),
               **log_fields)
     
     return merged_segments

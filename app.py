@@ -1930,7 +1930,17 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                                     )
                                     
                                     # Cleanup chunks unless KEEP_CHUNKS is set
-                                    if os.environ.get('KEEP_CHUNKS', '0') != '1':
+                                    keep_chunks = os.environ.get('KEEP_CHUNKS', '0') == '1'
+                                    if keep_chunks:
+                                        # Store chunk debug info in manifest
+                                        chunk_debug_info = [{
+                                            'index': c.index,
+                                            'startSec': c.start_sec,
+                                            'endSec': c.end_sec,
+                                            'path': os.path.basename(c.path)
+                                        } for c in chunks]
+                                        update_manifest(debug={'chunks': chunk_debug_info})
+                                    else:
                                         cleanup_chunks(chunk_dir)
                                 else:
                                     # Standard diarization for short files
