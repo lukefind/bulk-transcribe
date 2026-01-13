@@ -129,7 +129,9 @@ def get_remote_worker_status(force_refresh: bool = False) -> Dict[str, Any]:
                 'gpu': ping_data.get('gpu', False),
                 'gpuName': ping_data.get('gpuName'),
                 'cuda': ping_data.get('cuda'),
-                'maxFileMB': ping_data.get('maxFileMB')
+                'maxFileMB': ping_data.get('maxFileMB'),
+                'activeJobs': ping_data.get('activeJobs', 0),
+                'maxConcurrentJobs': ping_data.get('maxConcurrentJobs', 1)
             }
         elif response.status_code in (401, 403):
             result['error'] = 'Unauthorized (check REMOTE_WORKER_TOKEN)'
@@ -171,6 +173,73 @@ def should_use_remote_worker(user_requested: bool = False) -> bool:
         return user_requested and is_remote_worker_available()
     
     return False
+
+
+def check_worker_capacity() -> Dict[str, Any]:
+    """
+    Check if worker has capacity for new jobs.
+    
+    Returns:
+        Dict with:
+        - hasCapacity: bool
+        - activeJobs: int
+        - maxConcurrentJobs: int
+        - error: str or None
+    """
+    status = get_remote_worker_status(force_refresh=True)
+    
+    if not status['connected']:
+        return {
+            'hasCapacity': False,
+            'activeJobs': 0,
+            'maxConcurrentJobs': 0,
+            'error': status.get('error') or 'Worker not connected'
+        }
+    
+    caps = status.get('workerCapabilities', {})
+    active = caps.get('activeJobs', 0)
+    max_concurrent = caps.get('maxConcurrentJobs', 1)
+    
+    return {
+        'hasCapacity': active < max_concurrent,
+        'activeJobs': active,
+        'maxConcurrentJobs': max_concurrent,
+        'error': None
+    }
+
+
+import random
+
+# Backoff configuration
+_BACKOFF_MIN_SECONDS = 2
+_BACKOFF_MAX_SECONDS = 30
+_BACKOFF_BASE = 2
+_BACKOFF_JITTER_FACTOR = 0.3
+
+
+def calculate_backoff(attempt: int, seed: int = None) -> float:
+    """
+    Calculate exponential backoff with jitter.
+    
+    Args:
+        attempt: Attempt number (0-indexed)
+        seed: Optional seed for deterministic jitter (for testing)
+    
+    Returns:
+        Backoff duration in seconds
+    """
+    if seed is not None:
+        random.seed(seed)
+    
+    # Exponential backoff: base^attempt
+    base_delay = min(_BACKOFF_MAX_SECONDS, _BACKOFF_BASE ** attempt)
+    
+    # Add jitter: +/- jitter_factor
+    jitter = base_delay * _BACKOFF_JITTER_FACTOR * (2 * random.random() - 1)
+    delay = base_delay + jitter
+    
+    # Clamp to min/max
+    return max(_BACKOFF_MIN_SECONDS, min(_BACKOFF_MAX_SECONDS, delay))
 
 
 def generate_signed_url(base_url: str, job_id: str, input_id: str, 
@@ -305,10 +374,11 @@ def dispatch_to_remote_worker(
     Dispatch a job to remote worker and poll for completion.
     
     This function runs in a background thread and:
-    1. Creates job on remote worker
-    2. Polls for status updates
-    3. Updates local manifest with progress
-    4. Handles completion/failure/cancellation
+    1. Waits for worker capacity (queued_remote state)
+    2. Creates job on remote worker
+    3. Polls for status updates with exponential backoff on errors
+    4. Updates local manifest with progress
+    5. Handles completion/failure/cancellation
     
     Args:
         session_id: Session ID
@@ -327,6 +397,80 @@ def dispatch_to_remote_worker(
     
     # Generate session hash for logging (don't expose full session ID)
     session_hash = hashlib.sha256(session_id.encode()).hexdigest()[:8]
+    
+    # Wait for worker capacity before dispatching
+    capacity_wait_start = time.time()
+    capacity_wait_timeout = 3600  # 1 hour max wait for capacity
+    capacity_check_attempt = 0
+    
+    while True:
+        if is_cancelled_callback():
+            log_event('info', 'remote_job_cancelled_while_queued', jobId=job_id)
+            update_manifest_callback(
+                status='canceled',
+                finishedAt=datetime.now(timezone.utc).isoformat(),
+                error={'code': 'USER_CANCELED', 'message': 'Job canceled while waiting for worker capacity'}
+            )
+            return False
+        
+        capacity = check_worker_capacity()
+        
+        if capacity['error']:
+            # Worker unreachable - use backoff
+            backoff = calculate_backoff(capacity_check_attempt)
+            log_event('warning', 'remote_capacity_check_failed',
+                      jobId=job_id, error=capacity['error'], backoffSeconds=backoff)
+            update_manifest_callback(
+                status='queued_remote',
+                progress={'stage': 'queued_remote', 'currentFile': f'Worker unreachable, retrying in {int(backoff)}s...'},
+                lastErrorCode='REMOTE_WORKER_UNREACHABLE',
+                lastErrorMessage=capacity['error'][:200],
+                lastErrorAt=datetime.now(timezone.utc).isoformat()
+            )
+            capacity_check_attempt += 1
+            time.sleep(backoff)
+            
+            # Check timeout
+            if time.time() - capacity_wait_start > capacity_wait_timeout:
+                log_event('error', 'remote_capacity_wait_timeout', jobId=job_id)
+                update_manifest_callback(
+                    status='failed',
+                    finishedAt=datetime.now(timezone.utc).isoformat(),
+                    error={'code': 'REMOTE_WORKER_TIMEOUT', 'message': 'Timed out waiting for worker capacity'}
+                )
+                return False
+            continue
+        
+        if capacity['hasCapacity']:
+            log_event('info', 'remote_capacity_available',
+                      jobId=job_id, activeJobs=capacity['activeJobs'], 
+                      maxConcurrentJobs=capacity['maxConcurrentJobs'])
+            break
+        
+        # No capacity - wait with backoff
+        backoff = calculate_backoff(min(capacity_check_attempt, 4))  # Cap at ~16s base
+        log_event('info', 'remote_waiting_for_capacity',
+                  jobId=job_id, activeJobs=capacity['activeJobs'],
+                  maxConcurrentJobs=capacity['maxConcurrentJobs'], backoffSeconds=backoff)
+        update_manifest_callback(
+            status='queued_remote',
+            progress={
+                'stage': 'queued_remote',
+                'currentFile': f'Waiting for worker capacity ({capacity["activeJobs"]}/{capacity["maxConcurrentJobs"]} active)...'
+            }
+        )
+        capacity_check_attempt += 1
+        time.sleep(backoff)
+        
+        # Check timeout
+        if time.time() - capacity_wait_start > capacity_wait_timeout:
+            log_event('error', 'remote_capacity_wait_timeout', jobId=job_id)
+            update_manifest_callback(
+                status='failed',
+                finishedAt=datetime.now(timezone.utc).isoformat(),
+                error={'code': 'REMOTE_WORKER_CAPACITY', 'message': 'Timed out waiting for worker capacity'}
+            )
+            return False
     
     # Build signed download URLs for inputs
     secret = os.environ.get('SECRET_KEY', 'default-secret-key')
@@ -384,10 +528,11 @@ def dispatch_to_remote_worker(
         log_event('info', 'remote_job_created',
                   jobId=job_id, workerJobId=worker_job_id)
         
-        # Poll for completion
+        # Poll for completion with exponential backoff on errors
         poll_interval = config['pollSeconds']
         timeout = config['timeoutSeconds']
         start_time = time.time()
+        consecutive_errors = 0
         
         while True:
             # Check for cancellation
@@ -397,6 +542,11 @@ def dispatch_to_remote_worker(
                     client.cancel_job(worker_job_id)
                 except Exception as e:
                     log_event('warning', 'remote_cancel_failed', jobId=job_id, error=str(e))
+                update_manifest_callback(
+                    status='canceled',
+                    finishedAt=datetime.now(timezone.utc).isoformat(),
+                    error={'code': 'USER_CANCELED', 'message': 'Job canceled by user'}
+                )
                 return False
             
             # Check timeout
@@ -405,13 +555,15 @@ def dispatch_to_remote_worker(
                 log_event('error', 'remote_job_timeout', jobId=job_id, workerJobId=worker_job_id)
                 update_manifest_callback(
                     status='failed',
-                    error={'code': 'REMOTE_TIMEOUT', 'message': f'Worker job timed out after {timeout}s'}
+                    finishedAt=datetime.now(timezone.utc).isoformat(),
+                    error={'code': 'REMOTE_WORKER_TIMEOUT', 'message': f'Worker job timed out after {timeout}s'}
                 )
                 return False
             
             # Poll worker status
             try:
                 status = client.get_job_status(worker_job_id)
+                consecutive_errors = 0  # Reset on success
                 
                 # Update manifest with progress
                 update_manifest_callback(
@@ -427,7 +579,8 @@ def dispatch_to_remote_worker(
                     worker={
                         'workerJobId': worker_job_id,
                         'url': config['url'],
-                        'lastSeenAt': datetime.now(timezone.utc).isoformat()
+                        'lastSeenAt': datetime.now(timezone.utc).isoformat(),
+                        'gpu': status.get('gpu')
                     }
                 )
                 
@@ -435,6 +588,10 @@ def dispatch_to_remote_worker(
                 worker_status = status.get('status')
                 if worker_status == 'complete':
                     log_event('info', 'remote_job_complete', jobId=job_id, workerJobId=worker_job_id)
+                    update_manifest_callback(
+                        status='complete',
+                        finishedAt=datetime.now(timezone.utc).isoformat()
+                    )
                     return True
                 elif worker_status == 'failed':
                     error = status.get('error', {})
@@ -442,18 +599,37 @@ def dispatch_to_remote_worker(
                               workerJobId=worker_job_id, error=error)
                     update_manifest_callback(
                         status='failed',
+                        finishedAt=datetime.now(timezone.utc).isoformat(),
                         error=error or {'code': 'REMOTE_FAILED', 'message': 'Worker job failed'}
                     )
                     return False
                 elif worker_status == 'canceled':
                     log_event('info', 'remote_job_canceled', jobId=job_id, workerJobId=worker_job_id)
+                    update_manifest_callback(
+                        status='canceled',
+                        finishedAt=datetime.now(timezone.utc).isoformat()
+                    )
                     return False
                 
+                # Normal poll interval on success
+                time.sleep(poll_interval)
+                
             except requests.exceptions.RequestException as e:
-                log_event('warning', 'remote_poll_error', jobId=job_id, error=str(e))
-                # Continue polling - transient network errors are expected
-            
-            time.sleep(poll_interval)
+                consecutive_errors += 1
+                backoff = calculate_backoff(consecutive_errors)
+                log_event('warning', 'remote_poll_error', 
+                          jobId=job_id, error=str(e), 
+                          consecutiveErrors=consecutive_errors, backoffSeconds=backoff)
+                
+                # Update manifest with error info
+                update_manifest_callback(
+                    lastErrorCode='REMOTE_WORKER_UNREACHABLE',
+                    lastErrorMessage=str(e)[:200],
+                    lastErrorAt=datetime.now(timezone.utc).isoformat()
+                )
+                
+                # Backoff on errors
+                time.sleep(backoff)
         
     except Exception as e:
         log_event('error', 'remote_dispatch_failed', jobId=job_id, error=str(e))
