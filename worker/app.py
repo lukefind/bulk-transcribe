@@ -154,12 +154,16 @@ def _detect_capabilities():
         pass
     
     # Check diarization (once)
-    try:
-        import pyannote.audio
-        hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
-        caps['diarization'] = bool(hf_token)
-    except ImportError:
-        pass
+    hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
+    if hf_token:
+        try:
+            import pyannote.audio  # noqa: F401
+            caps['diarization'] = True
+        except Exception as e:
+            caps['diarization'] = False
+            caps['diarizationError'] = str(e)[:120]
+    else:
+        caps['diarization'] = False
     
     _cached_capabilities = caps
     return caps

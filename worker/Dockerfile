@@ -1,7 +1,7 @@
 # GPU Worker Dockerfile for Bulk Transcribe
 # Optimized for NVIDIA GPU with CUDA support
 
-FROM nvidia/cuda:12.1-runtime-ubuntu22.04
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
 
 # Build arguments for version tracking
 ARG BUILD_COMMIT=unknown
@@ -25,6 +25,7 @@ WORKDIR /app
 # Install Python dependencies
 COPY worker/requirements.txt /app/requirements.txt
 RUN pip3 install --no-cache-dir -r requirements.txt
+
 
 # Copy worker code
 COPY worker/ /app/worker/
