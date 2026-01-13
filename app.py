@@ -1559,6 +1559,7 @@ def api_create_job():
     # Check if remote worker should be used
     use_remote_worker = options.get('useRemoteWorker', False)
     execution_mode = 'local'
+    remote_fallback_reason = None
     
     try:
         from remote_worker import get_worker_config, get_remote_worker_status
@@ -1580,13 +1581,17 @@ def api_create_job():
             # User requested remote - check if available
             worker_status = get_remote_worker_status()
             if not worker_status['connected']:
-                # Fall back to local with warning
+                # Fall back to local - track reason for UI
                 execution_mode = 'local'
                 use_remote_worker = False
+                remote_fallback_reason = worker_status.get('error') or 'Worker unreachable'
             else:
                 execution_mode = 'remote'
     except ImportError:
         pass
+    
+    # Track if user requested remote but we fell back
+    remote_requested = options.get('useRemoteWorker', False)
     
     # Create job
     job_id = session_store.new_id(12)
@@ -1638,7 +1643,9 @@ def api_create_job():
             'stageStartedAt': now
         },
         'error': None,
-        'worker': None  # Will be populated if using remote worker
+        'worker': None,  # Will be populated if using remote worker
+        'remoteRequested': remote_requested,
+        'remoteFallbackReason': remote_fallback_reason if (remote_requested and execution_mode == 'local') else None
     }
     
     session_store.atomic_write_json(session_store.job_manifest_path(session_id, job_id), manifest)
@@ -2402,8 +2409,15 @@ def api_get_job(job_id):
         worker = manifest['worker']
         safe_manifest['worker'] = {
             'workerJobId': worker.get('workerJobId'),
-            'lastSeenAt': worker.get('lastSeenAt')
+            'lastSeenAt': worker.get('lastSeenAt'),
+            'gpu': worker.get('gpu')  # Include GPU status for accurate badge
         }
+    
+    # Include fallback info if remote was requested but ran locally
+    if manifest.get('remoteRequested'):
+        safe_manifest['remoteRequested'] = True
+        if manifest.get('remoteFallbackReason'):
+            safe_manifest['remoteFallbackReason'] = manifest['remoteFallbackReason']
     
     return jsonify(safe_manifest)
 

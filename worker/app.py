@@ -37,6 +37,7 @@ WORKER_TMP_DIR = os.environ.get('WORKER_TMP_DIR', '/tmp/bt-worker')
 WORKER_MAX_FILE_MB = int(os.environ.get('WORKER_MAX_FILE_MB', '2000'))
 WORKER_MODEL = os.environ.get('WORKER_MODEL', 'large-v3')
 WORKER_PORT = int(os.environ.get('WORKER_PORT', '8477'))
+WORKER_PING_PUBLIC = os.environ.get('WORKER_PING_PUBLIC', '').lower() == 'true'
 
 app = Flask(__name__)
 
@@ -152,14 +153,11 @@ def _detect_capabilities():
     return caps
 
 
-@app.route('/v1/ping', methods=['GET'])
-def ping():
+def _ping_handler():
     """
     Detailed ping endpoint for controller handshake.
     Returns version, capabilities, and GPU status.
-    
-    Intentionally unauthenticated (like /health) for connectivity checks.
-    Does not expose sensitive data - only static capability info.
+    Fast and side-effect free (capabilities cached at startup).
     """
     caps = _detect_capabilities()
     return jsonify({
@@ -172,6 +170,30 @@ def ping():
         'diarization': caps['diarization'],
         'maxFileMB': caps['maxFileMB']
     })
+
+
+@app.route('/v1/ping', methods=['GET'])
+def ping():
+    """
+    Ping endpoint - authenticated by default.
+    Set WORKER_PING_PUBLIC=true to allow unauthenticated access.
+    """
+    if WORKER_PING_PUBLIC:
+        return _ping_handler()
+    
+    # Require auth
+    if not WORKER_TOKEN:
+        return jsonify({'error': 'Worker not configured (no WORKER_TOKEN)'}), 500
+    
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return jsonify({'error': 'Missing Authorization header'}), 401
+    
+    token = auth_header[7:]
+    if token != WORKER_TOKEN:
+        return jsonify({'error': 'Invalid token'}), 403
+    
+    return _ping_handler()
 
 
 @app.route('/v1/jobs', methods=['POST'])

@@ -140,8 +140,12 @@ class TestRemoteWorkerStatus:
         for key in ['REMOTE_WORKER_URL', 'REMOTE_WORKER_TOKEN', 'REMOTE_WORKER_MODE']:
             os.environ.pop(key, None)
         
-        from remote_worker import get_remote_worker_status
-        status = get_remote_worker_status()
+        import remote_worker
+        # Clear cache
+        remote_worker._worker_status_cache.clear()
+        remote_worker._worker_status_cache_time.clear()
+        
+        status = remote_worker.get_remote_worker_status(force_refresh=True)
         
         assert status['configured'] == False
         assert status['connected'] == False
@@ -157,14 +161,66 @@ class TestRemoteWorkerStatus:
         try:
             import remote_worker
             # Clear cache to ensure fresh check
-            remote_worker._worker_status_cache = None
-            remote_worker._worker_status_cache_time = 0
+            remote_worker._worker_status_cache.clear()
+            remote_worker._worker_status_cache_time.clear()
             
             status = remote_worker.get_remote_worker_status(force_refresh=True)
             
             assert status['configured'] == True
             assert status['connected'] == False
             assert status['error'] is not None
+        finally:
+            os.environ.pop('REMOTE_WORKER_URL', None)
+            os.environ.pop('REMOTE_WORKER_TOKEN', None)
+            os.environ.pop('REMOTE_WORKER_MODE', None)
+    
+    def test_cache_invalidation_on_config_change(self):
+        """Test that cache is invalidated when config changes."""
+        import remote_worker
+        
+        # Set initial config
+        os.environ['REMOTE_WORKER_URL'] = 'http://worker1:8477'
+        os.environ['REMOTE_WORKER_TOKEN'] = 'token1'
+        os.environ['REMOTE_WORKER_MODE'] = 'optional'
+        
+        try:
+            # Clear cache
+            remote_worker._worker_status_cache.clear()
+            remote_worker._worker_status_cache_time.clear()
+            
+            # First call - should ping worker1
+            status1 = remote_worker.get_remote_worker_status(force_refresh=True)
+            assert status1['url'] == 'http://worker1:8477'
+            
+            # Change config to different worker
+            os.environ['REMOTE_WORKER_URL'] = 'http://worker2:8477'
+            os.environ['REMOTE_WORKER_TOKEN'] = 'token2'
+            
+            # Second call - should NOT return cached worker1 status
+            status2 = remote_worker.get_remote_worker_status()
+            assert status2['url'] == 'http://worker2:8477'
+            
+        finally:
+            os.environ.pop('REMOTE_WORKER_URL', None)
+            os.environ.pop('REMOTE_WORKER_TOKEN', None)
+            os.environ.pop('REMOTE_WORKER_MODE', None)
+    
+    def test_full_url_not_truncated(self):
+        """Test that URL is not truncated in status response."""
+        os.environ['REMOTE_WORKER_URL'] = 'https://very-long-worker-hostname.example.com:8477'
+        os.environ['REMOTE_WORKER_TOKEN'] = 'test-token'
+        os.environ['REMOTE_WORKER_MODE'] = 'optional'
+        
+        try:
+            import remote_worker
+            remote_worker._worker_status_cache.clear()
+            remote_worker._worker_status_cache_time.clear()
+            
+            status = remote_worker.get_remote_worker_status(force_refresh=True)
+            
+            # URL should be full, not truncated
+            assert status['url'] == 'https://very-long-worker-hostname.example.com:8477'
+            assert '...' not in status['url']
         finally:
             os.environ.pop('REMOTE_WORKER_URL', None)
             os.environ.pop('REMOTE_WORKER_TOKEN', None)

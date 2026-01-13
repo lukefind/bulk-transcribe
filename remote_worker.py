@@ -55,33 +55,38 @@ def is_remote_worker_available() -> bool:
         return False
 
 
-# Cache for worker status (avoid spamming worker on every /api/runtime call)
-_worker_status_cache = None
-_worker_status_cache_time = 0
+# Cache for worker status - keyed by config to avoid stale data on config change
+_worker_status_cache: Dict[str, Any] = {}
+_worker_status_cache_time: Dict[str, float] = {}
 _WORKER_STATUS_CACHE_TTL = 30  # seconds
+
+
+def _get_cache_key(config: Dict[str, Any]) -> str:
+    """Generate cache key from config to invalidate on config change."""
+    token_prefix = config['token'][:8] if config['token'] else ''
+    return f"{config['url']}|{token_prefix}|{config['mode']}"
 
 
 def get_remote_worker_status(force_refresh: bool = False) -> Dict[str, Any]:
     """
     Get detailed status of remote worker including capabilities.
     
-    Results are cached for 30 seconds to avoid spamming the worker.
+    Results are cached for 30 seconds, keyed by config to avoid stale data.
     Use force_refresh=True to bypass cache.
     """
-    global _worker_status_cache, _worker_status_cache_time
-    
-    # Return cached result if fresh
-    if not force_refresh and _worker_status_cache is not None:
-        if time.time() - _worker_status_cache_time < _WORKER_STATUS_CACHE_TTL:
-            return _worker_status_cache
-    
     config = get_worker_config()
+    cache_key = _get_cache_key(config)
+    
+    # Return cached result if fresh and config unchanged
+    if not force_refresh and cache_key in _worker_status_cache:
+        if time.time() - _worker_status_cache_time.get(cache_key, 0) < _WORKER_STATUS_CACHE_TTL:
+            return _worker_status_cache[cache_key]
     
     result = {
         'enabled': config['mode'] != 'off',
         'configured': bool(config['url'] and config['token']),
         'mode': config['mode'],
-        'url': config['url'][:50] + '...' if len(config['url']) > 50 else config['url'],
+        'url': config['url'],  # Full URL - UI can truncate for display
         'connected': False,
         'lastPingAt': None,
         'latencyMs': None,
@@ -95,16 +100,19 @@ def get_remote_worker_status(force_refresh: bool = False) -> Dict[str, Any]:
             result['error'] = None  # Not an error if mode is off
         else:
             result['error'] = 'Remote worker not configured (missing URL or token)'
-        _worker_status_cache = result
-        _worker_status_cache_time = time.time()
+        _worker_status_cache[cache_key] = result
+        _worker_status_cache_time[cache_key] = time.time()
         return result
     
-    # Try the detailed /v1/ping endpoint - short timeout to avoid blocking UI
+    # Ping with auth token - short timeout to avoid blocking UI
     start_time = time.time()
+    headers = {'Authorization': f'Bearer {config["token"]}'}
+    
     try:
         response = requests.get(
             urljoin(config['url'], '/v1/ping'),
-            timeout=2  # Short timeout - UI should not block
+            headers=headers,
+            timeout=2
         )
         latency_ms = int((time.time() - start_time) * 1000)
         
@@ -123,6 +131,8 @@ def get_remote_worker_status(force_refresh: bool = False) -> Dict[str, Any]:
                 'cuda': ping_data.get('cuda'),
                 'maxFileMB': ping_data.get('maxFileMB')
             }
+        elif response.status_code in (401, 403):
+            result['error'] = 'Unauthorized (check REMOTE_WORKER_TOKEN)'
         else:
             result['error'] = f'Worker returned status {response.status_code}'
             
@@ -133,9 +143,9 @@ def get_remote_worker_status(force_refresh: bool = False) -> Dict[str, Any]:
     except Exception as e:
         result['error'] = str(e)[:100]
     
-    # Cache the result
-    _worker_status_cache = result
-    _worker_status_cache_time = time.time()
+    # Cache the result keyed by config
+    _worker_status_cache[cache_key] = result
+    _worker_status_cache_time[cache_key] = time.time()
     
     return result
 
