@@ -1561,14 +1561,30 @@ def api_create_job():
     execution_mode = 'local'
     
     try:
-        from remote_worker import should_use_remote_worker, get_worker_config
+        from remote_worker import get_worker_config, get_remote_worker_status
         worker_config = get_worker_config()
         
         if worker_config['mode'] == 'required':
+            # Mode is required - check if worker is actually reachable
+            worker_status = get_remote_worker_status(force_refresh=True)
+            if not worker_status['connected']:
+                error_msg = worker_status.get('error') or 'Worker not reachable'
+                return jsonify({
+                    'error': f'Remote worker is required but offline: {error_msg}',
+                    'code': 'REMOTE_WORKER_REQUIRED_OFFLINE',
+                    'workerStatus': worker_status
+                }), 503
             use_remote_worker = True
             execution_mode = 'remote'
         elif worker_config['mode'] == 'optional' and use_remote_worker:
-            execution_mode = 'remote'
+            # User requested remote - check if available
+            worker_status = get_remote_worker_status()
+            if not worker_status['connected']:
+                # Fall back to local with warning
+                execution_mode = 'local'
+                use_remote_worker = False
+            else:
+                execution_mode = 'remote'
     except ImportError:
         pass
     
