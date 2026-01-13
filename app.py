@@ -2310,12 +2310,17 @@ def _run_remote_session_job(session_id: str, job_id: str, inputs: list, options:
         for key, value in updates.items():
             if key == 'progress':
                 new_stage = value.get('stage')
-                old_stage = manifest.get('progress', {}).get('stage')
+                current_progress = manifest.get('progress') or {}
+                old_stage = current_progress.get('stage')
                 if new_stage and new_stage != old_stage:
                     value['stageStartedAt'] = now
-                manifest.setdefault('progress', {}).update(value)
+                if manifest.get('progress') is None:
+                    manifest['progress'] = {}
+                manifest['progress'].update(value)
             elif key == 'worker':
-                manifest.setdefault('worker', {}).update(value)
+                if manifest.get('worker') is None:
+                    manifest['worker'] = {}
+                manifest['worker'].update(value)
             else:
                 manifest[key] = value
         session_store.atomic_write_json(manifest_path, manifest)
@@ -3808,7 +3813,7 @@ def api_get_job_input(job_id, input_id):
     
     # In server mode, we need to find which session owns this job
     if session_store.is_server_mode():
-        sessions_root = session_store.data_root() / 'sessions'
+        sessions_root = Path(session_store.data_root()) / 'sessions'
         if sessions_root.exists():
             for session_dir in sessions_root.iterdir():
                 if session_dir.is_dir():
@@ -3818,6 +3823,7 @@ def api_get_job_input(job_id, input_id):
                         manifest = session_store.read_json(str(manifest_path))
                         if manifest:
                             job_dir = str(potential_job_dir)
+                            session_id = session_dir.name
                             break
     
     if not manifest:
@@ -3955,7 +3961,7 @@ def api_worker_complete(job_id):
     manifest = None
     
     if session_store.is_server_mode():
-        sessions_root = session_store.data_root() / 'sessions'
+        sessions_root = Path(session_store.data_root()) / 'sessions'
         if sessions_root.exists():
             for session_dir in sessions_root.iterdir():
                 if session_dir.is_dir():

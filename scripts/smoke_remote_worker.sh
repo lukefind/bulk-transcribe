@@ -16,6 +16,18 @@ set -e
 
 cd "$(dirname "$0")/.."
 
+# Source .env if it exists (for WORKER_URL, WORKER_TOKEN, etc.)
+if [ -f .env ]; then
+    # Export variables from .env, handling quotes
+    set -a
+    source .env
+    set +a
+fi
+
+# Map WORKER_* to REMOTE_WORKER_* if not already set
+: "${REMOTE_WORKER_URL:=$WORKER_URL}"
+: "${REMOTE_WORKER_TOKEN:=$WORKER_TOKEN}"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -55,7 +67,7 @@ echo ""
 echo -e "${YELLOW}Step 1: Checking worker health...${NC}"
 HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" "$REMOTE_WORKER_URL/health" 2>/dev/null || echo -e "\n000")
 HEALTH_CODE=$(echo "$HEALTH_RESPONSE" | tail -1)
-HEALTH_BODY=$(echo "$HEALTH_RESPONSE" | head -n -1)
+HEALTH_BODY=$(echo "$HEALTH_RESPONSE" | sed '$d')
 
 if [ "$HEALTH_CODE" != "200" ]; then
     echo -e "${RED}FAILED: Worker health check failed (HTTP $HEALTH_CODE)${NC}"
@@ -68,9 +80,9 @@ echo ""
 
 # Step 2: Check worker capabilities via /v1/ping
 echo -e "${YELLOW}Step 2: Checking worker capabilities...${NC}"
-PING_RESPONSE=$(curl -s -w "\n%{http_code}" "$REMOTE_WORKER_URL/v1/ping" 2>/dev/null || echo -e "\n000")
+PING_RESPONSE=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $REMOTE_WORKER_TOKEN" "$REMOTE_WORKER_URL/v1/ping" 2>/dev/null || echo -e "\n000")
 PING_CODE=$(echo "$PING_RESPONSE" | tail -1)
-PING_BODY=$(echo "$PING_RESPONSE" | head -n -1)
+PING_BODY=$(echo "$PING_RESPONSE" | sed '$d')
 
 if [ "$PING_CODE" != "200" ]; then
     echo -e "${YELLOW}WARNING: /v1/ping not available (HTTP $PING_CODE), using basic health${NC}"
@@ -96,11 +108,16 @@ echo ""
 
 # Step 4: Get CSRF token
 echo -e "${YELLOW}Step 4: Getting session and CSRF token...${NC}"
-SESSION_RESPONSE=$(curl -s -c cookies.tmp -b cookies.tmp "$CONTROLLER_URL/api/session" 2>/dev/null)
-CSRF_TOKEN=$(echo "$SESSION_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('csrfToken',''))" 2>/dev/null || echo "")
+# First hit any endpoint to establish session cookie
+curl -s -c cookies.tmp -b cookies.tmp "$CONTROLLER_URL/api/runtime" > /dev/null 2>&1
+# Then get CSRF token from /api/session
+CSRF_RESPONSE=$(curl -s -c cookies.tmp -b cookies.tmp "$CONTROLLER_URL/api/session" 2>/dev/null)
+CSRF_TOKEN=$(echo "$CSRF_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('csrfToken',''))" 2>/dev/null || echo "")
 
 if [ -z "$CSRF_TOKEN" ]; then
-    echo -e "${YELLOW}WARNING: Could not get CSRF token, continuing without it${NC}"
+    echo -e "${RED}FAILED: Could not get CSRF token${NC}"
+    echo "Response: $CSRF_RESPONSE"
+    exit 1
 else
     echo -e "${GREEN}OK: Got CSRF token${NC}"
 fi
@@ -120,7 +137,7 @@ UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" \
     -F "files=@$TEST_AUDIO" \
     "$CONTROLLER_URL/api/uploads" 2>/dev/null)
 UPLOAD_CODE=$(echo "$UPLOAD_RESPONSE" | tail -1)
-UPLOAD_BODY=$(echo "$UPLOAD_RESPONSE" | head -n -1)
+UPLOAD_BODY=$(echo "$UPLOAD_RESPONSE" | sed '$d')
 
 if [ "$UPLOAD_CODE" != "200" ]; then
     echo -e "${RED}FAILED: Upload failed (HTTP $UPLOAD_CODE)${NC}"
@@ -149,7 +166,7 @@ JOB_RESPONSE=$(curl -s -w "\n%{http_code}" \
     -d "{\"uploadIds\":[\"$UPLOAD_ID\"],\"options\":{\"model\":\"base\",\"useRemoteWorker\":true}}" \
     "$CONTROLLER_URL/api/jobs" 2>/dev/null)
 JOB_CODE=$(echo "$JOB_RESPONSE" | tail -1)
-JOB_BODY=$(echo "$JOB_RESPONSE" | head -n -1)
+JOB_BODY=$(echo "$JOB_RESPONSE" | sed '$d')
 
 if [ "$JOB_CODE" != "200" ]; then
     echo -e "${RED}FAILED: Job creation failed (HTTP $JOB_CODE)${NC}"
