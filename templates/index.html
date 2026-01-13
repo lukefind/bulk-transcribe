@@ -50,9 +50,15 @@
     <main class="max-w-4xl mx-auto px-6 py-8">
         <!-- Mode indicator -->
         {% if is_server_mode %}
-        <div class="mb-4 text-xs text-gray-500 flex items-center gap-2">
-            <span class="w-2 h-2 bg-green-500 rounded-full"></span>
-            Server Mode (session-isolated)
+        <div class="mb-4 text-xs text-gray-500 flex items-center gap-4">
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+                Server Mode (session-isolated)
+            </div>
+            <div id="remoteWorkerStatus" class="flex items-center gap-2 hidden">
+                <span id="remoteWorkerDot" class="w-2 h-2 rounded-full"></span>
+                <span id="remoteWorkerLabel"></span>
+            </div>
         </div>
         {% endif %}
         
@@ -481,6 +487,7 @@
                     </div>
                     <div class="flex items-center gap-2">
                         <span id="jobStatusBadge" class="text-xs font-semibold px-2.5 py-1 rounded-full bg-primary-500/20 text-primary-300">RUNNING</span>
+                        <span id="jobExecModeBadge" class="text-xs font-semibold px-2.5 py-1 rounded-full bg-gray-500/20 text-gray-300 hidden">Local CPU</span>
                     </div>
                 </div>
                 
@@ -1217,8 +1224,49 @@
                 supportedBackends = runtimeEnv.supportedBackends || ['cpu'];
                 recommendedBackend = runtimeEnv.recommendedBackend || 'cpu';
                 updateBackendUI();
+                updateRemoteWorkerStatus();
             } catch (e) {
                 console.error('Failed to fetch runtime info:', e);
+            }
+        }
+        
+        function updateRemoteWorkerStatus() {
+            const statusEl = document.getElementById('remoteWorkerStatus');
+            const dotEl = document.getElementById('remoteWorkerDot');
+            const labelEl = document.getElementById('remoteWorkerLabel');
+            
+            if (!statusEl || !dotEl || !labelEl || !runtimeEnv?.remoteWorker) return;
+            
+            const worker = runtimeEnv.remoteWorker;
+            
+            // Hide if mode is off and not configured
+            if (worker.mode === 'off' && !worker.configured) {
+                statusEl.classList.add('hidden');
+                return;
+            }
+            
+            statusEl.classList.remove('hidden');
+            
+            if (worker.connected) {
+                dotEl.className = 'w-2 h-2 rounded-full bg-green-500';
+                const gpuLabel = worker.workerCapabilities?.gpu ? 'GPU' : 'CPU';
+                const latency = worker.latencyMs ? ` (${worker.latencyMs}ms)` : '';
+                labelEl.textContent = `Remote ${gpuLabel} Worker Connected${latency}`;
+                labelEl.className = 'text-green-400';
+            } else if (worker.configured) {
+                if (worker.mode === 'required') {
+                    dotEl.className = 'w-2 h-2 rounded-full bg-red-500';
+                    labelEl.textContent = 'Remote Worker Required but Offline';
+                    labelEl.className = 'text-red-400';
+                } else {
+                    dotEl.className = 'w-2 h-2 rounded-full bg-amber-500';
+                    labelEl.textContent = 'Remote Worker Configured but Unreachable';
+                    labelEl.className = 'text-amber-400';
+                }
+            } else {
+                dotEl.className = 'w-2 h-2 rounded-full bg-gray-500';
+                labelEl.textContent = 'Remote Worker Not Configured';
+                labelEl.className = 'text-gray-400';
             }
         }
         
@@ -2141,6 +2189,25 @@
                 };
                 statusBadge.className = `text-xs font-semibold px-2.5 py-1 rounded-full ${statusColors[job.status] || statusColors.running}`;
                 statusBadge.textContent = (job.status || 'running').toUpperCase().replace('_', ' ');
+            }
+            
+            // Update execution mode badge
+            const execModeBadge = document.getElementById('jobExecModeBadge');
+            if (execModeBadge) {
+                const execMode = job.executionMode || 'local';
+                if (execMode === 'remote') {
+                    execModeBadge.classList.remove('hidden');
+                    execModeBadge.className = 'text-xs font-semibold px-2.5 py-1 rounded-full bg-purple-500/20 text-purple-300';
+                    execModeBadge.textContent = 'Remote GPU';
+                    // Show worker job ID if available
+                    if (job.worker?.workerJobId) {
+                        execModeBadge.title = `Worker Job: ${job.worker.workerJobId}`;
+                    }
+                } else {
+                    execModeBadge.classList.remove('hidden');
+                    execModeBadge.className = 'text-xs font-semibold px-2.5 py-1 rounded-full bg-gray-500/20 text-gray-300';
+                    execModeBadge.textContent = `Local ${backend.toUpperCase()}`;
+                }
             }
             
             // Update status dot

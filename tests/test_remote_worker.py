@@ -137,31 +137,34 @@ class TestRemoteWorkerStatus:
     
     def test_status_not_configured(self):
         """Test status when worker is not configured."""
-        for key in ['REMOTE_WORKER_URL', 'REMOTE_WORKER_TOKEN']:
+        for key in ['REMOTE_WORKER_URL', 'REMOTE_WORKER_TOKEN', 'REMOTE_WORKER_MODE']:
             os.environ.pop(key, None)
         
         from remote_worker import get_remote_worker_status
         status = get_remote_worker_status()
         
         assert status['configured'] == False
-        assert status['available'] == False
-        assert 'not configured' in status['error'].lower()
+        assert status['connected'] == False
+        # No error when mode is off (default)
+        assert status['mode'] == 'off'
     
     def test_status_configured_but_unreachable(self):
         """Test status when worker is configured but unreachable."""
         os.environ['REMOTE_WORKER_URL'] = 'http://localhost:99999'
         os.environ['REMOTE_WORKER_TOKEN'] = 'test-token'
+        os.environ['REMOTE_WORKER_MODE'] = 'optional'
         
         try:
             from remote_worker import get_remote_worker_status
             status = get_remote_worker_status()
             
             assert status['configured'] == True
-            assert status['available'] == False
+            assert status['connected'] == False
             assert status['error'] is not None
         finally:
             os.environ.pop('REMOTE_WORKER_URL', None)
             os.environ.pop('REMOTE_WORKER_TOKEN', None)
+            os.environ.pop('REMOTE_WORKER_MODE', None)
 
 
 class TestShouldUseRemoteWorker:

@@ -3,6 +3,10 @@
 
 FROM nvidia/cuda:12.1-runtime-ubuntu22.04
 
+# Build arguments for version tracking
+ARG BUILD_COMMIT=unknown
+ARG BUILD_TIME=unknown
+
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -38,6 +42,9 @@ ENV WORKER_TMP_DIR=/tmp/bt-worker
 ENV WORKER_MAX_FILE_MB=2000
 ENV WORKER_MODEL=large-v3
 ENV PYTHONUNBUFFERED=1
+ENV WORKER_VERSION=${BUILD_COMMIT}
+ENV BUILD_COMMIT=${BUILD_COMMIT}
+ENV BUILD_TIME=${BUILD_TIME}
 
 # Expose port
 EXPOSE 8477
