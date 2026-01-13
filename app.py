@@ -1556,6 +1556,22 @@ def api_create_job():
                 
                 return jsonify(error_response), 400
     
+    # Check if remote worker should be used
+    use_remote_worker = options.get('useRemoteWorker', False)
+    execution_mode = 'local'
+    
+    try:
+        from remote_worker import should_use_remote_worker, get_worker_config
+        worker_config = get_worker_config()
+        
+        if worker_config['mode'] == 'required':
+            use_remote_worker = True
+            execution_mode = 'remote'
+        elif worker_config['mode'] == 'optional' and use_remote_worker:
+            execution_mode = 'remote'
+    except ImportError:
+        pass
+    
     # Create job
     job_id = session_store.new_id(12)
     dirs = session_store.ensure_job_dirs(session_id, job_id)
@@ -1570,6 +1586,7 @@ def api_create_job():
         'finishedAt': None,
         'status': 'queued',
         'backend': requested_backend,
+        'executionMode': execution_mode,
         'environment': {
             'os': env['os'],
             'arch': env['arch'],
@@ -1604,22 +1621,28 @@ def api_create_job():
             'stage': 'queued',
             'stageStartedAt': now
         },
-        'error': None
+        'error': None,
+        'worker': None  # Will be populated if using remote worker
     }
     
     session_store.atomic_write_json(session_store.job_manifest_path(session_id, job_id), manifest)
     
-    # Start job in background thread
-    def run_job():
-        _run_session_job(session_id, job_id, inputs, manifest['options'], dirs['outputs'], requested_backend)
-    
     with _active_jobs_lock:
         _active_jobs[(session_id, job_id)] = {'running': True, 'cancel_requested': False}
     
-    job_thread = threading.Thread(target=run_job, daemon=True)
+    # Start job in background thread
+    if execution_mode == 'remote':
+        def run_remote_job():
+            _run_remote_session_job(session_id, job_id, inputs, manifest['options'], dirs['outputs'])
+        job_thread = threading.Thread(target=run_remote_job, daemon=True)
+    else:
+        def run_job():
+            _run_session_job(session_id, job_id, inputs, manifest['options'], dirs['outputs'], requested_backend)
+        job_thread = threading.Thread(target=run_job, daemon=True)
+    
     job_thread.start()
     
-    return jsonify({'jobId': job_id})
+    return jsonify({'jobId': job_id, 'executionMode': execution_mode})
 
 
 def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, outputs_dir: str, backend: str):
@@ -2246,6 +2269,85 @@ def _run_session_job(session_id: str, job_id: str, inputs: list, options: dict, 
                 _active_jobs[(session_id, job_id)]['running'] = False
 
 
+def _run_remote_session_job(session_id: str, job_id: str, inputs: list, options: dict, outputs_dir: str):
+    """Run transcription job on remote GPU worker."""
+    from logger import log_event
+    from remote_worker import dispatch_to_remote_worker, get_worker_config
+    
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    
+    log_event('info', 'remote_job_started',
+              jobId=job_id, sessionId=session_id,
+              numFiles=len(inputs))
+    
+    def update_manifest(**updates):
+        manifest = session_store.read_json(manifest_path) or {}
+        now = datetime.now(timezone.utc).isoformat()
+        manifest['updatedAt'] = now
+        for key, value in updates.items():
+            if key == 'progress':
+                new_stage = value.get('stage')
+                old_stage = manifest.get('progress', {}).get('stage')
+                if new_stage and new_stage != old_stage:
+                    value['stageStartedAt'] = now
+                manifest.setdefault('progress', {}).update(value)
+            elif key == 'worker':
+                manifest.setdefault('worker', {}).update(value)
+            else:
+                manifest[key] = value
+        session_store.atomic_write_json(manifest_path, manifest)
+        return manifest
+    
+    def is_cancelled():
+        with _active_jobs_lock:
+            job_info = _active_jobs.get((session_id, job_id), {})
+            return job_info.get('cancel_requested', False)
+    
+    try:
+        update_manifest(
+            status='running',
+            startedAt=datetime.now(timezone.utc).isoformat(),
+            progress={'stage': 'dispatching', 'currentFile': 'Connecting to GPU worker...'}
+        )
+        
+        # Get controller base URL from request context or environment
+        controller_base_url = os.environ.get('CONTROLLER_BASE_URL', '')
+        if not controller_base_url:
+            # Try to construct from common patterns
+            controller_base_url = os.environ.get('BASE_URL', 'http://localhost:8476')
+        
+        # Dispatch to remote worker
+        success = dispatch_to_remote_worker(
+            session_id=session_id,
+            job_id=job_id,
+            inputs=inputs,
+            options=options,
+            controller_base_url=controller_base_url,
+            update_manifest_callback=update_manifest,
+            is_cancelled_callback=is_cancelled
+        )
+        
+        if success:
+            log_event('info', 'remote_job_complete', jobId=job_id)
+            # Final status is set by worker callback or polling
+        else:
+            # Job was cancelled or failed - status already updated
+            log_event('info', 'remote_job_ended', jobId=job_id, success=False)
+            
+    except Exception as e:
+        log_event('error', 'remote_job_exception', jobId=job_id, error=str(e))
+        update_manifest(
+            status='failed',
+            finishedAt=datetime.now(timezone.utc).isoformat(),
+            error={'code': 'REMOTE_DISPATCH_ERROR', 'message': str(e)[:400]}
+        )
+    
+    finally:
+        with _active_jobs_lock:
+            if (session_id, job_id) in _active_jobs:
+                _active_jobs[(session_id, job_id)]['running'] = False
+
+
 @app.route('/api/jobs/<job_id>', methods=['GET'])
 def api_get_job(job_id):
     """Get job status and details."""
@@ -2270,6 +2372,7 @@ def api_get_job(job_id):
         'finishedAt': manifest.get('finishedAt'),
         'status': manifest.get('status'),
         'backend': manifest.get('backend'),
+        'executionMode': manifest.get('executionMode', 'local'),
         'environment': manifest.get('environment'),
         'options': manifest.get('options'),
         'inputs': [{'uploadId': i.get('uploadId'), 'filename': i.get('originalFilename'), 'durationSec': i.get('durationSec')} for i in manifest.get('inputs', [])],
@@ -2277,6 +2380,14 @@ def api_get_job(job_id):
         'progress': manifest.get('progress'),
         'error': manifest.get('error')
     }
+    
+    # Include worker info if remote execution
+    if manifest.get('executionMode') == 'remote' and manifest.get('worker'):
+        worker = manifest['worker']
+        safe_manifest['worker'] = {
+            'workerJobId': worker.get('workerJobId'),
+            'lastSeenAt': worker.get('lastSeenAt')
+        }
     
     return jsonify(safe_manifest)
 
@@ -3455,6 +3566,280 @@ def api_list_projects():
     return jsonify({'projects': enriched})
 
 
+# =============================================================================
+# REMOTE WORKER ENDPOINTS
+# These endpoints are called by the GPU worker, not by browser clients.
+# They use Bearer token auth instead of session cookies.
+# =============================================================================
+
+def require_worker_auth(f):
+    """Decorator to require worker token authentication."""
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        worker_token = os.environ.get('REMOTE_WORKER_TOKEN', '')
+        if not worker_token:
+            return jsonify({'error': 'Worker endpoints not configured'}), 503
+        
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({'error': 'Missing Authorization header'}), 401
+        
+        token = auth_header[7:]
+        if token != worker_token:
+            return jsonify({'error': 'Invalid worker token'}), 403
+        
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.route('/api/jobs/<job_id>/inputs/<input_id>', methods=['GET'])
+def api_get_job_input(job_id, input_id):
+    """
+    Download input file for a job. Used by remote worker in pull mode.
+    
+    Requires signed URL with valid signature and expiry.
+    Query params:
+    - expires: Unix timestamp when URL expires
+    - sig: HMAC signature
+    """
+    from remote_worker import verify_signed_url
+    
+    # Verify signed URL
+    expires = request.args.get('expires', '')
+    sig = request.args.get('sig', '')
+    secret = os.environ.get('SECRET_KEY', 'default-secret-key')
+    
+    if not verify_signed_url(job_id, input_id, expires, sig, secret):
+        return jsonify({'error': 'Invalid or expired signature'}), 403
+    
+    # Find the job - check all sessions (worker doesn't have session context)
+    # This is safe because the signed URL validates the job_id
+    job_dir = None
+    manifest = None
+    
+    # In server mode, we need to find which session owns this job
+    if session_store.is_server_mode():
+        sessions_root = session_store.data_root() / 'sessions'
+        if sessions_root.exists():
+            for session_dir in sessions_root.iterdir():
+                if session_dir.is_dir():
+                    potential_job_dir = session_dir / 'jobs' / job_id
+                    manifest_path = potential_job_dir / 'job.json'
+                    if manifest_path.exists():
+                        manifest = session_store.read_json(str(manifest_path))
+                        if manifest:
+                            job_dir = str(potential_job_dir)
+                            break
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Find the input file
+    for inp in manifest.get('inputs', []):
+        if inp.get('uploadId') == input_id:
+            filepath = inp.get('path')
+            if filepath and os.path.exists(filepath):
+                return send_file(
+                    filepath,
+                    mimetype='application/octet-stream',
+                    as_attachment=True,
+                    download_name=inp.get('originalFilename', 'input')
+                )
+    
+    return jsonify({'error': 'Input not found'}), 404
+
+
+@app.route('/api/jobs/<job_id>/worker/outputs', methods=['POST'])
+@require_worker_auth
+def api_worker_upload_output(job_id):
+    """
+    Receive output file from remote worker.
+    
+    Form fields:
+    - workerJobId: Worker's job ID
+    - inputId: Input file this output corresponds to
+    - outputType: Type of output (json, markdown, diarization-json, speaker-markdown)
+    
+    Files:
+    - file: The output file content
+    """
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    
+    file = request.files['file']
+    worker_job_id = request.form.get('workerJobId', '')
+    input_id = request.form.get('inputId', '')
+    output_type = request.form.get('outputType', 'unknown')
+    
+    # Find the job across all sessions
+    job_dir = None
+    manifest_path = None
+    manifest = None
+    
+    if session_store.is_server_mode():
+        sessions_root = session_store.data_root() / 'sessions'
+        if sessions_root.exists():
+            for session_dir in sessions_root.iterdir():
+                if session_dir.is_dir():
+                    potential_job_dir = session_dir / 'jobs' / job_id
+                    potential_manifest = potential_job_dir / 'job.json'
+                    if potential_manifest.exists():
+                        manifest = session_store.read_json(str(potential_manifest))
+                        if manifest:
+                            job_dir = str(potential_job_dir)
+                            manifest_path = str(potential_manifest)
+                            break
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Verify this job is expecting remote worker outputs
+    if manifest.get('executionMode') != 'remote':
+        return jsonify({'error': 'Job is not in remote execution mode'}), 400
+    
+    worker_info = manifest.get('worker', {})
+    if worker_info.get('workerJobId') != worker_job_id:
+        return jsonify({'error': 'Worker job ID mismatch'}), 400
+    
+    # Save the output file
+    outputs_dir = os.path.join(job_dir, 'outputs')
+    os.makedirs(outputs_dir, exist_ok=True)
+    
+    # Sanitize filename
+    safe_filename = secure_filename(file.filename or 'output')
+    output_path = os.path.join(outputs_dir, safe_filename)
+    
+    # Prevent overwriting
+    if os.path.exists(output_path):
+        base, ext = os.path.splitext(safe_filename)
+        safe_filename = f"{base}_{session_store.new_id(4)}{ext}"
+        output_path = os.path.join(outputs_dir, safe_filename)
+    
+    file.save(output_path)
+    
+    # Register output in manifest
+    output_entry = {
+        'id': session_store.new_id(8),
+        'filename': safe_filename,
+        'path': output_path,
+        'type': output_type,
+        'inputId': input_id,
+        'sizeBytes': os.path.getsize(output_path),
+        'fromWorker': True,
+        'workerJobId': worker_job_id
+    }
+    
+    manifest.setdefault('outputs', []).append(output_entry)
+    manifest['updatedAt'] = datetime.now(timezone.utc).isoformat()
+    session_store.atomic_write_json(manifest_path, manifest)
+    
+    log_event('info', 'worker_output_received',
+              jobId=job_id, workerJobId=worker_job_id,
+              filename=safe_filename, outputType=output_type)
+    
+    return jsonify({'status': 'ok', 'outputId': output_entry['id']})
+
+
+@app.route('/api/jobs/<job_id>/worker/complete', methods=['POST'])
+@require_worker_auth
+def api_worker_complete(job_id):
+    """
+    Receive job completion notification from remote worker.
+    
+    Body:
+    {
+        "workerJobId": "wk_xxx",
+        "controllerJobId": "xxx",
+        "status": "complete" | "failed" | "canceled",
+        "outputs": [...],
+        "error": {"code": "...", "message": "..."} | null
+    }
+    """
+    data = request.json or {}
+    worker_job_id = data.get('workerJobId', '')
+    status = data.get('status', 'complete')
+    error = data.get('error')
+    
+    # Find the job
+    job_dir = None
+    manifest_path = None
+    manifest = None
+    
+    if session_store.is_server_mode():
+        sessions_root = session_store.data_root() / 'sessions'
+        if sessions_root.exists():
+            for session_dir in sessions_root.iterdir():
+                if session_dir.is_dir():
+                    potential_job_dir = session_dir / 'jobs' / job_id
+                    potential_manifest = potential_job_dir / 'job.json'
+                    if potential_manifest.exists():
+                        manifest = session_store.read_json(str(potential_manifest))
+                        if manifest:
+                            job_dir = str(potential_job_dir)
+                            manifest_path = str(potential_manifest)
+                            break
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Verify worker job ID
+    worker_info = manifest.get('worker', {})
+    if worker_info.get('workerJobId') != worker_job_id:
+        return jsonify({'error': 'Worker job ID mismatch'}), 400
+    
+    # Update manifest with final status
+    now = datetime.now(timezone.utc).isoformat()
+    
+    if status == 'complete':
+        manifest['status'] = 'complete'
+        manifest['progress'] = {
+            'stage': 'complete',
+            'percent': 100,
+            'totalFiles': manifest['progress'].get('totalFiles', 0),
+            'currentFileIndex': manifest['progress'].get('totalFiles', 0)
+        }
+    elif status == 'failed':
+        manifest['status'] = 'failed'
+        manifest['error'] = error or {'code': 'WORKER_FAILED', 'message': 'Worker job failed'}
+    elif status == 'canceled':
+        manifest['status'] = 'canceled'
+        manifest['error'] = {'code': 'WORKER_CANCELED', 'message': 'Worker job was canceled'}
+    
+    manifest['finishedAt'] = now
+    manifest['updatedAt'] = now
+    
+    session_store.atomic_write_json(manifest_path, manifest)
+    
+    # Clean up active jobs tracking
+    session_id = manifest.get('sessionId')
+    if session_id:
+        with _active_jobs_lock:
+            if (session_id, job_id) in _active_jobs:
+                _active_jobs[(session_id, job_id)]['running'] = False
+    
+    log_event('info', 'worker_job_complete',
+              jobId=job_id, workerJobId=worker_job_id,
+              status=status, error=error)
+    
+    return jsonify({'status': 'ok'})
+
+
+@app.route('/api/remote-worker/status', methods=['GET'])
+def api_remote_worker_status():
+    """Get status of remote worker configuration and availability."""
+    try:
+        from remote_worker import get_remote_worker_status
+        status = get_remote_worker_status()
+        return jsonify(status)
+    except ImportError:
+        return jsonify({
+            'configured': False,
+            'available': False,
+            'error': 'Remote worker module not available'
+        })
+
+
 @app.route('/api/session', methods=['GET'])
 def api_get_session():
     """Get session info including CSRF token (server mode only)."""
@@ -3585,6 +3970,18 @@ def api_get_runtime():
     # Add build version info
     env['buildCommit'] = os.environ.get('BUILD_COMMIT', 'unknown')
     env['buildTime'] = os.environ.get('BUILD_TIME', 'unknown')
+    
+    # Add remote worker status
+    try:
+        from remote_worker import get_remote_worker_status
+        env['remoteWorker'] = get_remote_worker_status()
+    except ImportError:
+        env['remoteWorker'] = {
+            'configured': False,
+            'available': False,
+            'mode': 'off',
+            'error': None
+        }
     
     return jsonify(env)
 
