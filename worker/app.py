@@ -111,6 +111,52 @@ def health():
     })
 
 
+@app.route('/v1/ping', methods=['GET'])
+def ping():
+    """
+    Detailed ping endpoint for controller handshake.
+    Returns version, capabilities, and GPU status.
+    """
+    # Get version from environment or git
+    version = os.environ.get('WORKER_VERSION', os.environ.get('BUILD_COMMIT', 'unknown'))
+    
+    # Check GPU availability
+    gpu_available = False
+    cuda_version = None
+    gpu_name = None
+    try:
+        import torch
+        gpu_available = torch.cuda.is_available()
+        if gpu_available:
+            cuda_version = torch.version.cuda
+            gpu_name = torch.cuda.get_device_name(0) if torch.cuda.device_count() > 0 else None
+    except ImportError:
+        pass
+    
+    # Check diarization availability
+    diarization_available = False
+    try:
+        import pyannote.audio
+        hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
+        diarization_available = bool(hf_token)
+    except ImportError:
+        pass
+    
+    # Available models
+    models = [WORKER_MODEL]
+    
+    return jsonify({
+        'status': 'ok',
+        'version': version,
+        'gpu': gpu_available,
+        'gpuName': gpu_name,
+        'cuda': cuda_version,
+        'models': models,
+        'diarization': diarization_available,
+        'maxFileMB': WORKER_MAX_FILE_MB
+    })
+
+
 @app.route('/v1/jobs', methods=['POST'])
 @require_auth
 def create_job():

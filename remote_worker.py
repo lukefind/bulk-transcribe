@@ -56,38 +56,81 @@ def is_remote_worker_available() -> bool:
 
 
 def get_remote_worker_status() -> Dict[str, Any]:
-    """Get detailed status of remote worker."""
+    """Get detailed status of remote worker including capabilities."""
     config = get_worker_config()
     
     result = {
+        'enabled': config['mode'] != 'off',
         'configured': bool(config['url'] and config['token']),
         'mode': config['mode'],
         'url': config['url'][:50] + '...' if len(config['url']) > 50 else config['url'],
-        'available': False,
-        'error': None,
-        'workerInfo': None
+        'connected': False,
+        'lastPingAt': None,
+        'latencyMs': None,
+        'workerVersion': None,
+        'workerCapabilities': None,
+        'error': None
     }
     
     if not result['configured']:
-        result['error'] = 'Remote worker not configured (missing URL or token)'
+        if config['mode'] == 'off':
+            result['error'] = None  # Not an error if mode is off
+        else:
+            result['error'] = 'Remote worker not configured (missing URL or token)'
         return result
     
+    # Try the detailed /v1/ping endpoint first, fall back to /health
+    start_time = time.time()
     try:
         response = requests.get(
-            urljoin(config['url'], '/health'),
+            urljoin(config['url'], '/v1/ping'),
             timeout=5
         )
+        latency_ms = int((time.time() - start_time) * 1000)
+        
         if response.status_code == 200:
-            result['available'] = True
-            result['workerInfo'] = response.json()
+            result['connected'] = True
+            result['lastPingAt'] = datetime.now(timezone.utc).isoformat()
+            result['latencyMs'] = latency_ms
+            
+            ping_data = response.json()
+            result['workerVersion'] = ping_data.get('version')
+            result['workerCapabilities'] = {
+                'whisperModels': ping_data.get('models', []),
+                'diarization': ping_data.get('diarization', False),
+                'gpu': ping_data.get('gpu', False),
+                'gpuName': ping_data.get('gpuName'),
+                'cuda': ping_data.get('cuda'),
+                'maxFileMB': ping_data.get('maxFileMB')
+            }
         else:
             result['error'] = f'Worker returned status {response.status_code}'
+            
     except requests.exceptions.Timeout:
         result['error'] = 'Worker connection timed out'
     except requests.exceptions.ConnectionError:
         result['error'] = 'Cannot connect to worker'
     except Exception as e:
-        result['error'] = str(e)[:100]
+        # Try fallback to /health
+        try:
+            response = requests.get(
+                urljoin(config['url'], '/health'),
+                timeout=5
+            )
+            if response.status_code == 200:
+                result['connected'] = True
+                result['lastPingAt'] = datetime.now(timezone.utc).isoformat()
+                health_data = response.json()
+                result['workerCapabilities'] = {
+                    'whisperModels': [health_data.get('model', 'unknown')],
+                    'diarization': False,
+                    'gpu': False,
+                    'maxFileMB': health_data.get('maxFileMB')
+                }
+            else:
+                result['error'] = str(e)[:100]
+        except Exception:
+            result['error'] = str(e)[:100]
     
     return result
 
