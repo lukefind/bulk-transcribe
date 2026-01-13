@@ -1,5 +1,6 @@
 # GPU Worker Dockerfile for Bulk Transcribe
 # Optimized for NVIDIA GPU with CUDA support
+# Builds for linux/amd64 (CUDA) and linux/arm64 (CPU fallback for Mac)
 
 FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
 
@@ -10,6 +11,10 @@ ARG BUILD_TIME=unknown
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Pip hardening
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_NO_CACHE_DIR=1
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     python3 \
@@ -19,13 +24,21 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Create app directory
+# Create app directory and stable pip temp dir
 WORKDIR /app
+RUN mkdir -p /var/tmp/pip && chmod 777 /var/tmp/pip
+ENV TMPDIR=/var/tmp/pip
 
 # Install Python dependencies
 COPY worker/requirements.txt /app/requirements.txt
-RUN pip3 install --no-cache-dir -r requirements.txt
 
+# Install torch/torchaudio with CUDA wheels on amd64, fallback to CPU on arm64
+# The || fallback ensures arm64 builds succeed with default PyPI wheels
+RUN pip3 install --upgrade pip && \
+    pip3 install --index-url https://download.pytorch.org/whl/cu121 \
+        torch==2.2.2 torchaudio==2.2.2 || \
+    pip3 install torch==2.2.2 torchaudio==2.2.2 && \
+    pip3 install -r requirements.txt
 
 # Copy worker code
 COPY worker/ /app/worker/
