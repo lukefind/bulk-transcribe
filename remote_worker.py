@@ -55,8 +55,26 @@ def is_remote_worker_available() -> bool:
         return False
 
 
-def get_remote_worker_status() -> Dict[str, Any]:
-    """Get detailed status of remote worker including capabilities."""
+# Cache for worker status (avoid spamming worker on every /api/runtime call)
+_worker_status_cache = None
+_worker_status_cache_time = 0
+_WORKER_STATUS_CACHE_TTL = 30  # seconds
+
+
+def get_remote_worker_status(force_refresh: bool = False) -> Dict[str, Any]:
+    """
+    Get detailed status of remote worker including capabilities.
+    
+    Results are cached for 30 seconds to avoid spamming the worker.
+    Use force_refresh=True to bypass cache.
+    """
+    global _worker_status_cache, _worker_status_cache_time
+    
+    # Return cached result if fresh
+    if not force_refresh and _worker_status_cache is not None:
+        if time.time() - _worker_status_cache_time < _WORKER_STATUS_CACHE_TTL:
+            return _worker_status_cache
+    
     config = get_worker_config()
     
     result = {
@@ -77,14 +95,16 @@ def get_remote_worker_status() -> Dict[str, Any]:
             result['error'] = None  # Not an error if mode is off
         else:
             result['error'] = 'Remote worker not configured (missing URL or token)'
+        _worker_status_cache = result
+        _worker_status_cache_time = time.time()
         return result
     
-    # Try the detailed /v1/ping endpoint first, fall back to /health
+    # Try the detailed /v1/ping endpoint - short timeout to avoid blocking UI
     start_time = time.time()
     try:
         response = requests.get(
             urljoin(config['url'], '/v1/ping'),
-            timeout=5
+            timeout=2  # Short timeout - UI should not block
         )
         latency_ms = int((time.time() - start_time) * 1000)
         
@@ -111,26 +131,11 @@ def get_remote_worker_status() -> Dict[str, Any]:
     except requests.exceptions.ConnectionError:
         result['error'] = 'Cannot connect to worker'
     except Exception as e:
-        # Try fallback to /health
-        try:
-            response = requests.get(
-                urljoin(config['url'], '/health'),
-                timeout=5
-            )
-            if response.status_code == 200:
-                result['connected'] = True
-                result['lastPingAt'] = datetime.now(timezone.utc).isoformat()
-                health_data = response.json()
-                result['workerCapabilities'] = {
-                    'whisperModels': [health_data.get('model', 'unknown')],
-                    'diarization': False,
-                    'gpu': False,
-                    'maxFileMB': health_data.get('maxFileMB')
-                }
-            else:
-                result['error'] = str(e)[:100]
-        except Exception:
-            result['error'] = str(e)[:100]
+        result['error'] = str(e)[:100]
+    
+    # Cache the result
+    _worker_status_cache = result
+    _worker_status_cache_time = time.time()
     
     return result
 

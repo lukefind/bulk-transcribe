@@ -155,8 +155,12 @@ class TestRemoteWorkerStatus:
         os.environ['REMOTE_WORKER_MODE'] = 'optional'
         
         try:
-            from remote_worker import get_remote_worker_status
-            status = get_remote_worker_status()
+            import remote_worker
+            # Clear cache to ensure fresh check
+            remote_worker._worker_status_cache = None
+            remote_worker._worker_status_cache_time = 0
+            
+            status = remote_worker.get_remote_worker_status(force_refresh=True)
             
             assert status['configured'] == True
             assert status['connected'] == False
