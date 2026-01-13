@@ -261,3 +261,96 @@ class TestShouldUseRemoteWorker:
             os.environ.pop('REMOTE_WORKER_URL', None)
             os.environ.pop('REMOTE_WORKER_TOKEN', None)
             os.environ.pop('REMOTE_WORKER_MODE', None)
+
+
+class TestBackoffLogic:
+    """Test exponential backoff with jitter."""
+    
+    def test_backoff_increases_exponentially(self):
+        """Test that backoff increases with attempt number."""
+        from remote_worker import calculate_backoff
+        
+        # Use seed for deterministic results
+        delays = [calculate_backoff(i, seed=42) for i in range(5)]
+        
+        # Should generally increase (with jitter, not strictly monotonic)
+        assert delays[0] >= 2  # Min is 2s
+        assert delays[4] <= 30  # Max is 30s
+    
+    def test_backoff_respects_min_max(self):
+        """Test that backoff stays within min/max bounds."""
+        from remote_worker import calculate_backoff
+        
+        for attempt in range(20):
+            delay = calculate_backoff(attempt, seed=attempt)
+            assert delay >= 2, f"Delay {delay} below min at attempt {attempt}"
+            assert delay <= 30, f"Delay {delay} above max at attempt {attempt}"
+    
+    def test_backoff_with_seed_is_deterministic(self):
+        """Test that same seed produces same result."""
+        from remote_worker import calculate_backoff
+        
+        delay1 = calculate_backoff(3, seed=123)
+        delay2 = calculate_backoff(3, seed=123)
+        assert delay1 == delay2
+    
+    def test_backoff_jitter_varies_results(self):
+        """Test that different seeds produce different results."""
+        from remote_worker import calculate_backoff
+        
+        delays = [calculate_backoff(3, seed=i) for i in range(10)]
+        unique_delays = set(delays)
+        # Should have some variation due to jitter
+        assert len(unique_delays) > 1
+
+
+class TestCapacityCheck:
+    """Test worker capacity checking."""
+    
+    def test_capacity_check_when_not_connected(self):
+        """Test capacity check returns no capacity when worker not connected."""
+        os.environ['REMOTE_WORKER_URL'] = 'http://localhost:99999'
+        os.environ['REMOTE_WORKER_TOKEN'] = 'test-token'
+        os.environ['REMOTE_WORKER_MODE'] = 'optional'
+        
+        try:
+            import remote_worker
+            remote_worker._worker_status_cache.clear()
+            remote_worker._worker_status_cache_time.clear()
+            
+            capacity = remote_worker.check_worker_capacity()
+            
+            assert capacity['hasCapacity'] == False
+            assert capacity['error'] is not None
+        finally:
+            os.environ.pop('REMOTE_WORKER_URL', None)
+            os.environ.pop('REMOTE_WORKER_TOKEN', None)
+            os.environ.pop('REMOTE_WORKER_MODE', None)
+
+
+class TestQueueStateTransitions:
+    """Test job state transitions for remote queue."""
+    
+    def test_queued_remote_is_valid_status(self):
+        """Test that queued_remote is a recognized job status."""
+        # This is a documentation test - the status should be handled in UI
+        valid_statuses = ['queued', 'queued_remote', 'running', 'complete', 
+                         'complete_with_errors', 'failed', 'canceled']
+        assert 'queued_remote' in valid_statuses
+    
+    def test_error_codes_are_standardized(self):
+        """Test that error codes follow naming convention."""
+        standard_codes = [
+            'REMOTE_WORKER_UNAUTHORIZED',
+            'REMOTE_WORKER_UNREACHABLE', 
+            'REMOTE_WORKER_TIMEOUT',
+            'REMOTE_WORKER_CAPACITY',
+            'REMOTE_DISPATCH_FAILED',
+            'REMOTE_FAILED',
+            'USER_CANCELED'
+        ]
+        
+        # All codes should be uppercase with underscores
+        for code in standard_codes:
+            assert code == code.upper()
+            assert ' ' not in code

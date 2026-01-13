@@ -2419,6 +2419,12 @@ def api_get_job(job_id):
         if manifest.get('remoteFallbackReason'):
             safe_manifest['remoteFallbackReason'] = manifest['remoteFallbackReason']
     
+    # Include last error info for operator visibility
+    if manifest.get('lastErrorCode'):
+        safe_manifest['lastErrorCode'] = manifest['lastErrorCode']
+        safe_manifest['lastErrorMessage'] = manifest.get('lastErrorMessage', '')[:200]
+        safe_manifest['lastErrorAt'] = manifest.get('lastErrorAt')
+    
     return jsonify(safe_manifest)
 
 

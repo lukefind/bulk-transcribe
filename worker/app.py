@@ -38,6 +38,7 @@ WORKER_MAX_FILE_MB = int(os.environ.get('WORKER_MAX_FILE_MB', '2000'))
 WORKER_MODEL = os.environ.get('WORKER_MODEL', 'large-v3')
 WORKER_PORT = int(os.environ.get('WORKER_PORT', '8477'))
 WORKER_PING_PUBLIC = os.environ.get('WORKER_PING_PUBLIC', '').lower() == 'true'
+WORKER_MAX_CONCURRENT_JOBS = int(os.environ.get('WORKER_MAX_CONCURRENT_JOBS', '1'))
 
 app = Flask(__name__)
 
@@ -101,6 +102,17 @@ def add_log(worker_job_id: str, level: str, event: str, message: str = '', **ext
         _jobs[worker_job_id]['logs'] = _jobs[worker_job_id]['logs'][-99:] + [log_entry]
 
 
+def get_capacity_info() -> Dict[str, int]:
+    """Get worker capacity info without leaking job details."""
+    with _jobs_lock:
+        active_statuses = ('running', 'downloading', 'transcribing', 'diarizing', 'uploading')
+        active_count = sum(1 for job in _jobs.values() if job.get('status') in active_statuses)
+        return {
+            'activeJobs': active_count,
+            'maxConcurrentJobs': WORKER_MAX_CONCURRENT_JOBS
+        }
+
+
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint."""
@@ -156,10 +168,11 @@ def _detect_capabilities():
 def _ping_handler():
     """
     Detailed ping endpoint for controller handshake.
-    Returns version, capabilities, and GPU status.
+    Returns version, capabilities, GPU status, and capacity info.
     Fast and side-effect free (capabilities cached at startup).
     """
     caps = _detect_capabilities()
+    capacity = get_capacity_info()
     return jsonify({
         'status': 'ok',
         'version': caps['version'],
@@ -168,7 +181,9 @@ def _ping_handler():
         'cuda': caps['cuda'],
         'models': caps['models'],
         'diarization': caps['diarization'],
-        'maxFileMB': caps['maxFileMB']
+        'maxFileMB': caps['maxFileMB'],
+        'activeJobs': capacity['activeJobs'],
+        'maxConcurrentJobs': capacity['maxConcurrentJobs']
     })
 
 

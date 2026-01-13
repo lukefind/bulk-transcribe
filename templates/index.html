@@ -494,6 +494,9 @@
                 <!-- Fallback warning (shown when remote was requested but ran locally) -->
                 <div id="jobFallbackWarning" class="text-xs text-amber-400 bg-amber-500/10 rounded-lg px-3 py-2 mb-3 hidden"></div>
                 
+                <!-- Last error info (shown for transient errors during execution) -->
+                <div id="jobLastError" class="text-xs text-orange-400 bg-orange-500/10 rounded-lg px-3 py-2 mb-3 hidden"></div>
+                
                 <!-- Timing info -->
                 <div class="grid grid-cols-2 gap-4 mb-4 text-sm">
                     <div class="bg-surface-700/30 rounded-lg p-3">
@@ -2231,6 +2234,18 @@
                     fallbackWarning.textContent = `Remote requested but ran locally: ${job.remoteFallbackReason}`;
                 } else {
                     fallbackWarning.classList.add('hidden');
+                }
+            }
+            
+            // Show last error info for operator visibility (transient errors during execution)
+            const lastErrorInfo = document.getElementById('jobLastError');
+            if (lastErrorInfo) {
+                if (job.lastErrorCode && job.status !== 'failed') {
+                    lastErrorInfo.classList.remove('hidden');
+                    const errorTime = job.lastErrorAt ? new Date(job.lastErrorAt).toLocaleTimeString() : '';
+                    lastErrorInfo.innerHTML = `<span class="font-mono text-xs">${job.lastErrorCode}</span>: ${job.lastErrorMessage || 'Unknown error'} <span class="text-gray-500">(${errorTime})</span>`;
+                } else {
+                    lastErrorInfo.classList.add('hidden');
                 }
             }
             
