@@ -3210,6 +3210,7 @@ def api_get_review_timeline(job_id):
     Returns a ReviewTimeline with chunks, speakers, and edits applied.
     """
     from review_timeline import TimelineParser, apply_review_state
+    from logger import log_event
     
     session_id = g.session_id
     manifest_path = session_store.job_manifest_path(session_id, job_id)
@@ -3243,36 +3244,127 @@ def api_get_review_timeline(job_id):
     # Find outputs for this input
     outputs = manifest.get('outputs', [])
     
+    # Output type aliases for robustness
+    TRANSCRIPT_JSON_TYPES = {'json', 'transcript_json', 'whisper_json', 'segments_json'}
+    TRANSCRIPT_MD_TYPES = {'markdown', 'transcript_markdown', 'transcript_md'}
+    SPEAKER_MD_TYPES = {'speaker-markdown', 'speaker_markdown', 'speaker_md'}
+    DIARIZATION_TYPES = {'diarization-json', 'diarization_json'}
+    
     # Read available output files
     transcript_json = None
     diarization_json = None
     speaker_md = None
     transcript_md = None
     
+    # Track what we find for debugging
+    available_outputs = []
+    selected_outputs = {}
+    matched_outputs = []
+    skipped_outputs = []
+    
     for output in outputs:
-        if output.get('forUploadId') != input_id and output.get('forUploadId'):
+        output_info = {
+            'id': output.get('id'),
+            'type': output.get('type'),
+            'filename': output.get('filename'),
+            'forUploadId': output.get('forUploadId')
+        }
+        available_outputs.append(output_info)
+        
+        # Check forUploadId match - be lenient if forUploadId is missing
+        output_for_id = output.get('forUploadId')
+        if output_for_id and output_for_id != input_id:
+            skipped_outputs.append({'reason': 'forUploadId_mismatch', **output_info})
             continue
         
         output_type = output.get('type', '')
         output_path = output.get('path')
         
-        if not output_path or not os.path.exists(output_path):
+        if not output_path:
+            skipped_outputs.append({'reason': 'no_path', **output_info})
+            continue
+        
+        if not os.path.exists(output_path):
+            skipped_outputs.append({'reason': 'path_not_exists', 'path': output_path, **output_info})
             continue
         
         try:
             with open(output_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-        except Exception:
+        except Exception as e:
+            skipped_outputs.append({'reason': 'read_error', 'error': str(e)[:50], **output_info})
             continue
         
-        if output_type == 'json':
+        # Match output types with aliases
+        if output_type in TRANSCRIPT_JSON_TYPES and not transcript_json:
             transcript_json = content
-        elif output_type == 'diarization-json':
+            selected_outputs['transcript_json'] = output_info
+            matched_outputs.append(output_info)
+        elif output_type in DIARIZATION_TYPES and not diarization_json:
             diarization_json = content
-        elif output_type == 'speaker-markdown':
+            selected_outputs['diarization_json'] = output_info
+            matched_outputs.append(output_info)
+        elif output_type in SPEAKER_MD_TYPES and not speaker_md:
             speaker_md = content
-        elif output_type == 'markdown':
+            selected_outputs['speaker_md'] = output_info
+            matched_outputs.append(output_info)
+        elif output_type in TRANSCRIPT_MD_TYPES and not transcript_md:
             transcript_md = content
+            selected_outputs['transcript_md'] = output_info
+            matched_outputs.append(output_info)
+    
+    # Fallback: if no outputs matched by forUploadId but outputs exist, try without filter
+    if not matched_outputs and outputs:
+        log_event('warning', 'review_timeline_fallback',
+                  jobId=job_id, inputId=input_id,
+                  reason='no_outputs_matched_inputId_trying_all')
+        
+        for output in outputs:
+            if output.get('error'):
+                continue
+            
+            output_type = output.get('type', '')
+            output_path = output.get('path')
+            
+            if not output_path or not os.path.exists(output_path):
+                continue
+            
+            try:
+                with open(output_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            except Exception:
+                continue
+            
+            output_info = {
+                'id': output.get('id'),
+                'type': output_type,
+                'filename': output.get('filename'),
+                'forUploadId': output.get('forUploadId')
+            }
+            
+            if output_type in TRANSCRIPT_JSON_TYPES and not transcript_json:
+                transcript_json = content
+                selected_outputs['transcript_json'] = output_info
+            elif output_type in DIARIZATION_TYPES and not diarization_json:
+                diarization_json = content
+                selected_outputs['diarization_json'] = output_info
+            elif output_type in SPEAKER_MD_TYPES and not speaker_md:
+                speaker_md = content
+                selected_outputs['speaker_md'] = output_info
+            elif output_type in TRANSCRIPT_MD_TYPES and not transcript_md:
+                transcript_md = content
+                selected_outputs['transcript_md'] = output_info
+    
+    # Determine source used
+    source_used = 'none'
+    if diarization_json:
+        source_used = 'diarization_json'
+    elif transcript_json:
+        source_used = 'transcript_json'
+    elif speaker_md:
+        source_used = 'speaker_md'
+    elif transcript_md:
+        source_used = 'transcript_md'
     
     # Parse into timeline
     parser = TimelineParser(job_id, input_id, filename)
@@ -3282,6 +3374,66 @@ def api_get_review_timeline(job_id):
         speaker_md=speaker_md,
         transcript_md=transcript_md
     )
+    
+    # Log debug info
+    log_event('info', 'review_timeline_debug',
+              jobId=job_id, inputId=input_id,
+              availableOutputs=available_outputs,
+              selectedOutputs=selected_outputs,
+              sourceUsed=source_used,
+              numChunks=len(timeline.chunks),
+              skippedCount=len(skipped_outputs))
+    
+    # Hard guarantee: if we have text but no chunks, create a fallback chunk
+    if len(timeline.chunks) == 0:
+        fallback_text = None
+        fallback_source = None
+        
+        # Try to extract any text from available content
+        if transcript_json:
+            try:
+                data = json.loads(transcript_json)
+                fallback_text = data.get('text', '')
+                if not fallback_text and data.get('segments'):
+                    fallback_text = ' '.join(s.get('text', '') for s in data['segments'])
+                fallback_source = 'transcript_json_fallback'
+            except Exception:
+                pass
+        
+        if not fallback_text and diarization_json:
+            try:
+                data = json.loads(diarization_json)
+                if data.get('segments'):
+                    fallback_text = ' '.join(s.get('text', '') for s in data['segments'])
+                    fallback_source = 'diarization_json_fallback'
+            except Exception:
+                pass
+        
+        if not fallback_text and speaker_md:
+            fallback_text = speaker_md
+            fallback_source = 'speaker_md_fallback'
+        
+        if not fallback_text and transcript_md:
+            fallback_text = transcript_md
+            fallback_source = 'transcript_md_fallback'
+        
+        if fallback_text and fallback_text.strip():
+            from review_timeline import Chunk
+            fallback_chunk = Chunk(
+                chunk_id='t_000000',
+                start=0.0,
+                end=0.0,
+                speaker_id='SPEAKER_00',
+                text=fallback_text.strip()[:10000],  # Limit size
+                origin={'source': fallback_source, 'fallback': True}
+            )
+            timeline.chunks.append(fallback_chunk)
+            timeline.add_speaker('SPEAKER_00', 'Speaker 1')
+            
+            log_event('warning', 'review_timeline_fallback_chunk',
+                      jobId=job_id, inputId=input_id,
+                      fallbackSource=fallback_source,
+                      textLength=len(fallback_text))
     
     # Apply saved review state if exists
     job_dir = session_store.job_dir(session_id, job_id)

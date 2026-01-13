@@ -3344,7 +3344,23 @@
             document.getElementById('reviewChunkCount').textContent = `${chunks.length} chunks`;
             
             if (chunks.length === 0) {
-                container.innerHTML = '<p class="text-gray-500 italic p-4">No transcript chunks found</p>';
+                const source = reviewTimeline.source || {};
+                const debugInfo = `
+                    <div class="p-4 space-y-2">
+                        <p class="text-gray-500 italic">No transcript chunks found</p>
+                        <details class="text-xs text-gray-600">
+                            <summary class="cursor-pointer hover:text-gray-400">Debug info</summary>
+                            <div class="mt-2 p-2 bg-surface-800 rounded font-mono text-xs">
+                                <div>Job ID: ${source.jobId || 'unknown'}</div>
+                                <div>Input ID: ${source.inputId || 'unknown'}</div>
+                                <div>Filename: ${source.filename || 'unknown'}</div>
+                                <div class="mt-2 text-amber-500">Check browser console for full timeline payload</div>
+                            </div>
+                        </details>
+                    </div>
+                `;
+                container.innerHTML = debugInfo;
+                console.warn('Review timeline returned 0 chunks:', reviewTimeline);
                 return;
             }
             
