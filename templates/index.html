@@ -491,6 +491,9 @@
                     </div>
                 </div>
                 
+                <!-- Fallback warning (shown when remote was requested but ran locally) -->
+                <div id="jobFallbackWarning" class="text-xs text-amber-400 bg-amber-500/10 rounded-lg px-3 py-2 mb-3 hidden"></div>
+                
                 <!-- Timing info -->
                 <div class="grid grid-cols-2 gap-4 mb-4 text-sm">
                     <div class="bg-surface-700/30 rounded-lg p-3">
@@ -2198,15 +2201,36 @@
                 if (execMode === 'remote') {
                     execModeBadge.classList.remove('hidden');
                     execModeBadge.className = 'text-xs font-semibold px-2.5 py-1 rounded-full bg-purple-500/20 text-purple-300';
-                    execModeBadge.textContent = 'Remote GPU';
-                    // Show worker job ID if available
+                    
+                    // Determine if worker has GPU - check job.worker.gpu first, fallback to runtime
+                    const workerHasGpu = job.worker?.gpu ?? runtimeEnv?.remoteWorker?.workerCapabilities?.gpu ?? false;
+                    execModeBadge.textContent = workerHasGpu ? 'Remote GPU' : 'Remote Worker';
+                    
+                    // Build tooltip with worker details
+                    const tooltipParts = [];
                     if (job.worker?.workerJobId) {
-                        execModeBadge.title = `Worker Job: ${job.worker.workerJobId}`;
+                        tooltipParts.push(`Job: ${job.worker.workerJobId}`);
                     }
+                    if (runtimeEnv?.remoteWorker?.url) {
+                        tooltipParts.push(`Worker: ${runtimeEnv.remoteWorker.url}`);
+                    }
+                    execModeBadge.title = tooltipParts.join('\n') || 'Remote execution';
                 } else {
                     execModeBadge.classList.remove('hidden');
                     execModeBadge.className = 'text-xs font-semibold px-2.5 py-1 rounded-full bg-gray-500/20 text-gray-300';
                     execModeBadge.textContent = `Local ${backend.toUpperCase()}`;
+                    execModeBadge.title = '';
+                }
+            }
+            
+            // Show fallback warning if remote was requested but ran locally
+            const fallbackWarning = document.getElementById('jobFallbackWarning');
+            if (fallbackWarning) {
+                if (job.remoteRequested && execMode === 'local' && job.remoteFallbackReason) {
+                    fallbackWarning.classList.remove('hidden');
+                    fallbackWarning.textContent = `Remote requested but ran locally: ${job.remoteFallbackReason}`;
+                } else {
+                    fallbackWarning.classList.add('hidden');
                 }
             }
             
