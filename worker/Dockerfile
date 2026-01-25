@@ -5,8 +5,12 @@
 FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
 
 # Build arguments for version tracking
+# These are injected at build time by scripts/build_worker.sh
 ARG BUILD_COMMIT=unknown
 ARG BUILD_TIME=unknown
+# IMAGE_DIGEST must be set at deploy/run time since it's only known after push
+# Example: docker run -e IMAGE_DIGEST=sha256:abc123... 
+# RunPod: Set in pod environment variables after pulling image
 
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive

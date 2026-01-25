@@ -91,6 +91,9 @@ def get_remote_worker_status(force_refresh: bool = False) -> Dict[str, Any]:
         'lastPingAt': None,
         'latencyMs': None,
         'workerVersion': None,
+        # Structured identity for provable worker identification
+        # Contains: gitCommit, imageDigest (sha256), buildTime
+        'identity': None,
         'workerCapabilities': None,
         'error': None
     }
@@ -123,6 +126,17 @@ def get_remote_worker_status(force_refresh: bool = False) -> Dict[str, Any]:
             
             ping_data = response.json()
             result['workerVersion'] = ping_data.get('version')
+            # Capture structured identity for provable worker identification
+            result['identity'] = ping_data.get('identity')
+            
+            # Log identity for debugging (helps verify correct image is running)
+            identity = result['identity']
+            if identity:
+                log_event('debug', 'remote_worker_identity',
+                          gitCommit=identity.get('gitCommit'),
+                          imageDigest=identity.get('imageDigest', 'not set')[:20] if identity.get('imageDigest') else 'not set',
+                          buildTime=identity.get('buildTime'))
+            
             result['workerCapabilities'] = {
                 'whisperModels': ping_data.get('models', []),
                 'diarization': ping_data.get('diarization', False),

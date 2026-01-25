@@ -40,6 +40,13 @@ WORKER_PORT = int(os.environ.get('WORKER_PORT', '8477'))
 WORKER_PING_PUBLIC = os.environ.get('WORKER_PING_PUBLIC', '').lower() == 'true'
 WORKER_MAX_CONCURRENT_JOBS = int(os.environ.get('WORKER_MAX_CONCURRENT_JOBS', '1'))
 
+# Identity configuration - for provable worker identity
+# BUILD_COMMIT and BUILD_TIME are injected at Docker build time
+# IMAGE_DIGEST must be set at deploy/run time (only known after push)
+BUILD_COMMIT = os.environ.get('BUILD_COMMIT', os.environ.get('WORKER_VERSION', 'unknown'))
+BUILD_TIME = os.environ.get('BUILD_TIME', 'unknown')
+IMAGE_DIGEST = os.environ.get('IMAGE_DIGEST', '')  # sha256:... set at deploy time
+
 app = Flask(__name__)
 
 # In-memory job store (for single-worker setup; could be Redis for multi-worker)
@@ -127,14 +134,39 @@ def health():
 # Cached capabilities (detected once at startup)
 _cached_capabilities = None
 
+def _get_worker_identity() -> Dict[str, Any]:
+    """
+    Get structured worker identity for provable identification.
+    
+    Returns a dict with:
+    - gitCommit: Short git commit hash from build time
+    - imageDigest: Docker image digest (sha256:...) - set at deploy time
+    - buildTime: ISO timestamp of when image was built
+    
+    The imageDigest is the only truly immutable identifier.
+    Tags and commits can be reused; digests cannot.
+    """
+    return {
+        'gitCommit': BUILD_COMMIT,
+        'imageDigest': IMAGE_DIGEST or None,  # None if not set
+        'buildTime': BUILD_TIME
+    }
+
+
 def _detect_capabilities():
     """Detect GPU and diarization capabilities once at startup."""
     global _cached_capabilities
     if _cached_capabilities is not None:
         return _cached_capabilities
     
+    # Get structured identity
+    identity = _get_worker_identity()
+    
     caps = {
-        'version': os.environ.get('WORKER_VERSION', os.environ.get('BUILD_COMMIT', 'unknown')),
+        # Legacy 'version' field for backward compatibility
+        'version': BUILD_COMMIT,
+        # New structured identity object
+        'identity': identity,
         'gpu': False,
         'gpuName': None,
         'cuda': None,
@@ -172,14 +204,17 @@ def _detect_capabilities():
 def _ping_handler():
     """
     Detailed ping endpoint for controller handshake.
-    Returns version, capabilities, GPU status, and capacity info.
+    Returns version, capabilities, GPU status, capacity info, and identity.
     Fast and side-effect free (capabilities cached at startup).
     """
     caps = _detect_capabilities()
     capacity = get_capacity_info()
     return jsonify({
         'status': 'ok',
+        # Legacy version field for backward compatibility
         'version': caps['version'],
+        # Structured identity for provable worker identification
+        'identity': caps['identity'],
         'gpu': caps['gpu'],
         'gpuName': caps['gpuName'],
         'cuda': caps['cuda'],
