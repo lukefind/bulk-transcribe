@@ -215,6 +215,91 @@ def ping():
     return _ping_handler()
 
 
+@app.route('/v1/preflight', methods=['GET'])
+@require_auth
+def preflight():
+    """
+    Diagnostic endpoint to verify runtime dependencies.
+    
+    Tests that critical imports (numpy, torch, whisper, pyannote) work at runtime.
+    This is for debugging dependency issues - not for production use.
+    
+    Returns:
+        {
+            "status": "ok" | "error",
+            "checks": {
+                "numpy": true/false,
+                "torch": true/false,
+                "torch_cuda": true/false,
+                "whisper": true/false,
+                "diarization": true/false
+            },
+            "versions": { ... },
+            "errors": { ... }
+        }
+    """
+    checks = {
+        'numpy': False,
+        'torch': False,
+        'torch_cuda': False,
+        'whisper': False,
+        'diarization': False
+    }
+    versions = {}
+    errors = {}
+    
+    # Check numpy
+    try:
+        import numpy
+        checks['numpy'] = True
+        versions['numpy'] = numpy.__version__
+    except Exception as e:
+        errors['numpy'] = str(e)
+    
+    # Check torch
+    try:
+        import torch
+        checks['torch'] = True
+        versions['torch'] = torch.__version__
+        checks['torch_cuda'] = torch.cuda.is_available()
+        if checks['torch_cuda']:
+            versions['cuda'] = torch.version.cuda
+            versions['gpu_name'] = torch.cuda.get_device_name(0) if torch.cuda.device_count() > 0 else None
+    except Exception as e:
+        errors['torch'] = str(e)
+    
+    # Check whisper
+    try:
+        import whisper
+        checks['whisper'] = True
+        versions['whisper'] = getattr(whisper, '__version__', 'unknown')
+    except Exception as e:
+        errors['whisper'] = str(e)
+    
+    # Check diarization (only if HF_TOKEN is set)
+    hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
+    if hf_token:
+        try:
+            import pyannote.audio
+            checks['diarization'] = True
+            versions['pyannote'] = getattr(pyannote.audio, '__version__', 'unknown')
+        except Exception as e:
+            errors['diarization'] = str(e)
+    else:
+        errors['diarization'] = 'HF_TOKEN not set (skipped)'
+    
+    # Overall status
+    critical_checks = ['numpy', 'torch', 'whisper']
+    all_critical_ok = all(checks[c] for c in critical_checks)
+    
+    return jsonify({
+        'status': 'ok' if all_critical_ok else 'error',
+        'checks': checks,
+        'versions': versions,
+        'errors': errors
+    })
+
+
 @app.route('/v1/jobs', methods=['POST'])
 @require_auth
 def create_job():

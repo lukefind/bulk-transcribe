@@ -32,13 +32,26 @@ ENV TMPDIR=/var/tmp/pip
 # Install Python dependencies
 COPY worker/requirements.txt /app/requirements.txt
 
-# Install torch/torchaudio with CUDA wheels on amd64, fallback to CPU on arm64
-# The || fallback ensures arm64 builds succeed with default PyPI wheels
+# Step 1: Install numpy FIRST to avoid "Numpy is not available" errors
+# This ensures numpy is present before torch tries to use it during install
 RUN pip3 install --upgrade pip && \
-    pip3 install --index-url https://download.pytorch.org/whl/cu121 \
+    pip3 install numpy==1.26.4
+
+# Step 2: Install torch/torchaudio with CUDA 12.1 wheels
+# These must be installed from PyTorch index to get CUDA-enabled builds
+RUN pip3 install --index-url https://download.pytorch.org/whl/cu121 \
         torch==2.2.2 torchaudio==2.2.2 || \
-    pip3 install torch==2.2.2 torchaudio==2.2.2 && \
-    pip3 install -r requirements.txt
+    pip3 install torch==2.2.2 torchaudio==2.2.2
+
+# Step 3: Install remaining dependencies
+# numpy is already installed, pip will skip it
+RUN pip3 install -r requirements.txt
+
+# Step 4: Verify critical imports work at build time
+# This catches dependency issues early rather than at runtime
+RUN python3 -c "import numpy; print(f'numpy {numpy.__version__}')" && \
+    python3 -c "import torch; print(f'torch {torch.__version__}, cuda={torch.cuda.is_available()}')" && \
+    python3 -c "import whisper; print('whisper OK')"
 
 # Copy worker code
 COPY worker/ /app/worker/

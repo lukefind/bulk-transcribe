@@ -1,9 +1,35 @@
 # GPU Worker dependencies
 # Note: torch and torchaudio are installed separately in Dockerfile
 # to control CUDA vs CPU wheel selection per architecture
+#
+# DEPENDENCY RATIONALE (2024-01):
+# - numpy 1.26.4: Last 1.x release, compatible with torch 2.2.2 and pyannote
+# - torch 2.2.2 + torchaudio 2.2.2: Installed in Dockerfile with CUDA 12.1 wheels
+# - openai-whisper 20231117: Stable release, requires numpy and torch
+# - pyannote.audio 3.1.1: Requires numpy, torch, torchaudio
+# - huggingface_hub 0.19.4: For model downloads (pyannote needs HF_TOKEN)
+#
+# Install order matters: torch first (Dockerfile), then these in order below.
+
 flask==2.3.3
+werkzeug==2.3.7
 requests==2.31.0
-numpy<2.0.0
+
+# Core ML stack - explicit versions to avoid transitive conflicts
+numpy==1.26.4
+numba==0.59.1
+llvmlite==0.42.0
+
+# Whisper and audio processing
 openai-whisper==20231117
+soundfile==0.12.1
+librosa==0.10.1
+
+# Diarization (pyannote)
 pyannote.audio==3.1.1
 huggingface_hub==0.19.4
+
+# Ensure these are present (sometimes missing as transitive deps)
+filelock>=3.9.0
+tqdm>=4.64.0
+more-itertools>=9.0.0
