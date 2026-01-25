@@ -30,6 +30,50 @@ from logger import log_event
 
 
 # =============================================================================
+# Model Mapping (UI labels → actual Whisper models)
+# =============================================================================
+
+# Models that workers actually support (from worker /v1/ping)
+SUPPORTED_WORKER_MODELS = [
+    'tiny', 'tiny.en', 'base', 'base.en', 'small', 'small.en',
+    'medium', 'medium.en', 'large', 'large-v1', 'large-v2', 'large-v3'
+]
+
+# Map UI/API model names to actual Whisper model names
+# "turbo" is an OpenAI API label, not a local Whisper model
+MODEL_MAPPING = {
+    'turbo': 'medium',      # turbo doesn't exist locally, use medium as fast alternative
+    'large': 'large-v3',    # "large" should use latest large variant
+}
+
+
+def map_model_for_worker(model: str) -> str:
+    """
+    Map UI/API model name to actual Whisper model name for worker.
+    
+    Args:
+        model: Model name from UI/API (e.g., 'turbo', 'large')
+    
+    Returns:
+        Actual Whisper model name (e.g., 'medium', 'large-v3')
+    
+    Raises:
+        ValueError: If model is not supported
+    """
+    # Apply mapping if exists
+    mapped = MODEL_MAPPING.get(model, model)
+    
+    # Validate the mapped model is supported
+    if mapped not in SUPPORTED_WORKER_MODELS:
+        raise ValueError(
+            f"Model '{model}' (mapped to '{mapped}') is not supported by worker. "
+            f"Supported models: {', '.join(SUPPORTED_WORKER_MODELS)}"
+        )
+    
+    return mapped
+
+
+# =============================================================================
 # HTTP Request Helpers (must be defined before use)
 # =============================================================================
 
@@ -666,9 +710,54 @@ def dispatch_to_remote_worker(
     callback_url = f"{controller_base_url}/api/jobs/{job_id}/worker/complete"
     outputs_upload_url = f"{controller_base_url}/api/jobs/{job_id}/worker/outputs"
     
+    # Map model name for worker (turbo -> medium, large -> large-v3, etc.)
+    # This is critical: UI may show "turbo" but worker doesn't support it
+    original_model = options.get('model', 'large-v3')
+    try:
+        mapped_model = map_model_for_worker(original_model)
+    except ValueError as e:
+        log_event('error', 'remote_model_unsupported',
+                  jobId=job_id, model=original_model, error=str(e))
+        update_manifest_callback(
+            status='failed',
+            finishedAt=datetime.now(timezone.utc).isoformat(),
+            error={'code': 'UNSUPPORTED_MODEL', 'message': str(e)}
+        )
+        return False
+    
+    # Create worker options with mapped model
+    worker_options = dict(options)
+    worker_options['model'] = mapped_model
+    if original_model != mapped_model:
+        worker_options['originalModel'] = original_model  # For debugging
+    
+    # Optimize diarization chunking for GPU (larger chunks = less overhead)
+    # GPU workers can handle larger chunks efficiently
+    if worker_options.get('diarizationEnabled'):
+        effective = worker_options.get('diarizationEffective', {})
+        original_chunk = effective.get('chunkSeconds', 180)
+        original_overlap = effective.get('overlapSeconds', 5)
+        
+        # GPU-optimized defaults: 300s chunks, 8s overlap (if not user-specified)
+        # These values reduce per-chunk overhead while preserving accuracy
+        if effective.get('derived', True):  # Only override if not user-specified
+            gpu_chunk = 300  # 5 minutes per chunk
+            gpu_overlap = 8  # 8 seconds overlap for accuracy
+            
+            effective['chunkSeconds'] = gpu_chunk
+            effective['overlapSeconds'] = gpu_overlap
+            effective['gpuOptimized'] = True
+            worker_options['diarizationEffective'] = effective
+            
+            log_event('info', 'remote_diarization_gpu_optimized',
+                      jobId=job_id,
+                      originalChunk=original_chunk, gpuChunk=gpu_chunk,
+                      originalOverlap=original_overlap, gpuOverlap=gpu_overlap)
+    
     log_event('info', 'remote_dispatch_started',
               jobId=job_id, sessionHash=session_hash,
-              workerUrl=config['url'][:50])
+              workerUrl=config['url'][:50],
+              model=mapped_model, originalModel=original_model if original_model != mapped_model else None)
     
     try:
         # Create job on worker
@@ -676,7 +765,7 @@ def dispatch_to_remote_worker(
             controller_job_id=job_id,
             controller_session_hash=session_hash,
             inputs=remote_inputs,
-            options=options,
+            options=worker_options,
             callback_url=callback_url,
             outputs_upload_url=outputs_upload_url
         )

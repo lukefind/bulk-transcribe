@@ -12,6 +12,10 @@ Environment variables:
 - WORKER_MODEL: Default Whisper model (default: large-v3)
 - WORKER_PORT: Port to listen on (default: 8477)
 - HF_TOKEN: HuggingFace token for diarization (required if diarization enabled)
+- DIARIZATION_DEVICE: Device for diarization (auto|cuda|cpu, default: auto)
+  - auto: Use CUDA if available, else CPU
+  - cuda: Force CUDA (fail if unavailable)
+  - cpu: Force CPU (debug only)
 """
 
 import os
@@ -39,6 +43,9 @@ WORKER_MODEL = os.environ.get('WORKER_MODEL', 'large-v3')
 WORKER_PORT = int(os.environ.get('WORKER_PORT', '8477'))
 WORKER_PING_PUBLIC = os.environ.get('WORKER_PING_PUBLIC', '').lower() == 'true'
 WORKER_MAX_CONCURRENT_JOBS = int(os.environ.get('WORKER_MAX_CONCURRENT_JOBS', '1'))
+
+# Diarization device configuration
+DIARIZATION_DEVICE = os.environ.get('DIARIZATION_DEVICE', 'auto').lower()
 
 # Identity configuration
 # BUILD_COMMIT and BUILD_TIME are injected at Docker build time (baked into image)
@@ -520,6 +527,19 @@ def process_job(worker_job_id: str):
         inputs = job['inputs']
         options = job['options']
         
+        # Validate model is supported (fail fast if controller sent unsupported model)
+        requested_model = options.get('model', WORKER_MODEL)
+        supported_models = [
+            'tiny', 'tiny.en', 'base', 'base.en', 'small', 'small.en',
+            'medium', 'medium.en', 'large', 'large-v1', 'large-v2', 'large-v3'
+        ]
+        if requested_model not in supported_models:
+            raise ValueError(
+                f"Unsupported model '{requested_model}'. "
+                f"Supported: {', '.join(supported_models)}. "
+                f"Note: 'turbo' is not a local Whisper model."
+            )
+        
         # Step 1: Download input files
         update_job(worker_job_id, stage='downloading')
         add_log(worker_job_id, 'info', 'downloading_started', f'Downloading {len(inputs)} file(s)')
@@ -682,8 +702,79 @@ def transcribe_file(model, audio_path: str, language: Optional[str], worker_job_
     return result
 
 
+def resolve_diarization_device(worker_job_id: str) -> str:
+    """
+    Resolve the diarization device based on DIARIZATION_DEVICE env var.
+    
+    Returns:
+        Device string ('cuda' or 'cpu')
+    
+    Raises:
+        RuntimeError: If cuda is forced but unavailable
+    """
+    import torch
+    
+    cuda_available = torch.cuda.is_available()
+    gpu_name = None
+    cuda_version = getattr(torch.version, 'cuda', None)
+    
+    if cuda_available:
+        try:
+            gpu_name = torch.cuda.get_device_name(0)
+        except Exception:
+            gpu_name = 'unknown'
+    
+    # Get pyannote version
+    pyannote_version = 'unknown'
+    try:
+        import pyannote.audio
+        pyannote_version = getattr(pyannote.audio, '__version__', 'unknown')
+    except ImportError:
+        pass
+    
+    if DIARIZATION_DEVICE == 'cuda':
+        if not cuda_available:
+            add_log(worker_job_id, 'error', 'diarization_device_error',
+                    'DIARIZATION_DEVICE=cuda but CUDA is not available')
+            raise RuntimeError('DIARIZATION_DEVICE=cuda but CUDA is not available')
+        device = 'cuda'
+    elif DIARIZATION_DEVICE == 'cpu':
+        device = 'cpu'
+    else:  # 'auto' or any other value
+        device = 'cuda' if cuda_available else 'cpu'
+    
+    # Log device selection (required for production sanity)
+    add_log(worker_job_id, 'info', 'diarization_device_selected',
+            f'device={device}, cudaAvailable={cuda_available}, gpu={gpu_name}, pyannote={pyannote_version}',
+            extra={
+                'device': device,
+                'cudaAvailable': cuda_available,
+                'cudaVersion': cuda_version,
+                'gpu': gpu_name,
+                'pyannoteVersion': pyannote_version,
+                'configuredDevice': DIARIZATION_DEVICE
+            })
+    
+    return device
+
+
 def run_diarization_on_file(audio_path: str, effective_policy: dict, worker_job_id: str) -> list:
-    """Run speaker diarization on audio file."""
+    """Run speaker diarization on audio file using GPU if available."""
+    # Resolve device first
+    device = resolve_diarization_device(worker_job_id)
+    
+    # Extract diarization parameters from effective policy
+    min_speakers = effective_policy.get('minSpeakers')
+    max_speakers = effective_policy.get('maxSpeakers')
+    num_speakers = effective_policy.get('numSpeakers')
+    
+    # Log chunk/overlap settings if present
+    chunk_seconds = effective_policy.get('chunkSeconds')
+    overlap_seconds = effective_policy.get('overlapSeconds')
+    if chunk_seconds or overlap_seconds:
+        add_log(worker_job_id, 'info', 'diarization_chunking',
+                f'chunkSeconds={chunk_seconds}, overlapSeconds={overlap_seconds}')
+    
     # Import diarization module (reuse from main codebase if available)
     try:
         # Try to import from parent directory
@@ -692,13 +783,21 @@ def run_diarization_on_file(audio_path: str, effective_policy: dict, worker_job_
         
         result = run_diarization(
             audio_path,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+            num_speakers=num_speakers,
+            device=device,  # THIS IS THE KEY FIX - pass device to diarization
             job_id=worker_job_id
         )
         return result
-    except ImportError:
+    except ImportError as e:
         # Fallback: basic diarization
-        add_log(worker_job_id, 'warning', 'diarization_fallback', 'Using basic diarization')
+        add_log(worker_job_id, 'warning', 'diarization_fallback', 
+                f'Using basic diarization (import failed: {e})')
         return []
+    except Exception as e:
+        add_log(worker_job_id, 'error', 'diarization_failed', f'Diarization error: {e}')
+        raise
 
 
 def save_transcript_outputs(job_tmp_dir: str, input_id: str, filename: str, 
