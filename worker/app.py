@@ -40,12 +40,14 @@ WORKER_PORT = int(os.environ.get('WORKER_PORT', '8477'))
 WORKER_PING_PUBLIC = os.environ.get('WORKER_PING_PUBLIC', '').lower() == 'true'
 WORKER_MAX_CONCURRENT_JOBS = int(os.environ.get('WORKER_MAX_CONCURRENT_JOBS', '1'))
 
-# Identity configuration - for provable worker identity
-# BUILD_COMMIT and BUILD_TIME are injected at Docker build time
-# IMAGE_DIGEST must be set at deploy/run time (only known after push)
+# Identity configuration
+# BUILD_COMMIT and BUILD_TIME are injected at Docker build time (baked into image)
+# IMAGE_DIGEST is operator-declared at deploy time (not runtime-provable)
 BUILD_COMMIT = os.environ.get('BUILD_COMMIT', os.environ.get('WORKER_VERSION', 'unknown'))
 BUILD_TIME = os.environ.get('BUILD_TIME', 'unknown')
-IMAGE_DIGEST = os.environ.get('IMAGE_DIGEST', '')  # sha256:... set at deploy time
+# Note: IMAGE_DIGEST is declared by operator, not introspected from runtime
+# It's useful for tracking but not cryptographically provable
+DECLARED_IMAGE_DIGEST = os.environ.get('IMAGE_DIGEST', '')
 
 app = Flask(__name__)
 
@@ -136,20 +138,23 @@ _cached_capabilities = None
 
 def _get_worker_identity() -> Dict[str, Any]:
     """
-    Get structured worker identity for provable identification.
+    Get structured worker identity.
     
     Returns a dict with:
-    - gitCommit: Short git commit hash from build time
-    - imageDigest: Docker image digest (sha256:...) - set at deploy time
-    - buildTime: ISO timestamp of when image was built
+    - gitCommit: Short git commit hash (baked in at build time)
+    - buildTime: ISO timestamp of when image was built (baked in at build time)
+    - declaredImageDigest: Operator-provided digest (set via IMAGE_DIGEST env)
+    - imageDigestSource: Where the digest came from ('env' or 'none')
     
-    The imageDigest is the only truly immutable identifier.
-    Tags and commits can be reused; digests cannot.
+    Note: gitCommit and buildTime are baked into the image at build time.
+    declaredImageDigest is operator-declared, not runtime-introspected.
     """
+    has_digest = bool(DECLARED_IMAGE_DIGEST)
     return {
         'gitCommit': BUILD_COMMIT,
-        'imageDigest': IMAGE_DIGEST or None,  # None if not set
-        'buildTime': BUILD_TIME
+        'buildTime': BUILD_TIME,
+        'declaredImageDigest': DECLARED_IMAGE_DIGEST or None,
+        'imageDigestSource': 'env' if has_digest else 'none'
     }
 
 

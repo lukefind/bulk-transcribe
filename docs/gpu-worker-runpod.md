@@ -181,32 +181,104 @@ export REMOTE_WORKER_TOKEN=your-shared-secret
 After deploying or redeploying, verify the correct image is running:
 
 ```bash
-# Check worker identity via controller
-curl $CONTROLLER_URL/api/runtime | jq '.remoteWorker.identity'
+# Check worker identity and mismatch status
+curl $CONTROLLER_URL/api/runtime | jq '.remoteWorker | {identity, expectedIdentity, identityMatches, identityMismatchReason}'
 ```
 
-Expected output:
+Expected output when identity matches:
 ```json
 {
-  "gitCommit": "b4b98e5",
-  "imageDigest": "sha256:abc123...",
-  "buildTime": "2026-01-25T15:30:00Z"
+  "identity": {
+    "gitCommit": "b4b98e5",
+    "buildTime": "2026-01-25T15:30:00Z",
+    "declaredImageDigest": "sha256:abc123...",
+    "imageDigestSource": "env"
+  },
+  "expectedIdentity": {
+    "gitCommit": "b4b98e5",
+    "imageDigest": "sha256:abc123..."
+  },
+  "identityMatches": true,
+  "identityMismatchReason": null
 }
 ```
 
-- **gitCommit**: Should match the commit you built from
-- **imageDigest**: Only present if you set `IMAGE_DIGEST` env var in RunPod
-- **buildTime**: When the image was built
+### Identity Fields Explained
+
+| Field | Source | Meaning |
+|-------|--------|---------|
+| `gitCommit` | Baked into image at build time | Git commit hash the image was built from |
+| `buildTime` | Baked into image at build time | When the image was built |
+| `declaredImageDigest` | Operator-set via `IMAGE_DIGEST` env | The digest the operator claims this image has |
+| `imageDigestSource` | Runtime detection | Where digest came from: `env` or `none` |
+| `expectedIdentity` | Controller env vars | What the controller expects to see |
+| `identityMatches` | Computed by controller | `true`/`false`/`null` (null = no expectation set) |
+| `identityMismatchReason` | Computed by controller | Human-readable mismatch details |
+
+**Important**: `declaredImageDigest` is operator-declared, not runtime-introspected. It's useful for tracking but not cryptographically provable. The controller trusts what the worker reports.
+
+### Enabling Mismatch Detection
+
+Add to your controller's `.env`:
+
+```bash
+# Expected identity (from push_worker.sh output)
+EXPECTED_WORKER_GIT_COMMIT=b4b98e5
+EXPECTED_WORKER_IMAGE_DIGEST=sha256:abc123...
+```
+
+When the worker reports a different identity, `/api/runtime` will show:
+- `identityMatches: false`
+- `identityMismatchReason: "gitCommit: expected 'b4b98e5', got 'xyz789'"`
+
+The controller logs a warning but **never blocks** - this is for auditing only.
 
 ### Updating the Worker
 
 When you push a new image to `:main-amd64`:
 
 1. Push the new image: `./scripts/push_worker.sh main-amd64 ghcr.io/lukefind`
-2. In RunPod, click "Restart" on your pod (or redeploy)
-3. Verify the new commit appears in `/api/runtime`
+2. Copy the new `EXPECTED_WORKER_*` values from the script output
+3. Update controller `.env` with new expected values
+4. Restart controller
+5. In RunPod, click "Restart" on your pod (or redeploy)
+6. Verify `identityMatches: true` in `/api/runtime`
 
 The `:main-amd64` tag is mutable - redeploying the pod pulls the latest image with that tag.
+
+## Rollback
+
+If you need to rollback to a previous worker version:
+
+### Option 1: Use digest-pinned reference (recommended)
+
+The `push_worker.sh` script outputs a digest-pinned reference like:
+```
+ghcr.io/lukefind/bulk-transcribe-worker@sha256:abc123...
+```
+
+To rollback:
+1. In RunPod, edit your pod/template
+2. Change the image to the digest-pinned reference
+3. Redeploy
+
+This guarantees you get exactly that image, regardless of what `:main-amd64` currently points to.
+
+### Option 2: Use commit tag
+
+Each push also creates a commit-tagged image:
+```
+ghcr.io/lukefind/bulk-transcribe-worker:b4b98e5
+```
+
+Set the RunPod image to this tag to pin to that commit.
+
+### Keeping track of rollback references
+
+After each push, save the output which includes:
+- Digest-pinned reference for rollback
+- Git commit
+- Build time
 
 ## Security Notes
 

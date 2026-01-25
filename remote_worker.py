@@ -36,6 +36,9 @@ def get_worker_config() -> Dict[str, Any]:
         'timeoutSeconds': int(os.environ.get('REMOTE_WORKER_TIMEOUT_SECONDS', '7200')),
         'pollSeconds': int(os.environ.get('REMOTE_WORKER_POLL_SECONDS', '2')),
         'uploadMode': os.environ.get('REMOTE_WORKER_UPLOAD_MODE', 'pull'),  # pull|push
+        # Expected identity for mismatch detection (optional, for auditing)
+        'expectedGitCommit': os.environ.get('EXPECTED_WORKER_GIT_COMMIT', ''),
+        'expectedImageDigest': os.environ.get('EXPECTED_WORKER_IMAGE_DIGEST', ''),
     }
 
 
@@ -82,6 +85,14 @@ def get_remote_worker_status(force_refresh: bool = False) -> Dict[str, Any]:
         if time.time() - _worker_status_cache_time.get(cache_key, 0) < _WORKER_STATUS_CACHE_TTL:
             return _worker_status_cache[cache_key]
     
+    # Build expected identity from config (if set)
+    expected_identity = None
+    if config['expectedGitCommit'] or config['expectedImageDigest']:
+        expected_identity = {
+            'gitCommit': config['expectedGitCommit'] or None,
+            'imageDigest': config['expectedImageDigest'] or None
+        }
+    
     result = {
         'enabled': config['mode'] != 'off',
         'configured': bool(config['url'] and config['token']),
@@ -91,9 +102,13 @@ def get_remote_worker_status(force_refresh: bool = False) -> Dict[str, Any]:
         'lastPingAt': None,
         'latencyMs': None,
         'workerVersion': None,
-        # Structured identity for provable worker identification
-        # Contains: gitCommit, imageDigest (sha256), buildTime
+        # Worker-reported identity (gitCommit, buildTime, declaredImageDigest)
         'identity': None,
+        # Controller-configured expected identity (for mismatch detection)
+        'expectedIdentity': expected_identity,
+        # Mismatch detection results
+        'identityMatches': None,  # True/False/None (None if no expected identity)
+        'identityMismatchReason': None,
         'workerCapabilities': None,
         'error': None
     }
@@ -126,16 +141,48 @@ def get_remote_worker_status(force_refresh: bool = False) -> Dict[str, Any]:
             
             ping_data = response.json()
             result['workerVersion'] = ping_data.get('version')
-            # Capture structured identity for provable worker identification
+            # Capture worker-reported identity
             result['identity'] = ping_data.get('identity')
             
-            # Log identity for debugging (helps verify correct image is running)
+            # Perform identity mismatch detection
             identity = result['identity']
+            if identity and expected_identity:
+                mismatches = []
+                
+                # Check gitCommit mismatch
+                if expected_identity.get('gitCommit'):
+                    actual_commit = identity.get('gitCommit')
+                    if actual_commit != expected_identity['gitCommit']:
+                        mismatches.append(f"gitCommit: expected '{expected_identity['gitCommit']}', got '{actual_commit}'")
+                
+                # Check imageDigest mismatch (compare with declaredImageDigest)
+                if expected_identity.get('imageDigest'):
+                    actual_digest = identity.get('declaredImageDigest') or identity.get('imageDigest')
+                    if actual_digest != expected_identity['imageDigest']:
+                        mismatches.append(f"imageDigest: expected '{expected_identity['imageDigest'][:20]}...', got '{(actual_digest or 'none')[:20]}...'")
+                
+                if mismatches:
+                    result['identityMatches'] = False
+                    result['identityMismatchReason'] = '; '.join(mismatches)
+                    log_event('warning', 'remote_worker_identity_mismatch',
+                              reason=result['identityMismatchReason'],
+                              expectedGitCommit=expected_identity.get('gitCommit'),
+                              actualGitCommit=identity.get('gitCommit'))
+                else:
+                    result['identityMatches'] = True
+            elif expected_identity:
+                # Expected identity set but worker didn't report identity
+                result['identityMatches'] = False
+                result['identityMismatchReason'] = 'Worker did not report identity'
+            # else: no expected identity configured, leave identityMatches as None
+            
+            # Log identity for debugging
             if identity:
                 log_event('debug', 'remote_worker_identity',
                           gitCommit=identity.get('gitCommit'),
-                          imageDigest=identity.get('imageDigest', 'not set')[:20] if identity.get('imageDigest') else 'not set',
-                          buildTime=identity.get('buildTime'))
+                          declaredImageDigest=(identity.get('declaredImageDigest') or 'not set')[:20],
+                          buildTime=identity.get('buildTime'),
+                          identityMatches=result['identityMatches'])
             
             result['workerCapabilities'] = {
                 'whisperModels': ping_data.get('models', []),
