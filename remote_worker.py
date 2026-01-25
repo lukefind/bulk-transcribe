@@ -685,19 +685,35 @@ def dispatch_to_remote_worker(
         if not worker_job_id:
             raise ValueError('Worker did not return workerJobId')
         
-        # Update manifest with worker info
+        # Update manifest with complete remote job metadata
+        # This is critical for:
+        # 1. Linking controller job to worker job
+        # 2. Worker knowing where to push outputs
+        # 3. Debugging and audit trail
+        now = datetime.now(timezone.utc).isoformat()
         update_manifest_callback(
             worker={
                 'workerJobId': worker_job_id,
                 'url': config['url'],
-                'createdAt': datetime.now(timezone.utc).isoformat(),
-                'lastSeenAt': datetime.now(timezone.utc).isoformat()
+                'createdAt': now,
+                'lastSeenAt': now
+            },
+            remote={
+                'workerJobId': worker_job_id,
+                'workerUrl': config['url'],
+                'uploadMode': config['uploadMode'],
+                'outputsUploadUrl': outputs_upload_url,
+                'completeUrl': callback_url,
+                'startedAt': now,
+                'controllerBaseUrl': controller_base_url
             },
             executionMode='remote'
         )
         
         log_event('info', 'remote_job_created',
-                  jobId=job_id, workerJobId=worker_job_id)
+                  jobId=job_id, workerJobId=worker_job_id,
+                  outputsUploadUrl=outputs_upload_url[:50] + '...',
+                  completeUrl=callback_url[:50] + '...')
         
         # Poll for completion with exponential backoff on errors
         poll_interval = config['pollSeconds']
@@ -758,10 +774,26 @@ def dispatch_to_remote_worker(
                 # Check for completion
                 worker_status = status.get('status')
                 if worker_status == 'complete':
-                    log_event('info', 'remote_job_complete', jobId=job_id, workerJobId=worker_job_id)
+                    # Worker reports complete - outputs should have been pushed
+                    # We mark as complete but also record remote completion info
+                    # The actual outputs verification happens via the callback endpoint
+                    finished_at = datetime.now(timezone.utc).isoformat()
+                    
+                    # Get outputs info from worker status if available
+                    worker_outputs = status.get('outputs', [])
+                    
+                    log_event('info', 'remote_job_complete', 
+                              jobId=job_id, workerJobId=worker_job_id,
+                              workerOutputCount=len(worker_outputs))
+                    
                     update_manifest_callback(
                         status='complete',
-                        finishedAt=datetime.now(timezone.utc).isoformat()
+                        finishedAt=finished_at,
+                        remote={
+                            'workerJobId': worker_job_id,
+                            'completedAt': finished_at,
+                            'workerReportedOutputs': len(worker_outputs)
+                        }
                     )
                     return True
                 elif worker_status == 'failed':

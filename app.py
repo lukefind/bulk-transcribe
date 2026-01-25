@@ -2327,6 +2327,11 @@ def _run_remote_session_job(session_id: str, job_id: str, inputs: list, options:
                 if manifest.get('worker') is None:
                     manifest['worker'] = {}
                 manifest['worker'].update(value)
+            elif key == 'remote':
+                # Remote job metadata - merge to preserve existing fields
+                if manifest.get('remote') is None:
+                    manifest['remote'] = {}
+                manifest['remote'].update(value)
             else:
                 manifest[key] = value
         session_store.atomic_write_json(manifest_path, manifest)
@@ -4001,14 +4006,49 @@ def api_worker_complete(job_id):
     # Update manifest with final status
     now = datetime.now(timezone.utc).isoformat()
     
+    # Check how many outputs we actually received
+    outputs_received = len(manifest.get('outputs', []))
+    worker_reported_outputs = len(data.get('outputs', []))
+    
+    # Update remote metadata
+    if manifest.get('remote') is None:
+        manifest['remote'] = {}
+    manifest['remote']['completedAt'] = now
+    manifest['remote']['workerReportedStatus'] = status
+    manifest['remote']['workerReportedOutputs'] = worker_reported_outputs
+    manifest['remote']['outputsReceived'] = outputs_received
+    
     if status == 'complete':
-        manifest['status'] = 'complete'
-        manifest['progress'] = {
-            'stage': 'complete',
-            'percent': 100,
-            'totalFiles': manifest['progress'].get('totalFiles', 0),
-            'currentFileIndex': manifest['progress'].get('totalFiles', 0)
-        }
+        # Check if we actually received outputs
+        if outputs_received == 0 and worker_reported_outputs > 0:
+            # Worker says it sent outputs but we didn't receive any
+            manifest['status'] = 'failed'
+            manifest['error'] = {
+                'code': 'REMOTE_OUTPUTS_MISSING',
+                'message': f'Worker reported {worker_reported_outputs} outputs but controller received 0. Check worker logs for upload errors.'
+            }
+            log_event('error', 'worker_outputs_missing',
+                      jobId=job_id, workerJobId=worker_job_id,
+                      workerReported=worker_reported_outputs, received=outputs_received)
+        elif outputs_received == 0:
+            # Worker didn't report any outputs either - unusual but not necessarily an error
+            manifest['status'] = 'complete'
+            manifest['progress'] = {
+                'stage': 'complete',
+                'percent': 100,
+                'totalFiles': manifest.get('progress', {}).get('totalFiles', 0),
+                'currentFileIndex': manifest.get('progress', {}).get('totalFiles', 0)
+            }
+            log_event('warning', 'worker_no_outputs',
+                      jobId=job_id, workerJobId=worker_job_id)
+        else:
+            manifest['status'] = 'complete'
+            manifest['progress'] = {
+                'stage': 'complete',
+                'percent': 100,
+                'totalFiles': manifest.get('progress', {}).get('totalFiles', 0),
+                'currentFileIndex': manifest.get('progress', {}).get('totalFiles', 0)
+            }
     elif status == 'failed':
         manifest['status'] = 'failed'
         manifest['error'] = error or {'code': 'WORKER_FAILED', 'message': 'Worker job failed'}
@@ -4030,9 +4070,10 @@ def api_worker_complete(job_id):
     
     log_event('info', 'worker_job_complete',
               jobId=job_id, workerJobId=worker_job_id,
-              status=status, error=error)
+              status=status, outputsReceived=outputs_received,
+              workerReported=worker_reported_outputs, error=error)
     
-    return jsonify({'status': 'ok'})
+    return jsonify({'status': 'ok', 'outputsReceived': outputs_received})
 
 
 @app.route('/api/remote-worker/status', methods=['GET'])
