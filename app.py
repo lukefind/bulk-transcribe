@@ -4400,6 +4400,7 @@ def api_admin_remote_worker_test():
         return auth_error
     
     try:
+        import time
         import requests as req
         from urllib.parse import urljoin
         
