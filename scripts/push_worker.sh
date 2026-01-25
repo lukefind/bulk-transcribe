@@ -52,12 +52,42 @@ if [ -n "$GIT_COMMIT" ]; then
     echo "Also pushed: ${COMMIT_IMAGE}"
 fi
 
+# Get the image digest (sha256) for provable identity
+IMAGE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${REMOTE_IMAGE}" 2>/dev/null | sed 's/.*@//')
+if [ -z "$IMAGE_DIGEST" ]; then
+    # Fallback: try to get digest from push output or manifest
+    IMAGE_DIGEST=$(docker manifest inspect "${REMOTE_IMAGE}" 2>/dev/null | grep -o '"digest": "sha256:[^"]*"' | head -1 | sed 's/"digest": "//;s/"//')
+fi
+
 echo ""
 echo "Push complete!"
 echo ""
-echo "To use this image on RunPod/Lambda/Vast.ai:"
-echo "  Image: ${REMOTE_IMAGE}"
+echo "============================================"
+echo "IMAGE IDENTITY (for provable verification)"
+echo "============================================"
+echo "  Image:       ${REMOTE_IMAGE}"
+echo "  Git Commit:  ${GIT_COMMIT:-unknown}"
+if [ -n "$IMAGE_DIGEST" ]; then
+    echo "  Digest:      ${IMAGE_DIGEST}"
+else
+    echo "  Digest:      (run 'docker manifest inspect ${REMOTE_IMAGE}' to get digest)"
+fi
 echo ""
-echo "Required environment variables:"
+echo "============================================"
+echo "RUNPOD ENVIRONMENT VARIABLES"
+echo "============================================"
+echo "Required:"
 echo "  WORKER_TOKEN=your-shared-secret"
+echo ""
+echo "For provable identity (IMPORTANT):"
+if [ -n "$IMAGE_DIGEST" ]; then
+    echo "  IMAGE_DIGEST=${IMAGE_DIGEST}"
+else
+    echo "  IMAGE_DIGEST=sha256:... (get from 'docker manifest inspect ${REMOTE_IMAGE}')"
+fi
+echo ""
+echo "Optional:"
 echo "  HF_TOKEN=your-huggingface-token (for diarization)"
+echo ""
+echo "The IMAGE_DIGEST is the only immutable identifier."
+echo "Set it in RunPod pod environment to enable provable worker identity."
