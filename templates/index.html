@@ -2327,6 +2327,7 @@
             
             const stageLabels = {
                 'queued': 'Queued',
+                'queued_remote': 'Waiting for GPU worker...',
                 'loading_model': 'Loading model...',
                 'transcribing': 'Transcribing...',
                 'diarizing': 'Running diarization...',
@@ -2335,7 +2336,26 @@
                 'complete': 'Complete'
             };
             
+            // Check if running on remote worker
+            const isRemote = job.executionMode === 'remote' || job.worker?.workerJobId;
+            const remoteStatus = progress.remoteStatus;
+            
             let stage = stageLabels[manifestStage] || 'Processing...';
+            
+            // For remote jobs, show GPU worker status
+            if (isRemote && job.worker?.workerJobId) {
+                // Prefix with GPU indicator
+                const gpuPrefix = job.worker?.gpu ? '🚀 GPU: ' : '☁️ Remote: ';
+                if (manifestStage && stageLabels[manifestStage]) {
+                    stage = gpuPrefix + stageLabels[manifestStage];
+                } else if (remoteStatus === 'running') {
+                    stage = gpuPrefix + 'Processing...';
+                } else if (remoteStatus === 'queued') {
+                    stage = gpuPrefix + 'Queued on worker...';
+                } else {
+                    stage = gpuPrefix + 'Running...';
+                }
+            }
             let fileName = currentFile;
             
             // Fallback to parsing from currentFile if no manifest stage

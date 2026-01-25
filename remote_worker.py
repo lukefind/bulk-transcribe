@@ -29,7 +29,48 @@ import requests
 from logger import log_event
 
 
+# =============================================================================
+# HTTP Request Helpers (must be defined before use)
+# =============================================================================
+
+def _get_build_commit() -> str:
+    """Get build commit for User-Agent header."""
+    return os.environ.get('BUILD_COMMIT', 'unknown')
+
+
+def _get_default_headers(token: str) -> Dict[str, str]:
+    """
+    Get default headers for all worker requests.
+    
+    These headers are required to avoid Cloudflare 403 blocks:
+    - User-Agent: Identifies the controller
+    - Accept: Signals we expect JSON
+    - Authorization: Bearer token for auth
+    """
+    return {
+        'Authorization': f'Bearer {token}',
+        'User-Agent': f'bulk-transcribe-controller/{_get_build_commit()}',
+        'Accept': 'application/json',
+    }
+
+
+def _format_request_error(e: requests.exceptions.RequestException, 
+                          response: requests.Response = None) -> str:
+    """
+    Format request error for logging (without exposing token).
+    
+    Includes status code and first 300 chars of body if available.
+    """
+    if response is not None:
+        body_preview = response.text[:300] if response.text else ''
+        return f"HTTP {response.status_code}: {body_preview}"
+    return str(e)[:300]
+
+
+# =============================================================================
 # Configuration
+# =============================================================================
+
 def get_worker_config() -> Dict[str, Any]:
     """
     Get remote worker configuration.
@@ -103,9 +144,12 @@ def is_remote_worker_available() -> bool:
         return False
     
     try:
+        # Use proper headers to avoid Cloudflare 403
+        headers = _get_default_headers(config['token'])
         response = requests.get(
-            urljoin(config['url'], '/health'),
-            timeout=5
+            urljoin(config['url'], '/v1/ping'),  # Use /v1/ping instead of /health
+            headers=headers,
+            timeout=(5, 10)
         )
         return response.status_code == 200
     except Exception:
@@ -177,14 +221,15 @@ def get_remote_worker_status(force_refresh: bool = False) -> Dict[str, Any]:
         return result
     
     # Ping with auth token - short timeout to avoid blocking UI
+    # Use proper headers to avoid Cloudflare 403
     start_time = time.time()
-    headers = {'Authorization': f'Bearer {config["token"]}'}
+    headers = _get_default_headers(config['token'])
     
     try:
         response = requests.get(
             urljoin(config['url'], '/v1/ping'),
             headers=headers,
-            timeout=2
+            timeout=(5, 10)  # (connect, read) timeouts
         )
         latency_ms = int((time.time() - start_time) * 1000)
         
@@ -421,13 +466,24 @@ class RemoteWorkerClient:
         self.url = url.rstrip('/')
         self.token = token
         self.session = requests.Session()
-        self.session.headers['Authorization'] = f'Bearer {token}'
+        # Set all required headers to avoid Cloudflare 403
+        self.session.headers.update(_get_default_headers(token))
     
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         """Make authenticated request to worker."""
         url = f"{self.url}{path}"
-        kwargs.setdefault('timeout', 30)
-        return self.session.request(method, url, **kwargs)
+        # Set default timeouts (connect, read)
+        kwargs.setdefault('timeout', (10, 30))
+        
+        try:
+            response = self.session.request(method, url, **kwargs)
+            return response
+        except requests.exceptions.RequestException as e:
+            # Log error without token
+            log_event('warning', 'remote_worker_request_failed',
+                      method=method, path=path,
+                      error=_format_request_error(e, getattr(e, 'response', None)))
+            raise
     
     def create_job(self, controller_job_id: str, controller_session_hash: str,
                    inputs: list, options: dict, callback_url: str,
