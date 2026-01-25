@@ -43,11 +43,26 @@ WORKER_MAX_CONCURRENT_JOBS = int(os.environ.get('WORKER_MAX_CONCURRENT_JOBS', '1
 # Identity configuration
 # BUILD_COMMIT and BUILD_TIME are injected at Docker build time (baked into image)
 # IMAGE_DIGEST is operator-declared at deploy time (not runtime-provable)
-BUILD_COMMIT = os.environ.get('BUILD_COMMIT', os.environ.get('WORKER_VERSION', 'unknown'))
+BUILD_COMMIT = os.environ.get('BUILD_COMMIT', 'unknown')
 BUILD_TIME = os.environ.get('BUILD_TIME', 'unknown')
 # Note: IMAGE_DIGEST is declared by operator, not introspected from runtime
 # It's useful for tracking but not cryptographically provable
 DECLARED_IMAGE_DIGEST = os.environ.get('IMAGE_DIGEST', '')
+
+# Deprecated env vars - warn if set
+_DEPRECATED_ENV_VARS = {
+    'WORKER_VERSION': 'Use BUILD_COMMIT instead (set at build time, not runtime)',
+}
+
+
+def _get_deprecation_warnings() -> list:
+    """Check for deprecated env vars and return warnings."""
+    warnings = []
+    for var, message in _DEPRECATED_ENV_VARS.items():
+        if os.environ.get(var):
+            warnings.append(f"Deprecated env var '{var}' is set. {message}")
+    return warnings
+
 
 app = Flask(__name__)
 
@@ -214,9 +229,11 @@ def _ping_handler():
     """
     caps = _detect_capabilities()
     capacity = get_capacity_info()
-    return jsonify({
+    deprecation_warnings = _get_deprecation_warnings()
+    
+    response = {
         'status': 'ok',
-        # Legacy version field for backward compatibility
+        # Legacy version field for backward compatibility (equals identity.gitCommit)
         'version': caps['version'],
         # Structured identity for provable worker identification
         'identity': caps['identity'],
@@ -228,7 +245,13 @@ def _ping_handler():
         'maxFileMB': caps['maxFileMB'],
         'activeJobs': capacity['activeJobs'],
         'maxConcurrentJobs': capacity['maxConcurrentJobs']
-    })
+    }
+    
+    # Include deprecation warnings if any deprecated env vars are set
+    if deprecation_warnings:
+        response['warnings'] = deprecation_warnings
+    
+    return jsonify(response)
 
 
 @app.route('/v1/ping', methods=['GET'])
