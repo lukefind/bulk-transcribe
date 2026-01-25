@@ -3776,16 +3776,26 @@ def require_worker_auth(f):
     from functools import wraps
     @wraps(f)
     def decorated(*args, **kwargs):
-        worker_token = os.environ.get('REMOTE_WORKER_TOKEN', '')
+        # Support both REMOTE_WORKER_TOKEN and WORKER_TOKEN (same as remote_worker.py)
+        worker_token = os.environ.get('REMOTE_WORKER_TOKEN') or os.environ.get('WORKER_TOKEN', '')
+        
+        # Also check saved config if env vars not set
         if not worker_token:
-            return jsonify({'error': 'Worker endpoints not configured'}), 503
+            try:
+                from config_store import get_remote_worker_token
+                worker_token = get_remote_worker_token()
+            except ImportError:
+                pass
+        
+        if not worker_token:
+            return jsonify({'error': 'Worker endpoints not configured (no WORKER_TOKEN)'}), 503
         
         auth_header = request.headers.get('Authorization', '')
         if not auth_header.startswith('Bearer '):
             return jsonify({'error': 'Missing Authorization header'}), 401
         
         token = auth_header[7:]
-        if token != worker_token:
+        if not secrets.compare_digest(token, worker_token):
             return jsonify({'error': 'Invalid worker token'}), 403
         
         return f(*args, **kwargs)

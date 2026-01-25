@@ -837,6 +837,15 @@ def format_timestamp(seconds: float) -> str:
     return f"{mins:02d}:{secs:02d}"
 
 
+def _get_controller_headers() -> dict:
+    """Get headers for requests to controller (avoids Cloudflare 403)."""
+    return {
+        'Authorization': f'Bearer {WORKER_TOKEN}',
+        'User-Agent': f'bulk-transcribe-worker/{BUILD_COMMIT}',
+        'Accept': 'application/json',
+    }
+
+
 def upload_outputs_to_controller(job: dict, job_tmp_dir: str, outputs: list):
     """Upload output files to controller."""
     outputs_url = job.get('outputsUploadUrl')
@@ -847,6 +856,7 @@ def upload_outputs_to_controller(job: dict, job_tmp_dir: str, outputs: list):
     for output in outputs:
         local_path = output.get('localPath')
         if not local_path or not os.path.exists(local_path):
+            add_log(job['workerJobId'], 'warning', 'output_missing', f'Output file not found: {local_path}')
             continue
         
         try:
@@ -857,20 +867,27 @@ def upload_outputs_to_controller(job: dict, job_tmp_dir: str, outputs: list):
                     'inputId': output.get('inputId', ''),
                     'outputType': output.get('type', 'unknown')
                 }
-                headers = {'Authorization': f'Bearer {WORKER_TOKEN}'}
+                # Use proper headers to avoid Cloudflare 403
+                headers = _get_controller_headers()
                 
                 response = requests.post(outputs_url, files=files, data=data, headers=headers, timeout=120)
-                response.raise_for_status()
+                
+                if response.status_code != 200:
+                    add_log(job['workerJobId'], 'error', 'upload_failed', 
+                            f'Failed to upload {output["filename"]}: HTTP {response.status_code} - {response.text[:200]}')
+                    continue
                 
                 add_log(job['workerJobId'], 'info', 'output_uploaded', f'Uploaded {output["filename"]}')
-        except Exception as e:
-            add_log(job['workerJobId'], 'error', 'upload_failed', f'Failed to upload {output["filename"]}: {e}')
+        except requests.exceptions.RequestException as e:
+            add_log(job['workerJobId'], 'error', 'upload_failed', 
+                    f'Failed to upload {output["filename"]}: {type(e).__name__}: {str(e)[:150]}')
 
 
 def notify_controller_complete(job: dict, outputs: list, error: dict = None):
     """Notify controller that job is complete."""
     callback_url = job.get('callbackUrl')
     if not callback_url:
+        add_log(job['workerJobId'], 'warning', 'no_callback_url', 'No callbackUrl provided')
         return
     
     try:
@@ -881,15 +898,20 @@ def notify_controller_complete(job: dict, outputs: list, error: dict = None):
             'outputs': [{'inputId': o.get('inputId'), 'filename': o['filename'], 'type': o.get('type')} for o in outputs],
             'error': error
         }
-        headers = {
-            'Authorization': f'Bearer {WORKER_TOKEN}',
-            'Content-Type': 'application/json'
-        }
+        # Use proper headers to avoid Cloudflare 403
+        headers = _get_controller_headers()
+        headers['Content-Type'] = 'application/json'
         
         response = requests.post(callback_url, json=payload, headers=headers, timeout=30)
-        response.raise_for_status()
-    except Exception as e:
-        add_log(job['workerJobId'], 'error', 'callback_failed', f'Failed to notify controller: {e}')
+        
+        if response.status_code != 200:
+            add_log(job['workerJobId'], 'error', 'callback_failed', 
+                    f'Controller callback failed: HTTP {response.status_code} - {response.text[:200]}')
+        else:
+            add_log(job['workerJobId'], 'info', 'callback_sent', 'Notified controller of completion')
+    except requests.exceptions.RequestException as e:
+        add_log(job['workerJobId'], 'error', 'callback_failed', 
+                f'Failed to notify controller: {type(e).__name__}: {str(e)[:150]}')
 
 
 if __name__ == '__main__':
