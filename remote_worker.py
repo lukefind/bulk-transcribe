@@ -6,11 +6,14 @@ transcription and diarization workloads.
 
 Configuration (environment variables):
 - REMOTE_WORKER_URL: Base URL of the worker (e.g., https://gpu-worker.example.com)
-- REMOTE_WORKER_TOKEN: Shared secret for authentication
+- REMOTE_WORKER_TOKEN or WORKER_TOKEN: Shared secret for authentication
+  (REMOTE_WORKER_TOKEN takes precedence if both are set)
 - REMOTE_WORKER_MODE: off|optional|required (default: off)
 - REMOTE_WORKER_TIMEOUT_SECONDS: Job timeout (default: 7200)
 - REMOTE_WORKER_POLL_SECONDS: Poll interval (default: 2)
 - REMOTE_WORKER_UPLOAD_MODE: pull|push (default: pull)
+- EXPECTED_WORKER_GIT_COMMIT: Expected git commit for identity mismatch detection
+- EXPECTED_WORKER_IMAGE_DIGEST: Expected image digest for identity mismatch detection
 """
 
 import os
@@ -28,10 +31,19 @@ from logger import log_event
 
 # Configuration
 def get_worker_config() -> Dict[str, Any]:
-    """Get remote worker configuration from environment."""
+    """
+    Get remote worker configuration from environment.
+    
+    Token precedence: REMOTE_WORKER_TOKEN > WORKER_TOKEN
+    This allows using WORKER_TOKEN for simpler setups where controller
+    and worker share the same token.
+    """
+    # Support both REMOTE_WORKER_TOKEN (explicit) and WORKER_TOKEN (shared secret)
+    token = os.environ.get('REMOTE_WORKER_TOKEN') or os.environ.get('WORKER_TOKEN', '')
+    
     return {
         'url': os.environ.get('REMOTE_WORKER_URL', ''),
-        'token': os.environ.get('REMOTE_WORKER_TOKEN', ''),
+        'token': token,
         'mode': os.environ.get('REMOTE_WORKER_MODE', 'off'),  # off|optional|required
         'timeoutSeconds': int(os.environ.get('REMOTE_WORKER_TIMEOUT_SECONDS', '7200')),
         'pollSeconds': int(os.environ.get('REMOTE_WORKER_POLL_SECONDS', '2')),
@@ -117,7 +129,7 @@ def get_remote_worker_status(force_refresh: bool = False) -> Dict[str, Any]:
         if config['mode'] == 'off':
             result['error'] = None  # Not an error if mode is off
         else:
-            result['error'] = 'Remote worker not configured (missing URL or token)'
+            result['error'] = 'Remote worker not configured (missing REMOTE_WORKER_URL or WORKER_TOKEN)'
         _worker_status_cache[cache_key] = result
         _worker_status_cache_time[cache_key] = time.time()
         return result
