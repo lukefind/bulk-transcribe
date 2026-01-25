@@ -2,6 +2,23 @@
 
 Step-by-step guide to deploy the Bulk Transcribe GPU Worker on RunPod.
 
+## Quick Reference (main branch workflow)
+
+**Standard image tag**: `ghcr.io/lukefind/bulk-transcribe-worker:main-amd64`
+
+```bash
+# Build and push from main branch
+git checkout main
+./scripts/build_worker.sh main-amd64
+./scripts/push_worker.sh main-amd64 ghcr.io/lukefind
+
+# Redeploy RunPod pod (uses same image tag, pulls latest)
+# Then verify:
+curl $CONTROLLER_URL/api/runtime | jq '.remoteWorker.identity'
+```
+
+---
+
 ## Prerequisites
 
 - RunPod account with credits
@@ -10,15 +27,19 @@ Step-by-step guide to deploy the Bulk Transcribe GPU Worker on RunPod.
 
 ## Step 1: Push Your Worker Image
 
-```bash
-# Build the worker image
-./scripts/build_worker.sh latest
+**Recommended: Use `main-amd64` tag for stable deployments**
 
-# Push to Docker Hub (replace with your username)
-./scripts/push_worker.sh latest your-dockerhub-username
+```bash
+# Build for linux/amd64 (required for RunPod)
+./scripts/build_worker.sh main-amd64
+
+# Push to GHCR
+./scripts/push_worker.sh main-amd64 ghcr.io/lukefind
 ```
 
-Your image will be at: `your-dockerhub-username/bulk-transcribe-worker:latest`
+Your image will be at: `ghcr.io/lukefind/bulk-transcribe-worker:main-amd64`
+
+The push script will output the `IMAGE_DIGEST` - save this for provable identity.
 
 ## Step 2: Create RunPod Template
 
@@ -29,7 +50,7 @@ Your image will be at: `your-dockerhub-username/bulk-transcribe-worker:latest`
 | Field | Value |
 |-------|-------|
 | Template Name | `bulk-transcribe-worker` |
-| Container Image | `your-dockerhub-username/bulk-transcribe-worker:latest` |
+| Container Image | `ghcr.io/lukefind/bulk-transcribe-worker:main-amd64` |
 | Container Start Command | (leave empty) |
 | Docker Command | (leave empty) |
 
@@ -154,6 +175,38 @@ export REMOTE_WORKER_TOKEN=your-shared-secret
 2. **Stop pods when idle** - RunPod charges by the minute
 3. **Use smaller GPUs** for testing (RTX 3090 is fine for development)
 4. **Batch your jobs** - start pod, run all jobs, stop pod
+
+## Verifying Worker Identity
+
+After deploying or redeploying, verify the correct image is running:
+
+```bash
+# Check worker identity via controller
+curl $CONTROLLER_URL/api/runtime | jq '.remoteWorker.identity'
+```
+
+Expected output:
+```json
+{
+  "gitCommit": "b4b98e5",
+  "imageDigest": "sha256:abc123...",
+  "buildTime": "2026-01-25T15:30:00Z"
+}
+```
+
+- **gitCommit**: Should match the commit you built from
+- **imageDigest**: Only present if you set `IMAGE_DIGEST` env var in RunPod
+- **buildTime**: When the image was built
+
+### Updating the Worker
+
+When you push a new image to `:main-amd64`:
+
+1. Push the new image: `./scripts/push_worker.sh main-amd64 ghcr.io/lukefind`
+2. In RunPod, click "Restart" on your pod (or redeploy)
+3. Verify the new commit appears in `/api/runtime`
+
+The `:main-amd64` tag is mutable - redeploying the pod pulls the latest image with that tag.
 
 ## Security Notes
 
