@@ -799,10 +799,20 @@ def dispatch_to_remote_worker(
             executionMode='remote'
         )
         
+        # Log complete dispatch details for debugging
+        # This is the single source of truth for what was sent to worker
         log_event('info', 'remote_job_created',
-                  jobId=job_id, workerJobId=worker_job_id,
-                  outputsUploadUrl=outputs_upload_url[:50] + '...',
-                  completeUrl=callback_url[:50] + '...')
+                  jobId=job_id, 
+                  workerJobId=worker_job_id,
+                  mappedModel=mapped_model,
+                  originalModel=original_model if original_model != mapped_model else None,
+                  uploadMode=config['uploadMode'],
+                  outputsUploadUrl=outputs_upload_url,
+                  completeUrl=callback_url,
+                  diarizationEnabled=worker_options.get('diarizationEnabled', False),
+                  gpuOptimizedChunking=worker_options.get('diarizationEffective', {}).get('gpuOptimized', False),
+                  chunkSeconds=worker_options.get('diarizationEffective', {}).get('chunkSeconds'),
+                  overlapSeconds=worker_options.get('diarizationEffective', {}).get('overlapSeconds'))
         
         # Poll for completion with exponential backoff on errors
         poll_interval = config['pollSeconds']

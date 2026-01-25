@@ -117,17 +117,23 @@ def update_job(worker_job_id: str, **updates):
 
 
 def add_log(worker_job_id: str, level: str, event: str, message: str = '', **extra):
-    """Add a log entry to the job."""
+    """Add a log entry to the job and print to stdout for observability."""
+    log_entry = {
+        'ts': time.time(),
+        'level': level,
+        'event': event,
+        'message': message,
+        'workerJobId': worker_job_id,
+        **extra
+    }
+    
+    # Print structured JSON to stdout for log aggregation
+    # This is critical for production observability
+    print(json.dumps(log_entry), flush=True)
+    
     with _jobs_lock:
         if worker_job_id not in _jobs:
             return
-        log_entry = {
-            'ts': time.time(),
-            'level': level,
-            'event': event,
-            'message': message,
-            **extra
-        }
         _jobs[worker_job_id].setdefault('logs', [])
         # Keep last 100 logs
         _jobs[worker_job_id]['logs'] = _jobs[worker_job_id]['logs'][-99:] + [log_entry]
