@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin - Bulk Transcribe</title>
+    <link rel="icon" type="image/png" href="/static/favicon-32x32.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: { 50: '#eef2ff', 100: '#e0e7ff', 200: '#c7d2fe', 300: '#a5b4fc', 400: '#818cf8', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 800: '#3730a3', 900: '#312e81' },
+                        surface: { 50: '#f8fafc', 100: '#f1f5f9', 200: '#e2e8f0', 700: '#1e293b', 800: '#0f172a', 900: '#020617' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%); }
+        .glass { background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(99, 102, 241, 0.1); }
+        .input-field { transition: all 0.2s ease; }
+        .input-field:focus { box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2); }
+        .btn-primary { background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); transition: all 0.2s ease; }
+        .btn-primary:hover { background: linear-gradient(135deg, #818cf8 0%, #6366f1 100%); transform: translateY(-1px); }
+        .btn-primary:disabled { background: #374151; transform: none; opacity: 0.5; cursor: not-allowed; }
+    </style>
+</head>
+<body class="text-gray-100 min-h-screen">
+    <!-- Header -->
+    <header class="border-b border-primary-900/30">
+        <div class="max-w-2xl mx-auto px-6 py-6">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-4">
+                    <a href="/" class="text-gray-400 hover:text-white">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                        </svg>
+                    </a>
+                    <div>
+                        <h1 class="text-xl font-bold text-white">Admin Settings</h1>
+                        <p class="text-sm text-gray-400">Remote Worker Configuration</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-2xl mx-auto px-6 py-8">
+        <!-- Auth Section -->
+        <div id="authSection" class="glass rounded-2xl p-6 mb-6">
+            <h2 class="text-lg font-semibold text-white mb-4">Authentication</h2>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-2">Admin Token</label>
+                    <input type="password" id="adminToken" 
+                           class="w-full px-4 py-2.5 bg-surface-700/50 border border-gray-600/50 rounded-xl text-white input-field"
+                           placeholder="Enter admin token">
+                </div>
+                <button onclick="authenticate()" 
+                        class="btn-primary px-6 py-2.5 rounded-xl text-white font-medium">
+                    Authenticate
+                </button>
+                <p id="authError" class="text-red-400 text-sm hidden"></p>
+            </div>
+        </div>
+
+        <!-- Remote Worker Config (hidden until authenticated) -->
+        <div id="configSection" class="hidden">
+            <div class="glass rounded-2xl p-6 mb-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold text-white">Remote GPU Worker</h2>
+                    <span id="configSource" class="text-xs px-2 py-1 rounded bg-surface-700 text-gray-400"></span>
+                </div>
+                
+                <div class="space-y-4">
+                    <!-- URL -->
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Worker URL</label>
+                        <input type="url" id="workerUrl" 
+                               class="w-full px-4 py-2.5 bg-surface-700/50 border border-gray-600/50 rounded-xl text-white input-field"
+                               placeholder="https://xxx-8477.proxy.runpod.net">
+                        <p class="text-xs text-gray-500 mt-1">The RunPod proxy URL for your GPU worker</p>
+                    </div>
+                    
+                    <!-- Token -->
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Worker Token</label>
+                        <div class="flex gap-2">
+                            <input type="password" id="workerToken" 
+                                   class="flex-1 px-4 py-2.5 bg-surface-700/50 border border-gray-600/50 rounded-xl text-white input-field"
+                                   placeholder="Leave blank to keep existing">
+                            <span id="tokenStatus" class="flex items-center px-3 text-sm rounded-xl bg-surface-700/50 border border-gray-600/50"></span>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-1">Shared secret for worker authentication. Leave blank to keep existing token.</p>
+                    </div>
+                    
+                    <!-- Mode -->
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Mode</label>
+                        <select id="workerMode" 
+                                class="w-full px-4 py-2.5 bg-surface-700/50 border border-gray-600/50 rounded-xl text-white input-field">
+                            <option value="off">Off - Use local CPU/GPU only</option>
+                            <option value="optional">Optional - Use remote if available, fall back to local</option>
+                            <option value="required">Required - Only use remote worker (fail if unavailable)</option>
+                        </select>
+                    </div>
+                    
+                    <!-- Actions -->
+                    <div class="flex gap-3 pt-2">
+                        <button onclick="testConnection()" id="testBtn"
+                                class="flex items-center gap-2 px-4 py-2.5 bg-surface-700/80 hover:bg-surface-700 border border-gray-600/30 rounded-xl text-white font-medium transition-all">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            </svg>
+                            Test Connection
+                        </button>
+                        <button onclick="saveConfig()" id="saveBtn"
+                                class="btn-primary flex items-center gap-2 px-6 py-2.5 rounded-xl text-white font-medium">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                            </svg>
+                            Save
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Test Results -->
+            <div id="testResults" class="glass rounded-2xl p-6 hidden">
+                <h3 class="text-md font-semibold text-white mb-3">Connection Test Results</h3>
+                <div id="testResultsContent"></div>
+            </div>
+            
+            <!-- Current Status -->
+            <div class="glass rounded-2xl p-6 mt-6">
+                <h3 class="text-md font-semibold text-white mb-3">Current Runtime Status</h3>
+                <div id="runtimeStatus" class="text-sm text-gray-400">
+                    Loading...
+                </div>
+                <button onclick="refreshStatus()" class="mt-3 text-xs text-primary-400 hover:text-primary-300">
+                    Refresh Status
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        let adminToken = '';
+        
+        // Check for stored token on load
+        document.addEventListener('DOMContentLoaded', () => {
+            const stored = sessionStorage.getItem('adminToken');
+            if (stored) {
+                adminToken = stored;
+                document.getElementById('adminToken').value = stored;
+                authenticate();
+            }
+        });
+        
+        async function authenticate() {
+            const token = document.getElementById('adminToken').value;
+            if (!token) {
+                showAuthError('Please enter admin token');
+                return;
+            }
+            
+            try {
+                const resp = await fetch('/api/admin/remote-worker', {
+                    headers: { 'X-Admin-Token': token }
+                });
+                
+                if (resp.status === 404) {
+                    showAuthError('Admin endpoint not configured (ADMIN_TOKEN not set on server)');
+                    return;
+                }
+                if (resp.status === 401) {
+                    showAuthError('Invalid admin token');
+                    return;
+                }
+                if (!resp.ok) {
+                    showAuthError('Authentication failed');
+                    return;
+                }
+                
+                // Success
+                adminToken = token;
+                sessionStorage.setItem('adminToken', token);
+                document.getElementById('authSection').classList.add('hidden');
+                document.getElementById('configSection').classList.remove('hidden');
+                
+                const config = await resp.json();
+                populateConfig(config);
+                refreshStatus();
+            } catch (e) {
+                showAuthError('Connection error: ' + e.message);
+            }
+        }
+        
+        function showAuthError(msg) {
+            const el = document.getElementById('authError');
+            el.textContent = msg;
+            el.classList.remove('hidden');
+        }
+        
+        function populateConfig(config) {
+            document.getElementById('workerUrl').value = config.url || '';
+            document.getElementById('workerMode').value = config.mode || 'off';
+            document.getElementById('tokenStatus').textContent = config.tokenSet ? '✓ Set' : '✗ Not set';
+            document.getElementById('tokenStatus').className = config.tokenSet 
+                ? 'flex items-center px-3 text-sm rounded-xl bg-green-900/30 border border-green-700/50 text-green-400'
+                : 'flex items-center px-3 text-sm rounded-xl bg-red-900/30 border border-red-700/50 text-red-400';
+            document.getElementById('configSource').textContent = 'Source: ' + (config.configSource || 'default');
+        }
+        
+        async function testConnection() {
+            const btn = document.getElementById('testBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="animate-spin">⟳</span> Testing...';
+            
+            const url = document.getElementById('workerUrl').value;
+            const token = document.getElementById('workerToken').value;
+            
+            try {
+                const resp = await fetch('/api/admin/remote-worker/test', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Token': adminToken
+                    },
+                    body: JSON.stringify({ url: url || undefined, token: token || undefined })
+                });
+                
+                const result = await resp.json();
+                showTestResults(result);
+            } catch (e) {
+                showTestResults({ ok: false, error: e.message });
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                </svg> Test Connection`;
+            }
+        }
+        
+        function showTestResults(result) {
+            const container = document.getElementById('testResults');
+            const content = document.getElementById('testResultsContent');
+            container.classList.remove('hidden');
+            
+            if (result.ok) {
+                content.innerHTML = `
+                    <div class="bg-green-900/30 border border-green-700/50 rounded-lg p-4">
+                        <div class="flex items-center gap-2 text-green-400 font-medium mb-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                            </svg>
+                            Connected Successfully
+                        </div>
+                        <div class="text-sm text-gray-300 space-y-1">
+                            <p><span class="text-gray-500">Latency:</span> ${result.latencyMs}ms</p>
+                            <p><span class="text-gray-500">Version:</span> ${result.version || 'unknown'}</p>
+                            ${result.identity ? `
+                                <p><span class="text-gray-500">Git Commit:</span> ${result.identity.gitCommit || 'unknown'}</p>
+                                <p><span class="text-gray-500">Build Time:</span> ${result.identity.buildTime || 'unknown'}</p>
+                            ` : ''}
+                            <p><span class="text-gray-500">GPU:</span> ${result.gpu ? (result.gpuName || 'Yes') : 'No'}</p>
+                            <p><span class="text-gray-500">Diarization:</span> ${result.diarization ? 'Available' : 'Not available'}</p>
+                            ${result.warnings ? `<p class="text-amber-400 mt-2">⚠️ ${result.warnings.join(', ')}</p>` : ''}
+                        </div>
+                    </div>
+                `;
+            } else {
+                content.innerHTML = `
+                    <div class="bg-red-900/30 border border-red-700/50 rounded-lg p-4">
+                        <div class="flex items-center gap-2 text-red-400 font-medium mb-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                            Connection Failed
+                        </div>
+                        <p class="text-sm text-gray-300">${result.error || 'Unknown error'}</p>
+                    </div>
+                `;
+            }
+        }
+        
+        async function saveConfig() {
+            const btn = document.getElementById('saveBtn');
+            btn.disabled = true;
+            
+            const url = document.getElementById('workerUrl').value;
+            const token = document.getElementById('workerToken').value;
+            const mode = document.getElementById('workerMode').value;
+            
+            const body = { url, mode };
+            if (token) body.token = token;  // Only include if user entered something
+            
+            try {
+                const resp = await fetch('/api/admin/remote-worker', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Token': adminToken
+                    },
+                    body: JSON.stringify(body)
+                });
+                
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    alert('Save failed: ' + (err.error || 'Unknown error'));
+                    return;
+                }
+                
+                const config = await resp.json();
+                populateConfig(config);
+                document.getElementById('workerToken').value = '';  // Clear token field
+                
+                // Show success briefly
+                btn.innerHTML = '✓ Saved!';
+                setTimeout(() => {
+                    btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg> Save`;
+                }, 2000);
+                
+                refreshStatus();
+            } catch (e) {
+                alert('Save failed: ' + e.message);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        
+        async function refreshStatus() {
+            try {
+                const resp = await fetch('/api/runtime');
+                const data = await resp.json();
+                
+                const rw = data.remoteWorker || {};
+                const el = document.getElementById('runtimeStatus');
+                
+                el.innerHTML = `
+                    <div class="space-y-2">
+                        <p><span class="text-gray-500">Configured:</span> ${rw.configured ? '<span class="text-green-400">Yes</span>' : '<span class="text-red-400">No</span>'}</p>
+                        <p><span class="text-gray-500">Connected:</span> ${rw.connected ? '<span class="text-green-400">Yes</span>' : '<span class="text-yellow-400">No</span>'}</p>
+                        <p><span class="text-gray-500">Mode:</span> ${rw.mode || 'off'}</p>
+                        <p><span class="text-gray-500">URL:</span> ${rw.url || '(not set)'}</p>
+                        ${rw.identity ? `
+                            <p><span class="text-gray-500">Worker Commit:</span> ${rw.identity.gitCommit || 'unknown'}</p>
+                        ` : ''}
+                        ${rw.error ? `<p class="text-red-400">Error: ${rw.error}</p>` : ''}
+                        ${rw.identityMatches === false ? `<p class="text-amber-400">⚠️ Identity mismatch: ${rw.identityMismatchReason}</p>` : ''}
+                    </div>
+                `;
+            } catch (e) {
+                document.getElementById('runtimeStatus').innerHTML = `<p class="text-red-400">Failed to load: ${e.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>

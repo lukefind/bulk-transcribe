@@ -32,25 +32,67 @@ from logger import log_event
 # Configuration
 def get_worker_config() -> Dict[str, Any]:
     """
-    Get remote worker configuration from environment.
+    Get remote worker configuration.
     
-    Token precedence: REMOTE_WORKER_TOKEN > WORKER_TOKEN
-    This allows using WORKER_TOKEN for simpler setups where controller
-    and worker share the same token.
+    Precedence:
+    1. Environment variables (highest priority)
+    2. Saved config from config_store (UI-configured)
+    3. Defaults (disabled)
+    
+    Token precedence within env: REMOTE_WORKER_TOKEN > WORKER_TOKEN
     """
-    # Support both REMOTE_WORKER_TOKEN (explicit) and WORKER_TOKEN (shared secret)
-    token = os.environ.get('REMOTE_WORKER_TOKEN') or os.environ.get('WORKER_TOKEN', '')
+    # Check environment variables first
+    env_url = os.environ.get('REMOTE_WORKER_URL', '')
+    env_token = os.environ.get('REMOTE_WORKER_TOKEN') or os.environ.get('WORKER_TOKEN', '')
+    env_mode = os.environ.get('REMOTE_WORKER_MODE', '')
     
+    # If env vars are set, use them (original behavior)
+    if env_url and env_token:
+        return {
+            'url': env_url,
+            'token': env_token,
+            'mode': env_mode or 'off',
+            'timeoutSeconds': int(os.environ.get('REMOTE_WORKER_TIMEOUT_SECONDS', '7200')),
+            'pollSeconds': int(os.environ.get('REMOTE_WORKER_POLL_SECONDS', '2')),
+            'uploadMode': os.environ.get('REMOTE_WORKER_UPLOAD_MODE', 'pull'),
+            'expectedGitCommit': os.environ.get('EXPECTED_WORKER_GIT_COMMIT', ''),
+            'expectedImageDigest': os.environ.get('EXPECTED_WORKER_IMAGE_DIGEST', ''),
+            'configSource': 'env',
+        }
+    
+    # Fall back to saved config (UI-configured)
+    try:
+        from config_store import get_remote_worker_url, get_remote_worker_token, get_remote_worker_mode
+        saved_url = get_remote_worker_url()
+        saved_token = get_remote_worker_token()
+        saved_mode = get_remote_worker_mode()
+        
+        if saved_url and saved_token:
+            return {
+                'url': saved_url,
+                'token': saved_token,
+                'mode': saved_mode or 'off',
+                'timeoutSeconds': int(os.environ.get('REMOTE_WORKER_TIMEOUT_SECONDS', '7200')),
+                'pollSeconds': int(os.environ.get('REMOTE_WORKER_POLL_SECONDS', '2')),
+                'uploadMode': os.environ.get('REMOTE_WORKER_UPLOAD_MODE', 'pull'),
+                'expectedGitCommit': os.environ.get('EXPECTED_WORKER_GIT_COMMIT', ''),
+                'expectedImageDigest': os.environ.get('EXPECTED_WORKER_IMAGE_DIGEST', ''),
+                'configSource': 'saved',
+            }
+    except ImportError:
+        pass  # config_store not available (e.g., in tests)
+    
+    # Default: disabled
     return {
-        'url': os.environ.get('REMOTE_WORKER_URL', ''),
-        'token': token,
-        'mode': os.environ.get('REMOTE_WORKER_MODE', 'off'),  # off|optional|required
+        'url': env_url,  # May be partially set
+        'token': env_token,
+        'mode': env_mode or 'off',
         'timeoutSeconds': int(os.environ.get('REMOTE_WORKER_TIMEOUT_SECONDS', '7200')),
         'pollSeconds': int(os.environ.get('REMOTE_WORKER_POLL_SECONDS', '2')),
-        'uploadMode': os.environ.get('REMOTE_WORKER_UPLOAD_MODE', 'pull'),  # pull|push
-        # Expected identity for mismatch detection (optional, for auditing)
+        'uploadMode': os.environ.get('REMOTE_WORKER_UPLOAD_MODE', 'pull'),
         'expectedGitCommit': os.environ.get('EXPECTED_WORKER_GIT_COMMIT', ''),
         'expectedImageDigest': os.environ.get('EXPECTED_WORKER_IMAGE_DIGEST', ''),
+        'configSource': 'default',
     }
 
 

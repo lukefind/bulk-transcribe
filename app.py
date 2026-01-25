@@ -855,6 +855,12 @@ def index():
                          is_server_mode=session_store.is_server_mode())
 
 
+@app.route('/admin')
+def admin_page():
+    """Admin settings page for remote worker configuration."""
+    return render_template('admin.html')
+
+
 @app.route('/start', methods=['POST'])
 def start_transcription():
     """Start transcription with folder paths. Blocked in server mode."""
@@ -4294,6 +4300,170 @@ def api_admin_stats():
     })
     response.headers['Cache-Control'] = 'no-store'
     return response
+
+
+def _require_admin_token():
+    """
+    Check for valid admin token. Returns error response tuple if invalid, None if valid.
+    """
+    admin_token = os.environ.get('ADMIN_TOKEN', '')
+    if not admin_token:
+        return jsonify({'error': 'Admin endpoint not configured (ADMIN_TOKEN not set)'}), 404
+    
+    provided_token = request.headers.get('X-Admin-Token', '')
+    if not provided_token or not secrets.compare_digest(provided_token, admin_token):
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    return None
+
+
+@app.route('/api/admin/remote-worker', methods=['GET'])
+def api_admin_remote_worker_get():
+    """
+    Get remote worker configuration (without token).
+    Requires X-Admin-Token header.
+    """
+    auth_error = _require_admin_token()
+    if auth_error:
+        return auth_error
+    
+    try:
+        from config_store import get_remote_worker_config
+        config = get_remote_worker_config()
+        
+        # Also include current effective config source
+        from remote_worker import get_worker_config
+        effective = get_worker_config()
+        config['configSource'] = effective.get('configSource', 'unknown')
+        
+        response = jsonify(config)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/admin/remote-worker', methods=['POST'])
+def api_admin_remote_worker_post():
+    """
+    Update remote worker configuration.
+    Requires X-Admin-Token header.
+    
+    Body: { url?: string, token?: string, mode?: 'off'|'optional'|'required' }
+    - If token is omitted, existing token is preserved
+    - If token is empty string, token is cleared
+    """
+    auth_error = _require_admin_token()
+    if auth_error:
+        return auth_error
+    
+    try:
+        data = request.get_json() or {}
+        
+        from config_store import save_remote_worker_config
+        
+        # Extract fields (None means "don't change")
+        url = data.get('url')
+        token = data.get('token')  # None = keep, '' = clear
+        mode = data.get('mode')
+        
+        # Validate mode if provided
+        if mode is not None and mode not in ('off', 'optional', 'required'):
+            return jsonify({'error': f"Invalid mode: {mode}. Must be 'off', 'optional', or 'required'"}), 400
+        
+        # Save config
+        saved = save_remote_worker_config(url=url, token=token, mode=mode)
+        
+        # Clear the worker status cache so next request uses new config
+        from remote_worker import _worker_status_cache, _worker_status_cache_time
+        _worker_status_cache.clear()
+        _worker_status_cache_time.clear()
+        
+        return jsonify(saved)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/admin/remote-worker/test', methods=['POST'])
+def api_admin_remote_worker_test():
+    """
+    Test connection to remote worker.
+    Requires X-Admin-Token header.
+    
+    Body: { url?: string, token?: string }
+    - If url/token omitted, uses saved config
+    """
+    auth_error = _require_admin_token()
+    if auth_error:
+        return auth_error
+    
+    try:
+        import requests as req
+        from urllib.parse import urljoin
+        
+        data = request.get_json() or {}
+        
+        # Get URL and token (from request or saved config)
+        url = data.get('url')
+        token = data.get('token')
+        
+        if not url or not token:
+            # Fall back to saved config
+            from config_store import get_remote_worker_url, get_remote_worker_token
+            if not url:
+                url = get_remote_worker_url()
+            if not token:
+                token = get_remote_worker_token()
+        
+        if not url:
+            return jsonify({'ok': False, 'error': 'No URL provided or saved'}), 400
+        if not token:
+            return jsonify({'ok': False, 'error': 'No token provided or saved'}), 400
+        
+        # Test connection
+        start_time = time.time()
+        try:
+            resp = req.get(
+                urljoin(url, '/v1/ping'),
+                headers={'Authorization': f'Bearer {token}'},
+                timeout=10
+            )
+            latency_ms = int((time.time() - start_time) * 1000)
+            
+            if resp.status_code == 200:
+                ping_data = resp.json()
+                return jsonify({
+                    'ok': True,
+                    'latencyMs': latency_ms,
+                    'identity': ping_data.get('identity'),
+                    'version': ping_data.get('version'),
+                    'gpu': ping_data.get('gpu'),
+                    'gpuName': ping_data.get('gpuName'),
+                    'diarization': ping_data.get('diarization'),
+                    'warnings': ping_data.get('warnings')
+                })
+            elif resp.status_code in (401, 403):
+                return jsonify({
+                    'ok': False,
+                    'error': 'Authentication failed (invalid token)',
+                    'latencyMs': latency_ms
+                })
+            else:
+                return jsonify({
+                    'ok': False,
+                    'error': f'Worker returned status {resp.status_code}',
+                    'latencyMs': latency_ms
+                })
+        except req.exceptions.Timeout:
+            return jsonify({'ok': False, 'error': 'Connection timed out'})
+        except req.exceptions.ConnectionError as e:
+            return jsonify({'ok': False, 'error': f'Connection failed: {str(e)[:100]}'})
+        except Exception as e:
+            return jsonify({'ok': False, 'error': str(e)[:100]})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 def run_with_webview():
