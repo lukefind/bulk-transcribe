@@ -83,3 +83,6 @@ Test File/
 AGENTS.md
 transcript_schema.py
 templates/review.html
+
+# Local notes
+.notes/
