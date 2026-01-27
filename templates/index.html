@@ -1389,7 +1389,7 @@
         let diarizationPolicyConfig = null;
         
         async function updateDiarizationPolicy() {
-            const diarizationEnabled = document.getElementById('enableDiarization')?.checked || false;
+            const diarizationEnabled = document.getElementById('diarizationEnabled')?.checked || false;
             const autoSplit = document.getElementById('diarizationAutoSplit')?.checked || false;
             const maxDuration = parseInt(document.getElementById('diarizationMaxDuration')?.value || '180', 10);
             
@@ -1480,7 +1480,7 @@
         document.addEventListener('DOMContentLoaded', function() {
             const autoSplitCheckbox = document.getElementById('diarizationAutoSplit');
             const maxDurationSelect = document.getElementById('diarizationMaxDuration');
-            const diarizationCheckbox = document.getElementById('enableDiarization');
+            const diarizationCheckbox = document.getElementById('diarizationEnabled');
             
             if (autoSplitCheckbox) {
                 autoSplitCheckbox.addEventListener('change', updateDiarizationPolicy);
@@ -2063,10 +2063,14 @@
             const backendSelect = document.getElementById('processingMode');
             const diarizationEnabled = document.getElementById('diarizationEnabled')?.checked || false;
             
+            // Map 'remote' to actual backend - remote is a UI concept, not a valid backend value
+            const selectedBackend = backendSelect ? backendSelect.value : recommendedBackend;
+            const effectiveBackend = selectedBackend === 'remote' ? recommendedBackend : selectedBackend;
+            
             const options = {
                 model: document.getElementById('model').value,
                 language: document.getElementById('language').value,
-                backend: backendSelect ? backendSelect.value : recommendedBackend,
+                backend: effectiveBackend,
                 includeSegments: document.getElementById('includeSegments').checked,
                 includeFull: document.getElementById('includeFull').checked,
                 includeTimestamps: document.getElementById('includeTimestamps').checked,
