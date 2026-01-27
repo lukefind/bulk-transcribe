@@ -157,6 +157,44 @@ class TimelineParser:
             segments = data.get('segments', [])
         else:
             segments = []
+
+        # Normalize and deduplicate near-identical overlapping segments.
+        # Some diarization outputs include duplicate segments at the same
+        # timestamps with different speaker assignments.
+        def _segment_key(seg: dict) -> tuple[float, float]:
+            return (float(seg.get('start', 0) or 0), float(seg.get('end', 0) or 0))
+
+        segments = sorted(segments, key=_segment_key)
+        deduped_segments = []
+        epsilon = 0.25
+        for seg in segments:
+            if not deduped_segments:
+                deduped_segments.append(seg)
+                continue
+
+            prev = deduped_segments[-1]
+            prev_start = float(prev.get('start', 0) or 0)
+            prev_end = float(prev.get('end', 0) or 0)
+            cur_start = float(seg.get('start', 0) or 0)
+            cur_end = float(seg.get('end', 0) or 0)
+
+            near_same_time = abs(cur_start - prev_start) <= epsilon and abs(cur_end - prev_end) <= epsilon
+            if not near_same_time:
+                deduped_segments.append(seg)
+                continue
+
+            prev_text = (prev.get('text') or '').strip()
+            cur_text = (seg.get('text') or '').strip()
+            prev_duration = max(0.0, prev_end - prev_start)
+            cur_duration = max(0.0, cur_end - cur_start)
+
+            # Prefer segments with text; otherwise prefer longer duration.
+            prev_score = (1 if prev_text else 0, len(prev_text), prev_duration)
+            cur_score = (1 if cur_text else 0, len(cur_text), cur_duration)
+            if cur_score > prev_score:
+                deduped_segments[-1] = seg
+
+        segments = deduped_segments
         
         # Also parse transcript JSON for better text if available
         transcript_segments = []
