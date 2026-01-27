@@ -86,3 +86,7 @@ templates/review.html
 
 # Local notes
 .notes/
+
+# Local-only notes
+.local/
+.gitignore
