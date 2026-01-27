@@ -205,12 +205,50 @@
         :root.theme-light #reviewTimelineContent .edit-actions button:not(.bg-primary-600):hover {
             background-color: #e2e8f0 !important;
         }
+        
+        /* Light mode: Recent Jobs sticky header */
+        :root.theme-light #jobHistory > .sticky {
+            background-color: #ffffff !important;
+            border-bottom-color: #e2e8f0 !important;
+        }
+        :root.theme-light #bulkSelectionToolbar {
+            border-top-color: #e2e8f0 !important;
+        }
+        
+        /* Job card row styling */
+        .job-card-row {
+            background-color: rgba(30, 41, 59, 0.3);
+            border: 1px solid rgba(55, 65, 81, 0.3);
+            border-radius: 0.5rem;
+            padding: 0.75rem 1rem;
+            transition: all 0.15s ease;
+        }
+        .job-card-row:hover {
+            background-color: rgba(30, 41, 59, 0.5);
+            border-color: rgba(99, 102, 241, 0.3);
+        }
+        .job-card-row.selected {
+            background-color: rgba(99, 102, 241, 0.1);
+            border-color: rgba(99, 102, 241, 0.4);
+        }
+        :root.theme-light .job-card-row {
+            background-color: rgba(241, 245, 249, 0.5);
+            border-color: rgba(203, 213, 225, 0.5);
+        }
+        :root.theme-light .job-card-row:hover {
+            background-color: rgba(241, 245, 249, 0.8);
+            border-color: rgba(99, 102, 241, 0.3);
+        }
+        :root.theme-light .job-card-row.selected {
+            background-color: rgba(99, 102, 241, 0.08);
+            border-color: rgba(99, 102, 241, 0.4);
+        }
     </style>
 </head>
 <body class="text-gray-100 min-h-screen">
     <!-- Header -->
     <header class="border-b border-primary-900/30">
-        <div class="max-w-4xl mx-auto px-6 py-6">
+        <div class="max-w-6xl mx-auto px-6 py-6">
             <div class="flex items-center gap-4">
                 <img src="/static/apple-icon-60x60.png" alt="Bulk Transcribe" class="w-14 h-14 rounded-2xl shadow-lg shadow-primary-500/20">
                 <div>
@@ -221,7 +259,7 @@
         </div>
     </header>
 
-    <main class="max-w-4xl mx-auto px-6 py-8">
+    <main class="max-w-6xl mx-auto px-6 py-8 space-y-6">
         <!-- Mode indicator -->
         {% if is_server_mode %}
         <div class="mb-4 text-xs text-gray-500 flex items-center gap-4">
@@ -277,48 +315,52 @@
             </div>
             
             <!-- Job History (Server Mode) -->
-            <div id="jobHistory" class="glass rounded-2xl p-5 card hidden">
-                <div class="flex items-center justify-between mb-3">
-                    <label class="flex items-center gap-2 text-sm font-medium text-gray-300">
-                        <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                        </svg>
-                        Recent Jobs
-                        <span id="selectedJobsBadge" class="hidden ml-1 px-1.5 py-0.5 text-[10px] bg-primary-600/50 text-primary-200 rounded">0 selected</span>
-                    </label>
-                    <div class="flex items-center gap-2">
-                        <button type="button" onclick="openImportModal()" class="text-xs text-primary-400 hover:text-primary-300 flex items-center gap-1">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+            <div id="jobHistory" class="glass rounded-2xl card hidden">
+                <!-- Sticky Header -->
+                <div class="sticky top-0 z-10 bg-surface-800 rounded-t-2xl border-b border-gray-700/50 p-4">
+                    <div class="flex items-center justify-between">
+                        <label class="flex items-center gap-2 text-sm font-medium text-gray-300">
+                            <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                             </svg>
-                            Import
-                        </button>
-                        <label class="text-xs text-primary-400 hover:text-primary-300 flex items-center gap-1 cursor-pointer">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
-                            </svg>
-                            Bulk Import
-                            <input type="file" accept=".zip" multiple class="hidden" onchange="bulkImportProjects(this.files); this.value='';">
+                            Recent Jobs
+                            <span id="selectedJobsBadge" class="hidden ml-1 px-1.5 py-0.5 text-[10px] bg-primary-600/50 text-primary-200 rounded">0 selected</span>
                         </label>
-                        <button type="button" id="bulkExportHeaderBtn" onclick="bulkExportSelectedJobs()" disabled class="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed">Bulk Export (select)</button>
-                        <button type="button" onclick="selectAllJobsForBulkActions()" class="text-xs text-gray-400 hover:text-gray-300">Select All</button>
-                        <button type="button" onclick="clearAllJobsForBulkActions()" class="text-xs text-gray-400 hover:text-gray-300">Clear All</button>
-                        <button type="button" onclick="loadJobHistory()" class="text-xs text-gray-400 hover:text-gray-300">Refresh</button>
+                        <div class="flex items-center gap-3">
+                            <button type="button" onclick="openImportModal()" class="text-xs text-primary-400 hover:text-primary-300 flex items-center gap-1">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+                                </svg>
+                                Import
+                            </button>
+                            <label class="text-xs text-primary-400 hover:text-primary-300 flex items-center gap-1 cursor-pointer">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+                                </svg>
+                                Bulk Import
+                                <input type="file" accept=".zip" multiple class="hidden" onchange="bulkImportProjects(this.files); this.value='';">
+                            </label>
+                            <button type="button" id="bulkExportHeaderBtn" onclick="bulkExportSelectedJobs()" disabled class="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed">Bulk Export (select)</button>
+                            <span class="text-gray-600">|</span>
+                            <button type="button" onclick="selectAllJobsForBulkActions()" class="text-xs text-gray-400 hover:text-gray-300">Select All</button>
+                            <button type="button" onclick="clearAllJobsForBulkActions()" class="text-xs text-gray-400 hover:text-gray-300">Clear</button>
+                            <button type="button" onclick="loadJobHistory()" class="text-xs text-gray-400 hover:text-gray-300">Refresh</button>
+                        </div>
+                    </div>
+                    <!-- Bulk Selection Toolbar (appears when jobs selected) -->
+                    <div id="bulkSelectionToolbar" class="hidden mt-3 pt-3 border-t border-gray-700/50 flex items-center justify-between">
+                        <span class="text-sm text-gray-300"><span id="bulkSelectedCount">0</span> selected</span>
+                        <div class="flex items-center gap-2">
+                            <button onclick="bulkExportSelectedJobs()" class="px-3 py-1.5 text-xs bg-primary-600/70 hover:bg-primary-600 text-white rounded transition-all">Bulk Export</button>
+                            <button onclick="rerunSelectedJobs()" class="px-3 py-1.5 text-xs bg-surface-600/70 hover:bg-surface-600 text-gray-200 rounded transition-all">Re-run Selected</button>
+                            <button onclick="clearAllJobsForBulkActions()" class="px-3 py-1.5 text-xs text-gray-400 hover:text-white transition-all">Clear Selection</button>
+                        </div>
                     </div>
                 </div>
-                <div id="jobHistoryList" class="space-y-2 max-h-48 overflow-auto"></div>
-                <!-- Bulk Selection Toolbar -->
-                <div id="bulkSelectionToolbar" class="bulk-toolbar hidden mt-2 rounded-lg flex items-center justify-between">
-                    <span class="text-sm text-gray-300"><span id="bulkSelectedCount">0</span> selected</span>
-                    <div class="flex items-center gap-2">
-                        <button onclick="bulkExportSelectedJobs()" class="px-3 py-1.5 text-xs bg-primary-600/70 hover:bg-primary-600 text-white rounded transition-all">Bulk Export</button>
-                        <button onclick="rerunSelectedJobs()" class="px-3 py-1.5 text-xs bg-surface-600/70 hover:bg-surface-600 text-gray-200 rounded transition-all">Re-run Selected</button>
-                        <button onclick="selectAllJobsForBulkActions()" class="px-3 py-1.5 text-xs bg-surface-700/70 hover:bg-surface-700 text-gray-300 rounded transition-all">Select All</button>
-                        <button onclick="clearAllJobsForBulkActions()" class="px-3 py-1.5 text-xs text-gray-400 hover:text-white transition-all">Clear</button>
-                    </div>
-                </div>
+                <!-- Jobs List (no nested scroll) -->
+                <div id="jobHistoryList" class="p-4 space-y-3"></div>
                 <!-- Job Details Drawer -->
-                <div id="jobDetailsDrawer" class="hidden mt-3 p-3 bg-surface-700/30 rounded-lg border border-gray-700/30">
+                <div id="jobDetailsDrawer" class="hidden mx-4 mb-4 p-3 bg-surface-700/30 rounded-lg border border-gray-700/30">
                     <div class="flex items-center justify-between mb-2">
                         <span class="text-xs font-medium text-gray-300">Job Details</span>
                         <button onclick="closeJobDetailsDrawer()" class="text-gray-500 hover:text-gray-300 text-xs">✕</button>
@@ -1010,7 +1052,7 @@
     <!-- Legacy reviewPanel reference for compatibility -->
     <div id="reviewPanel" class="hidden"></div>
     
-    <main class="max-w-4xl mx-auto px-6 py-8" id="mainContentContinued">
+    <main class="max-w-6xl mx-auto px-6 py-8" id="mainContentContinued">
         
         <!-- Speaker Label Editor Modal -->
         <div id="speakerEditorModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
@@ -1063,7 +1105,7 @@
     
     <!-- Footer -->
     <footer class="border-t border-primary-900/20 mt-12">
-        <div class="max-w-4xl mx-auto px-6 py-4">
+        <div class="max-w-6xl mx-auto px-6 py-4">
             <p class="text-xs text-gray-500 text-center">Powered by OpenAI Whisper</p>
         </div>
     </footer>
@@ -2004,7 +2046,9 @@
             
             jobs.slice(0, 10).forEach(job => {
                 const div = document.createElement('div');
-                div.className = 'flex items-center justify-between p-3 bg-surface-800/50 rounded-lg hover:bg-surface-700/50 transition-all group';
+                const isSelected = selectedJobIds.has(job.jobId);
+                div.className = `job-card-row group${isSelected ? ' selected' : ''}`;
+                div.dataset.jobId = job.jobId;
                 
                 const statusColors = {
                     'complete': 'text-green-400',
@@ -2014,7 +2058,16 @@
                     'canceled': 'text-gray-400',
                     'queued': 'text-blue-400'
                 };
+                const statusBgColors = {
+                    'complete': 'bg-green-400',
+                    'complete_with_errors': 'bg-amber-400',
+                    'running': 'bg-yellow-400',
+                    'failed': 'bg-red-400',
+                    'canceled': 'bg-gray-400',
+                    'queued': 'bg-blue-400'
+                };
                 const statusColor = statusColors[job.status] || 'text-gray-400';
+                const statusBg = statusBgColors[job.status] || 'bg-gray-400';
                 const isRunning = job.status === 'running' || job.status === 'queued';
                 const isReviewable = job.reviewable && !isRunning;
                 
@@ -2022,63 +2075,60 @@
                 const primaryFilename = job.primaryFilename || `${job.inputCount} file(s)`;
                 const elapsed = formatDuration(job.elapsedSeconds);
                 const audioDuration = formatDuration(job.primaryDurationSec);
-                const timingBits = [elapsed ? `took ${elapsed}` : '', audioDuration ? `audio ${audioDuration}` : '']
-                    .filter(Boolean)
-                    .join(' • ');
                 const execLabel = job.executionMode === 'remote' ? 'remote' : 'local';
                 const modelLabel = job.model ? `${job.model}` : '';
                 const backendLabel = job.backend ? `${job.backend}` : '';
                 
                 div.innerHTML = `
-                    <div class="flex items-center gap-3 cursor-pointer flex-1" onclick="loadJob('${job.jobId}')">
-                        <span class="w-2 h-2 rounded-full ${statusColor.replace('text-', 'bg-')} ${isRunning ? 'animate-pulse' : ''}"></span>
-                        <div>
-                            <div class="text-sm text-gray-300 truncate max-w-[220px]" title="${escapeHtml(primaryFilename)}">${escapeHtml(primaryFilename)}</div>
-                            <div class="text-xs text-gray-500">${date}${timingBits ? ` • ${timingBits}` : ''}</div>
-                            <div class="mt-1 flex items-center gap-2 text-[10px] text-gray-400 uppercase tracking-wide">
-                                ${modelLabel ? `<span class="px-1.5 py-0.5 rounded bg-surface-700/60">${escapeHtml(modelLabel)}</span>` : ''}
-                                ${backendLabel ? `<span class="px-1.5 py-0.5 rounded bg-surface-700/60">${escapeHtml(backendLabel)}</span>` : ''}
-                                <span class="px-1.5 py-0.5 rounded bg-surface-700/40">${execLabel}</span>
-                                ${job.diarizationEnabled ? '<span class="px-1.5 py-0.5 rounded bg-surface-700/40">diarization</span>' : ''}
-                            </div>
+                    <!-- Row 1: Filename + Status/Actions -->
+                    <div class="flex items-center justify-between mb-2">
+                        <div class="flex items-center gap-3 cursor-pointer flex-1 min-w-0" onclick="loadJob('${job.jobId}')">
+                            ${!isRunning ? `
+                                <input type="checkbox" class="job-select-checkbox w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 cursor-pointer flex-shrink-0"
+                                       data-job-id="${job.jobId}"
+                                       ${isSelected ? 'checked' : ''}
+                                       onclick="event.stopPropagation(); toggleJobSelection('${job.jobId}', this.checked)"
+                                       title="Select for batch actions">
+                            ` : '<span class="w-4"></span>'}
+                            <span class="w-2 h-2 rounded-full ${statusBg} ${isRunning ? 'animate-pulse' : ''} flex-shrink-0"></span>
+                            <span class="font-medium text-gray-200 truncate" title="${escapeHtml(primaryFilename)}">${escapeHtml(primaryFilename)}</span>
+                        </div>
+                        <div class="flex items-center gap-2 flex-shrink-0 ml-3">
+                            <span class="text-xs ${statusColor} font-medium">${job.status.replace('_', ' ')}</span>
+                            ${isReviewable ? `
+                                <button onclick="event.stopPropagation(); openReviewForJob('${job.jobId}')" 
+                                        class="px-2.5 py-1 text-xs bg-primary-600/60 hover:bg-primary-600 text-primary-100 rounded transition-all font-medium"
+                                        title="Review transcript">
+                                    Review
+                                </button>
+                            ` : ''}
+                            ${!isRunning ? `
+                                <button onclick="event.stopPropagation(); rerunJob('${job.jobId}')" 
+                                        class="px-2 py-1 text-xs bg-surface-600/50 hover:bg-surface-600 text-gray-300 rounded transition-all"
+                                        title="Re-run this job">
+                                    Re-run
+                                </button>
+                                <button onclick="event.stopPropagation(); deleteJob('${job.jobId}')" 
+                                        class="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 transition-all"
+                                        title="Delete job">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                    </svg>
+                                </button>
+                            ` : ''}
                         </div>
                     </div>
-                    <div class="flex items-center gap-2">
-                        ${!isRunning ? `
-                            <input type="checkbox" class="job-select-checkbox w-3.5 h-3.5 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 cursor-pointer"
-                                   data-job-id="${job.jobId}"
-                                   onclick="event.stopPropagation(); toggleJobSelection('${job.jobId}', this.checked)"
-                                   title="Select for batch actions">
-                        ` : ''}
-                        ${isReviewable ? `
-                            <button onclick="event.stopPropagation(); openReviewForJob('${job.jobId}')" 
-                                    class="px-2 py-1 text-xs bg-primary-600/50 hover:bg-primary-600 text-primary-200 rounded transition-all"
-                                    title="Review transcript">
-                                Review
-                            </button>
-                        ` : ''}
-                        ${!isRunning ? `
-                            <button onclick="event.stopPropagation(); rerunJob('${job.jobId}')" 
-                                    class="px-2 py-1 text-xs bg-surface-600/50 hover:bg-surface-600 text-gray-300 rounded transition-all"
-                                    title="Re-run this job with same settings">
-                                Re-run
-                            </button>
-                            <button onclick="event.stopPropagation(); showJobDetails('${job.jobId}')" 
-                                    class="px-2 py-1 text-xs bg-surface-700/50 hover:bg-surface-700 text-gray-400 rounded transition-all"
-                                    title="View job details">
-                                Details
-                            </button>
-                        ` : ''}
-                        <span class="text-xs ${statusColor}">${job.status.replace('_', ' ')}</span>
-                        ${!isRunning ? `
-                            <button onclick="event.stopPropagation(); deleteJob('${job.jobId}')" 
-                                    class="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 transition-all"
-                                    title="Delete job">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
-                                </svg>
-                            </button>
-                        ` : ''}
+                    <!-- Row 2: Metadata -->
+                    <div class="flex items-center gap-3 text-xs text-gray-500 pl-7">
+                        <span>${date}</span>
+                        ${audioDuration ? `<span>• ${audioDuration} audio</span>` : ''}
+                        ${elapsed ? `<span>• took ${elapsed}</span>` : ''}
+                        <div class="flex items-center gap-1.5 ml-auto">
+                            ${modelLabel ? `<span class="px-1.5 py-0.5 rounded bg-surface-700/60 text-gray-400 text-[10px] uppercase">${escapeHtml(modelLabel)}</span>` : ''}
+                            ${backendLabel ? `<span class="px-1.5 py-0.5 rounded bg-surface-700/60 text-gray-400 text-[10px] uppercase">${escapeHtml(backendLabel)}</span>` : ''}
+                            <span class="px-1.5 py-0.5 rounded bg-surface-700/40 text-gray-400 text-[10px] uppercase">${execLabel}</span>
+                            ${job.diarizationEnabled ? '<span class="px-1.5 py-0.5 rounded bg-surface-700/40 text-gray-400 text-[10px] uppercase">diarization</span>' : ''}
+                        </div>
                     </div>
                 `;
                 list.appendChild(div);
@@ -2166,6 +2216,11 @@
                 selectedJobIds.add(jobId);
             } else {
                 selectedJobIds.delete(jobId);
+            }
+            // Update card row styling
+            const row = document.querySelector(`.job-card-row[data-job-id="${jobId}"]`);
+            if (row) {
+                row.classList.toggle('selected', selected);
             }
             updateRerunSelectedButton();
         }
@@ -5337,7 +5392,7 @@
     
     <!-- Footer with version info -->
     <footer class="border-t border-primary-900/30 mt-8 py-4">
-        <div class="max-w-4xl mx-auto px-6 flex justify-between items-center text-xs text-gray-500">
+        <div class="max-w-6xl mx-auto px-6 flex justify-between items-center text-xs text-gray-500">
             <span>Bulk Transcribe</span>
             <span id="buildVersion" class="cursor-help"></span>
         </div>
