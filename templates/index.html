@@ -1037,6 +1037,9 @@
                     </div>
                     <div id="speakerLegendList" class="space-y-2"></div>
                     <div id="noSpeakersMessage" class="text-xs text-gray-500 italic hidden">Single speaker transcript</div>
+                    <button onclick="addManualSpeaker()" class="mt-2 w-full px-3 py-2 text-xs rounded bg-surface-700 hover:bg-surface-600 text-gray-300 transition-colors">
+                        + Add Speaker
+                    </button>
                 </div>
                 
                 <!-- Keyboard Shortcuts -->
@@ -4687,8 +4690,20 @@
                         speakerLabelMap: loaded.speakerLabelMap || {},
                         speakerColorMap: loaded.speakerColorMap || {},
                         chunkEdits: loaded.chunkEdits || {},
-                        uiPrefs: loaded.uiPrefs || {}
+                        uiPrefs: loaded.uiPrefs || {},
+                        manualSpeakers: loaded.manualSpeakers || []
                     };
+                    
+                    // Merge manual speakers into timeline if missing
+                    if (reviewState.manualSpeakers?.length > 0 && reviewTimeline) {
+                        if (!reviewTimeline.speakers) reviewTimeline.speakers = [];
+                        const existingIds = new Set(reviewTimeline.speakers.map(s => s.id));
+                        for (const ms of reviewState.manualSpeakers) {
+                            if (!existingIds.has(ms.id)) {
+                                reviewTimeline.speakers.push(ms);
+                            }
+                        }
+                    }
                 }
                 
                 renderTimeline();
@@ -4907,6 +4922,40 @@
         
         function closeSpeakerColorPickers() {
             document.querySelectorAll('.speaker-color-picker').forEach(p => p.classList.add('hidden'));
+        }
+        
+        function addManualSpeaker() {
+            if (!reviewTimeline) return;
+            if (!reviewTimeline.speakers) reviewTimeline.speakers = [];
+            
+            const nextIndex = reviewTimeline.speakers.length + 1;
+            const newId = `MANUAL_${Date.now()}`;
+            const newLabel = `Speaker ${nextIndex}`;
+            const color = SPEAKER_COLOR_PALETTE[nextIndex % SPEAKER_COLOR_PALETTE.length];
+            
+            const newSpeaker = { id: newId, label: newLabel, color };
+            reviewTimeline.speakers.push(newSpeaker);
+            
+            // Update review state maps
+            if (!reviewState.speakerLabelMap) reviewState.speakerLabelMap = {};
+            reviewState.speakerLabelMap[newId] = newLabel;
+            
+            if (!reviewState.speakerColorMap) reviewState.speakerColorMap = {};
+            reviewState.speakerColorMap[newId] = color;
+            
+            // Track manual speakers for persistence
+            if (!reviewState.manualSpeakers) reviewState.manualSpeakers = [];
+            reviewState.manualSpeakers.push(newSpeaker);
+            
+            markUnsaved();
+            renderSpeakerLegend();
+            renderTimeline();
+            saveReviewState();
+            
+            // Focus rename input for the new speaker
+            setTimeout(() => {
+                beginInlineSpeakerRename(newId, { stopPropagation: () => {} });
+            }, 50);
         }
         
         // Close color pickers when clicking outside
