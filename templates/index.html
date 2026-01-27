@@ -382,10 +382,10 @@
                         <div class="flex items-center justify-between mb-2">
                             <label class="text-xs text-gray-400">Max duration per segment</label>
                             <select id="diarizationMaxDuration" class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs">
-                                <option value="180" selected>3 min</option>
+                                <option value="180">3 min</option>
                                 <option value="300">5 min</option>
                                 <option value="600">10 min</option>
-                                <option value="900">15 min</option>
+                                <option value="900" selected>15 min</option>
                                 <option value="1200">20 min</option>
                                 <option value="1800">30 min</option>
                             </select>
@@ -397,6 +397,7 @@
                             </label>
                         </div>
                         <p class="text-xs text-gray-500 mt-1" id="autoSplitHelp">Splits files longer than max duration into overlapping chunks.</p>
+                        <p class="text-xs text-gray-500 mt-1">For ~25 minute files, 15 min with auto-split works well.</p>
                     </div>
                 </div>
                 
@@ -644,10 +645,20 @@
                     <div class="h-6 w-px bg-gray-700 ml-2"></div>
                     <div class="flex items-center gap-2">
                         <label class="text-xs text-gray-500">Switch job:</label>
+                        <button onclick="reviewPrevJob()" id="reviewPrevBtn" class="px-1.5 py-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 text-xs disabled:opacity-40 disabled:cursor-not-allowed" title="Previous job">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                        </button>
                         <select id="reviewJobSelect" onchange="onReviewJobSelectChange()" 
-                                class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs max-w-[200px]">
+                                class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs min-w-[200px] max-w-[320px]">
                         </select>
+                        <button onclick="reviewNextJob()" id="reviewNextBtn" class="px-1.5 py-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 text-xs disabled:opacity-40 disabled:cursor-not-allowed" title="Next job">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        </button>
+                        <button onclick="loadReviewJobOptions(reviewJobData?.jobId)" class="px-1.5 py-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 text-xs" title="Refresh job list">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                        </button>
                     </div>
+                    <span id="reviewActiveJobBadge" class="hidden text-xs px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400"></span>
                 </div>
                 <div class="flex items-center gap-3">
                     <!-- Save Status Indicator -->
@@ -1106,7 +1117,7 @@
             wordTimestamps: 'bulk_transcribe_word_timestamps',
             qualityPreset: 'bulk_transcribe_quality_preset',
             silenceThreshold: 'bulk_transcribe_silence_threshold',
-            maxSegmentLength: 'bulk_transcribe_max_segment_length'
+            maxSegmentDuration: 'bulk_transcribe_max_segment_duration'
         };
 
         function saveToStorage(key, value) {
@@ -1174,7 +1185,7 @@
             _restoreCheckbox('wordTimestamps', STORAGE_KEYS.wordTimestamps);
             _restoreSelect('qualityPreset', STORAGE_KEYS.qualityPreset);
             _restoreSelect('silenceThreshold', STORAGE_KEYS.silenceThreshold);
-            _restoreSelect('maxSegmentLength', STORAGE_KEYS.maxSegmentLength);
+            _restoreSelect('maxSegmentDuration', STORAGE_KEYS.maxSegmentDuration);
 
             updateDiarizationOptions();
             updateDiarizationPolicy();
@@ -1953,7 +1964,7 @@
             persistCheckbox('wordTimestamps', STORAGE_KEYS.wordTimestamps);
             persistSelect('qualityPreset', STORAGE_KEYS.qualityPreset);
             persistSelect('silenceThreshold', STORAGE_KEYS.silenceThreshold);
-            persistSelect('maxSegmentLength', STORAGE_KEYS.maxSegmentLength);
+            persistSelect('maxSegmentDuration', STORAGE_KEYS.maxSegmentDuration);
             
             // Initialize worker options and output option states
             updateWorkerOptions();
@@ -3384,6 +3395,7 @@
         let searchDebounceTimer = null;
         let saveDebounceTimer = null;
         let reviewJobList = [];  // Cache for job switcher dropdown
+        let reviewJobOptionsOrdered = [];  // Ordered list of job IDs for prev/next navigation
         
         async function loadReviewJobOptions(selectedJobId = null) {
             try {
@@ -3404,20 +3416,71 @@
                 // Sort by createdAt descending (most recent first)
                 eligibleJobs.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
                 
+                // Deduplicate by filename (keep most recent per filename)
+                const seenFilenames = new Map();
+                const dedupedJobs = [];
+                for (const job of eligibleJobs) {
+                    const filenameKey = (job.primaryFilename || '').toLowerCase().trim();
+                    if (!seenFilenames.has(filenameKey)) {
+                        seenFilenames.set(filenameKey, job);
+                        dedupedJobs.push(job);
+                    }
+                }
+                
+                // Ensure current job is included even if deduped out
+                if (selectedJobId) {
+                    const currentInList = dedupedJobs.find(j => j.jobId === selectedJobId);
+                    if (!currentInList) {
+                        const currentJob = eligibleJobs.find(j => j.jobId === selectedJobId);
+                        if (currentJob) {
+                            dedupedJobs.unshift(currentJob);
+                        }
+                    }
+                }
+                
                 // Limit to recent jobs
-                const recentJobs = eligibleJobs.slice(0, 20);
+                const recentJobs = dedupedJobs.slice(0, 20);
+                
+                // Store ordered list for prev/next navigation
+                reviewJobOptionsOrdered = recentJobs.map(j => j.jobId);
+                
+                // Check for any running/queued jobs and show badge
+                const activeJob = reviewJobList.find(j => j.status === 'running' || j.status === 'queued');
+                const badge = document.getElementById('reviewActiveJobBadge');
+                if (badge) {
+                    if (activeJob) {
+                        badge.textContent = activeJob.status === 'running' ? 'Active job running' : 'Active job queued';
+                        badge.classList.remove('hidden');
+                    } else {
+                        badge.classList.add('hidden');
+                    }
+                }
                 
                 for (const job of recentJobs) {
                     const option = document.createElement('option');
                     option.value = job.jobId;
                     
-                    // Truncate filename for display
+                    // Rich label: filename • status • time • model
                     const filename = job.primaryFilename || `${job.inputCount} file(s)`;
-                    const truncated = filename.length > 25 ? filename.substring(0, 22) + '...' : filename;
-                    const statusBadge = job.status === 'running' ? ' ⏳' : job.status === 'queued' ? ' 📋' : '';
+                    const truncated = filename.length > 30 ? filename.substring(0, 27) + '...' : filename;
+                    const status = (job.status || 'unknown').replace(/_/g, ' ');
                     
-                    option.textContent = `${truncated}${statusBadge}`;
-                    option.title = filename;
+                    let timeStr = '';
+                    if (job.createdAt) {
+                        try {
+                            timeStr = new Date(job.createdAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+                        } catch (e) {}
+                    }
+                    
+                    const model = job.model || '';
+                    const backend = job.backend === 'remote' ? ' • remote' : '';
+                    
+                    const labelParts = [truncated, status];
+                    if (timeStr) labelParts.push(timeStr);
+                    if (model) labelParts.push(model + backend);
+                    
+                    option.textContent = labelParts.join(' • ');
+                    option.title = `${filename}\nJob: ${job.jobId}\nCreated: ${job.createdAt || 'unknown'}`;
                     
                     if (job.jobId === selectedJobId) {
                         option.selected = true;
@@ -3425,8 +3488,54 @@
                     
                     select.appendChild(option);
                 }
+                
+                // Update prev/next button states
+                updateReviewNavButtons();
             } catch (e) {
                 console.error('Failed to load review job options:', e);
+            }
+        }
+        
+        function getReviewJobIndex(jobId) {
+            return reviewJobOptionsOrdered.indexOf(jobId);
+        }
+        
+        function updateReviewNavButtons() {
+            const currentIdx = getReviewJobIndex(reviewJobData?.jobId);
+            const prevBtn = document.getElementById('reviewPrevBtn');
+            const nextBtn = document.getElementById('reviewNextBtn');
+            
+            if (prevBtn) prevBtn.disabled = currentIdx <= 0;
+            if (nextBtn) nextBtn.disabled = currentIdx < 0 || currentIdx >= reviewJobOptionsOrdered.length - 1;
+        }
+        
+        async function reviewPrevJob() {
+            const currentIdx = getReviewJobIndex(reviewJobData?.jobId);
+            if (currentIdx <= 0) return;
+            
+            const prevJobId = reviewJobOptionsOrdered[currentIdx - 1];
+            await openReviewForJobId(prevJobId);
+        }
+        
+        async function reviewNextJob() {
+            const currentIdx = getReviewJobIndex(reviewJobData?.jobId);
+            if (currentIdx < 0 || currentIdx >= reviewJobOptionsOrdered.length - 1) return;
+            
+            const nextJobId = reviewJobOptionsOrdered[currentIdx + 1];
+            await openReviewForJobId(nextJobId);
+        }
+        
+        async function openReviewForJobId(jobId) {
+            try {
+                const response = await fetch(`/api/jobs/${jobId}`);
+                const job = await response.json();
+                if (job.error) {
+                    showError(job.error);
+                    return;
+                }
+                await openReviewPanel(job);
+            } catch (e) {
+                showError(`Failed to load job: ${e.message}`);
             }
         }
         
@@ -3809,12 +3918,61 @@
                 const label = reviewState.speakerLabelMap?.[speaker.id] || speaker.label;
                 const div = document.createElement('div');
                 div.className = 'flex items-center gap-2 p-2 rounded-lg bg-surface-700/30 hover:bg-surface-700/50 cursor-pointer transition-colors';
+                div.dataset.speakerId = speaker.id;
                 div.innerHTML = `
                     <span class="w-3 h-3 rounded-full flex-shrink-0" style="background-color: ${speaker.color}"></span>
-                    <span class="text-sm text-gray-300 flex-1 truncate">${escapeHtml(label)}</span>
+                    <span class="speaker-label-text text-sm text-gray-300 flex-1 truncate" onclick="beginInlineSpeakerRename('${speaker.id}', event)" title="Click to rename">${escapeHtml(label)}</span>
                     <kbd class="px-1.5 py-0.5 bg-surface-600 rounded text-xs text-gray-400">${idx + 1}</kbd>
                 `;
                 list.appendChild(div);
+            });
+        }
+        
+        function beginInlineSpeakerRename(speakerId, event) {
+            event.stopPropagation();
+            
+            const speaker = reviewTimeline?.speakers?.find(s => s.id === speakerId);
+            if (!speaker) return;
+            
+            const labelSpan = event.target;
+            const currentLabel = reviewState.speakerLabelMap?.[speakerId] || speaker.label;
+            
+            // Create inline input
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = currentLabel;
+            input.className = 'w-full px-1 py-0.5 bg-surface-600 border border-primary-500 rounded text-white text-sm focus:outline-none';
+            input.maxLength = 40;
+            
+            // Replace span with input
+            labelSpan.replaceWith(input);
+            input.focus();
+            input.select();
+            
+            // Handle save on Enter or blur
+            const commitRename = async () => {
+                const newLabel = input.value.trim();
+                if (newLabel && newLabel !== speaker.label) {
+                    reviewState.speakerLabelMap[speakerId] = newLabel;
+                } else if (!newLabel || newLabel === speaker.label) {
+                    delete reviewState.speakerLabelMap[speakerId];
+                }
+                markUnsaved();
+                await saveReviewState();
+                updateSpeakerSidebar();
+                renderChunks();
+            };
+            
+            input.addEventListener('blur', commitRename);
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    input.blur();
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    input.removeEventListener('blur', commitRename);
+                    updateSpeakerSidebar();
+                }
             });
         }
         
