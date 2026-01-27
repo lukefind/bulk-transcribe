@@ -206,9 +206,10 @@ class ReviewTimeline:
                 else:
                     break  # Since kept is sorted by start, earlier chunks won't qualify
             
-            # Check against each candidate in window (most recent first)
-            found_duplicate = False
-            duplicate_idx = -1
+            # Check against each candidate in window, find best duplicate match
+            best_dup_idx = None
+            best_dup_score = None
+            best_dup_candidate = None
             
             for idx, candidate in recent_candidates:
                 cand_norm = normalize_text(candidate.text)
@@ -231,19 +232,30 @@ class ReviewTimeline:
                     likely_duplicate = True
                 
                 if likely_duplicate:
-                    found_duplicate = True
-                    duplicate_idx = idx
-                    # Keep the better chunk
-                    cand_score = chunk_score(candidate)
-                    cur_score = chunk_score(chunk)
+                    # Score this duplicate candidate: prefer exact match, higher overlap, closer start, longer text
+                    dup_score = (
+                        1 if exact_match else 0,
+                        overlap_ratio,
+                        -start_delta,
+                        len(cand_norm)
+                    )
                     
-                    if cur_score > cand_score:
-                        kept[idx] = chunk
-                    
-                    removed += 1
-                    break  # Stop scanning after first duplicate found
+                    if best_dup_score is None or dup_score > best_dup_score:
+                        best_dup_idx = idx
+                        best_dup_score = dup_score
+                        best_dup_candidate = candidate
             
-            if not found_duplicate:
+            # After scanning all candidates, handle best duplicate if found
+            if best_dup_idx is not None:
+                # Keep the better chunk between current and best candidate
+                cand_score = chunk_score(best_dup_candidate)
+                cur_score = chunk_score(chunk)
+                
+                if cur_score > cand_score:
+                    kept[best_dup_idx] = chunk
+                
+                removed += 1
+            else:
                 kept.append(chunk)
         
         self.chunks = kept
