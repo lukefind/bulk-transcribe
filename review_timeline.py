@@ -492,8 +492,10 @@ class TimelineParser:
             }
         )
         
-        # Try diarization JSON first (has speaker info)
-        if diarization_json:
+        # Priority: transcript as structure with diarization for speakers
+        if transcript_json and diarization_json:
+            self._parse_transcript_with_diarization(timeline, transcript_json, diarization_json)
+        elif diarization_json:
             self._parse_diarization_json(timeline, diarization_json, transcript_json)
         elif transcript_json:
             self._parse_transcript_json(timeline, transcript_json)
@@ -521,6 +523,185 @@ class TimelineParser:
         }
         
         return timeline
+    
+    def _parse_transcript_with_diarization(self, timeline: ReviewTimeline,
+                                            transcript_json: str,
+                                            diarization_json: str):
+        """
+        Parse transcript JSON as canonical structure, using diarization only for speaker assignment.
+        This reduces chattery speaker flips from diarization by using transcript segments as structure.
+        """
+        # A) Parse transcript segments
+        try:
+            transcript_data = json.loads(transcript_json)
+        except json.JSONDecodeError:
+            return
+        
+        if isinstance(transcript_data, list):
+            transcript_segments = transcript_data
+        elif isinstance(transcript_data, dict):
+            transcript_segments = transcript_data.get('segments', [])
+        else:
+            transcript_segments = []
+        
+        if not transcript_segments:
+            return
+        
+        # B) Parse diarization segments
+        try:
+            diar_data = json.loads(diarization_json)
+        except json.JSONDecodeError:
+            diar_data = []
+        
+        if isinstance(diar_data, list):
+            diar_segments_raw = diar_data
+        elif isinstance(diar_data, dict):
+            diar_segments_raw = diar_data.get('segments', [])
+        else:
+            diar_segments_raw = []
+        
+        # C) Normalize diarization segments
+        diar_segments = []
+        for ds in diar_segments_raw:
+            speaker = ds.get('speaker')
+            if not speaker:
+                continue
+            start = float(ds.get('start', 0) or 0)
+            end = float(ds.get('end', 0) or 0)
+            if end <= start:
+                continue
+            diar_segments.append({'start': start, 'end': end, 'speaker': speaker})
+        
+        # D) Assign speaker to each transcript segment by overlap
+        labeled_segments = []
+        for ts in transcript_segments:
+            ts_start = float(ts.get('start', 0) or 0)
+            ts_end = float(ts.get('end', ts_start) or ts_start)
+            if ts_end <= ts_start:
+                continue
+            
+            text = (ts.get('text') or '').strip()
+            segment_id = ts.get('id')
+            
+            # Compute overlap per speaker
+            speaker_overlap = {}
+            for ds in diar_segments:
+                overlap = max(0.0, min(ts_end, ds['end']) - max(ts_start, ds['start']))
+                if overlap > 0:
+                    speaker_overlap[ds['speaker']] = speaker_overlap.get(ds['speaker'], 0.0) + overlap
+            
+            # Choose speaker with max overlap
+            if speaker_overlap:
+                speaker_id = max(speaker_overlap, key=speaker_overlap.get)
+            else:
+                speaker_id = 'SPEAKER_00'
+            
+            timeline.add_speaker(speaker_id)
+            
+            labeled_segments.append({
+                'start': ts_start,
+                'end': ts_end,
+                'speaker_id': speaker_id,
+                'text': text,
+                'segment_id': segment_id
+            })
+        
+        # E) Speaker smoothing pass - reduce rapid speaker flips on short segments
+        for i, seg in enumerate(labeled_segments):
+            dur = seg['end'] - seg['start']
+            
+            # Rule 1: Short segment (<=1.25s) with same-speaker neighbors
+            if dur <= 1.25 and i > 0 and i < len(labeled_segments) - 1:
+                prev_seg = labeled_segments[i - 1]
+                next_seg = labeled_segments[i + 1]
+                prev_dur = prev_seg['end'] - prev_seg['start']
+                next_dur = next_seg['end'] - next_seg['start']
+                
+                if (prev_seg['speaker_id'] == next_seg['speaker_id'] and
+                    seg['speaker_id'] != prev_seg['speaker_id'] and
+                    (prev_dur >= 2.0 or next_dur >= 2.0)):
+                    seg['speaker_id'] = prev_seg['speaker_id']
+                    continue
+            
+            # Rule 2: Very short segment (<=0.8s) differs from both neighbors who agree
+            if dur <= 0.8 and i > 0 and i < len(labeled_segments) - 1:
+                prev_seg = labeled_segments[i - 1]
+                next_seg = labeled_segments[i + 1]
+                
+                if (prev_seg['speaker_id'] == next_seg['speaker_id'] and
+                    seg['speaker_id'] != prev_seg['speaker_id']):
+                    seg['speaker_id'] = prev_seg['speaker_id']
+        
+        # F) Build chunks from labeled transcript segments
+        MAX_CHUNK_SECONDS = 45
+        MAX_CHUNK_CHARS = 600
+        MAX_GAP_SECONDS = 1.25
+        
+        if not labeled_segments:
+            return
+        
+        chunks = []
+        current = {
+            'start': labeled_segments[0]['start'],
+            'end': labeled_segments[0]['end'],
+            'speaker_id': labeled_segments[0]['speaker_id'],
+            'text': labeled_segments[0]['text'],
+            'segment_ids': [labeled_segments[0]['segment_id']]
+        }
+        
+        for i in range(1, len(labeled_segments)):
+            seg = labeled_segments[i]
+            gap = seg['start'] - current['end']
+            combined_duration = seg['end'] - current['start']
+            combined_text_len = len(current['text']) + len(seg['text']) + 1
+            
+            # Check hard boundary (sentence end + gap)
+            cur_text_stripped = current['text'].rstrip()
+            ends_with_punct = cur_text_stripped and cur_text_stripped[-1] in '.?!'
+            hard_boundary = ends_with_punct and gap > 0.4
+            
+            # Merge conditions
+            should_merge = (
+                seg['speaker_id'] == current['speaker_id'] and
+                gap <= MAX_GAP_SECONDS and
+                combined_duration <= MAX_CHUNK_SECONDS and
+                combined_text_len <= MAX_CHUNK_CHARS and
+                not hard_boundary
+            )
+            
+            if should_merge:
+                current['end'] = seg['end']
+                current['text'] = (current['text'].rstrip() + ' ' + seg['text'].lstrip()).strip()
+                if seg['segment_id'] is not None:
+                    current['segment_ids'].append(seg['segment_id'])
+            else:
+                chunks.append(current)
+                current = {
+                    'start': seg['start'],
+                    'end': seg['end'],
+                    'speaker_id': seg['speaker_id'],
+                    'text': seg['text'],
+                    'segment_ids': [seg['segment_id']] if seg['segment_id'] is not None else []
+                }
+        
+        # Don't forget the last chunk
+        chunks.append(current)
+        
+        # G) Create Chunk objects
+        for idx, c in enumerate(chunks):
+            chunk = Chunk(
+                chunk_id=f't_{idx:06d}',
+                start=c['start'],
+                end=c['end'],
+                speaker_id=c['speaker_id'],
+                text=c['text'],
+                origin={
+                    'transcriptSegmentIds': c['segment_ids'],
+                    'speakerAssignedBy': 'diarization_overlap',
+                    'speakerSmoothing': True
+                }
+            )
+            timeline.chunks.append(chunk)
     
     def _parse_diarization_json(self, timeline: ReviewTimeline, 
                                  diarization_json: str,
