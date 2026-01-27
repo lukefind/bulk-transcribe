@@ -179,14 +179,22 @@ class TimelineParser:
             cur_end = float(seg.get('end', 0) or 0)
 
             near_same_time = abs(cur_start - prev_start) <= epsilon and abs(cur_end - prev_end) <= epsilon
-            if not near_same_time:
-                deduped_segments.append(seg)
-                continue
 
             prev_text = (prev.get('text') or '').strip()
             cur_text = (seg.get('text') or '').strip()
+
+            overlap = max(0.0, min(cur_end, prev_end) - max(cur_start, prev_start))
             prev_duration = max(0.0, prev_end - prev_start)
             cur_duration = max(0.0, cur_end - cur_start)
+            min_duration = max(1e-6, min(prev_duration, cur_duration))
+            overlap_ratio = overlap / min_duration
+            same_text = bool(prev_text) and prev_text.lower() == cur_text.lower()
+
+            likely_duplicate = near_same_time or (overlap_ratio >= 0.8 and same_text)
+
+            if not likely_duplicate:
+                deduped_segments.append(seg)
+                continue
 
             # Prefer segments with text; otherwise prefer longer duration.
             prev_score = (1 if prev_text else 0, len(prev_text), prev_duration)
@@ -239,8 +247,13 @@ class TimelineParser:
             data = json.loads(transcript_json)
         except json.JSONDecodeError:
             return
-        
-        segments = data.get('segments', [])
+
+        if isinstance(data, list):
+            segments = data
+        elif isinstance(data, dict):
+            segments = data.get('segments', [])
+        else:
+            segments = []
         
         # Add default speaker for non-diarized transcripts
         default_speaker = timeline.add_speaker('SPEAKER_00', 'Speaker 1')

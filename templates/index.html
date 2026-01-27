@@ -1085,7 +1085,21 @@
             inputFolder: 'bulk_transcribe_input_folder',
             outputFolder: 'bulk_transcribe_output_folder',
             lastModel: 'bulk_transcribe_last_model',
-            lastLanguage: 'bulk_transcribe_last_language'
+            lastLanguage: 'bulk_transcribe_last_language',
+            lastBackend: 'bulk_transcribe_last_backend',
+            diarizationEnabled: 'bulk_transcribe_diarization_enabled',
+            minSpeakers: 'bulk_transcribe_min_speakers',
+            maxSpeakers: 'bulk_transcribe_max_speakers',
+            numSpeakers: 'bulk_transcribe_num_speakers',
+            diarizationAutoSplit: 'bulk_transcribe_diarization_auto_split',
+            diarizationMaxDuration: 'bulk_transcribe_diarization_max_duration',
+            includeSegments: 'bulk_transcribe_include_segments',
+            includeFull: 'bulk_transcribe_include_full',
+            includeTimestamps: 'bulk_transcribe_include_timestamps',
+            wordTimestamps: 'bulk_transcribe_word_timestamps',
+            qualityPreset: 'bulk_transcribe_quality_preset',
+            silenceThreshold: 'bulk_transcribe_silence_threshold',
+            maxSegmentLength: 'bulk_transcribe_max_segment_length'
         };
 
         function saveToStorage(key, value) {
@@ -1096,11 +1110,32 @@
             try { return localStorage.getItem(key); } catch(e) { return null; }
         }
 
+        let savedBackendPreference = null;
+
+        function _restoreCheckbox(id, storageKey) {
+            const el = document.getElementById(id);
+            const saved = loadFromStorage(storageKey);
+            if (!el || saved === null) return;
+            el.checked = saved === 'true';
+        }
+
+        function _restoreSelect(id, storageKey) {
+            const el = document.getElementById(id);
+            const saved = loadFromStorage(storageKey);
+            if (!el || !saved) return;
+            const hasOption = Array.from(el.options).some(opt => opt.value === saved);
+            if (hasOption) {
+                el.value = saved;
+            }
+        }
+
         // Restore saved folders on page load
         function restoreSavedSettings() {
             const savedInput = loadFromStorage(STORAGE_KEYS.inputFolder);
             const savedOutput = loadFromStorage(STORAGE_KEYS.outputFolder);
             const savedLanguage = loadFromStorage(STORAGE_KEYS.lastLanguage);
+            const savedModel = loadFromStorage(STORAGE_KEYS.lastModel);
+            savedBackendPreference = loadFromStorage(STORAGE_KEYS.lastBackend);
             
             if (savedInput) {
                 document.getElementById('inputFolder').value = savedInput;
@@ -1112,6 +1147,30 @@
             if (savedLanguage) {
                 document.getElementById('language').value = savedLanguage;
             }
+            if (savedModel) {
+                const modelSelect = document.getElementById('model');
+                if (modelSelect) {
+                    const hasModel = Array.from(modelSelect.options).some(opt => opt.value === savedModel);
+                    if (hasModel) modelSelect.value = savedModel;
+                }
+            }
+
+            _restoreCheckbox('diarizationEnabled', STORAGE_KEYS.diarizationEnabled);
+            _restoreSelect('minSpeakers', STORAGE_KEYS.minSpeakers);
+            _restoreSelect('maxSpeakers', STORAGE_KEYS.maxSpeakers);
+            _restoreSelect('numSpeakers', STORAGE_KEYS.numSpeakers);
+            _restoreCheckbox('diarizationAutoSplit', STORAGE_KEYS.diarizationAutoSplit);
+            _restoreSelect('diarizationMaxDuration', STORAGE_KEYS.diarizationMaxDuration);
+            _restoreCheckbox('includeSegments', STORAGE_KEYS.includeSegments);
+            _restoreCheckbox('includeFull', STORAGE_KEYS.includeFull);
+            _restoreCheckbox('includeTimestamps', STORAGE_KEYS.includeTimestamps);
+            _restoreCheckbox('wordTimestamps', STORAGE_KEYS.wordTimestamps);
+            _restoreSelect('qualityPreset', STORAGE_KEYS.qualityPreset);
+            _restoreSelect('silenceThreshold', STORAGE_KEYS.silenceThreshold);
+            _restoreSelect('maxSegmentLength', STORAGE_KEYS.maxSegmentLength);
+
+            updateDiarizationOptions();
+            updateDiarizationPolicy();
         }
 
         // Toggle worker options based on processing mode
@@ -1338,10 +1397,15 @@
             // Select remote if connected and mode is required, otherwise recommended local
             if (remoteConnected && remoteMode === 'required') {
                 backendSelect.value = 'remote';
-            } else if (remoteConnected && remoteMode === 'optional') {
-                backendSelect.value = 'remote';  // Default to remote when available
             } else {
-                backendSelect.value = recommendedBackend;
+                const hasSaved = savedBackendPreference && Array.from(backendSelect.options).some(opt => opt.value === savedBackendPreference);
+                if (hasSaved) {
+                    backendSelect.value = savedBackendPreference;
+                } else if (remoteConnected && remoteMode === 'optional') {
+                    backendSelect.value = 'remote';
+                } else {
+                    backendSelect.value = recommendedBackend;
+                }
             }
             
             // Update platform info display
@@ -1600,13 +1664,28 @@
                 const isReviewable = job.reviewable && !isRunning;
                 
                 const date = job.createdAt ? new Date(job.createdAt).toLocaleString() : '';
+                const primaryFilename = job.primaryFilename || `${job.inputCount} file(s)`;
+                const elapsed = formatDuration(job.elapsedSeconds);
+                const audioDuration = formatDuration(job.primaryDurationSec);
+                const timingBits = [elapsed ? `took ${elapsed}` : '', audioDuration ? `audio ${audioDuration}` : '']
+                    .filter(Boolean)
+                    .join(' • ');
+                const execLabel = job.executionMode === 'remote' ? 'remote' : 'local';
+                const modelLabel = job.model ? `${job.model}` : '';
+                const backendLabel = job.backend ? `${job.backend}` : '';
                 
                 div.innerHTML = `
                     <div class="flex items-center gap-3 cursor-pointer flex-1" onclick="loadJob('${job.jobId}')">
                         <span class="w-2 h-2 rounded-full ${statusColor.replace('text-', 'bg-')} ${isRunning ? 'animate-pulse' : ''}"></span>
                         <div>
-                            <div class="text-sm text-gray-300">${job.inputCount} file(s)</div>
-                            <div class="text-xs text-gray-500">${date}</div>
+                            <div class="text-sm text-gray-300 truncate max-w-[220px]" title="${escapeHtml(primaryFilename)}">${escapeHtml(primaryFilename)}</div>
+                            <div class="text-xs text-gray-500">${date}${timingBits ? ` • ${timingBits}` : ''}</div>
+                            <div class="mt-1 flex items-center gap-2 text-[10px] text-gray-400 uppercase tracking-wide">
+                                ${modelLabel ? `<span class="px-1.5 py-0.5 rounded bg-surface-700/60">${escapeHtml(modelLabel)}</span>` : ''}
+                                ${backendLabel ? `<span class="px-1.5 py-0.5 rounded bg-surface-700/60">${escapeHtml(backendLabel)}</span>` : ''}
+                                <span class="px-1.5 py-0.5 rounded bg-surface-700/40">${execLabel}</span>
+                                ${job.diarizationEnabled ? '<span class="px-1.5 py-0.5 rounded bg-surface-700/40">diarization</span>' : ''}
+                            </div>
                         </div>
                     </div>
                     <div class="flex items-center gap-2">
@@ -1797,6 +1876,37 @@
             document.getElementById('language').addEventListener('change', (e) => {
                 saveToStorage(STORAGE_KEYS.lastLanguage, e.target.value);
             });
+            document.getElementById('model').addEventListener('change', (e) => {
+                saveToStorage(STORAGE_KEYS.lastModel, e.target.value);
+            });
+            document.getElementById('processingMode').addEventListener('change', (e) => {
+                saveToStorage(STORAGE_KEYS.lastBackend, e.target.value);
+            });
+
+            const persistCheckbox = (id, key) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.addEventListener('change', () => saveToStorage(key, el.checked ? 'true' : 'false'));
+            };
+            const persistSelect = (id, key) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.addEventListener('change', () => saveToStorage(key, el.value));
+            };
+
+            persistCheckbox('diarizationEnabled', STORAGE_KEYS.diarizationEnabled);
+            persistSelect('minSpeakers', STORAGE_KEYS.minSpeakers);
+            persistSelect('maxSpeakers', STORAGE_KEYS.maxSpeakers);
+            persistSelect('numSpeakers', STORAGE_KEYS.numSpeakers);
+            persistCheckbox('diarizationAutoSplit', STORAGE_KEYS.diarizationAutoSplit);
+            persistSelect('diarizationMaxDuration', STORAGE_KEYS.diarizationMaxDuration);
+            persistCheckbox('includeSegments', STORAGE_KEYS.includeSegments);
+            persistCheckbox('includeFull', STORAGE_KEYS.includeFull);
+            persistCheckbox('includeTimestamps', STORAGE_KEYS.includeTimestamps);
+            persistCheckbox('wordTimestamps', STORAGE_KEYS.wordTimestamps);
+            persistSelect('qualityPreset', STORAGE_KEYS.qualityPreset);
+            persistSelect('silenceThreshold', STORAGE_KEYS.silenceThreshold);
+            persistSelect('maxSegmentLength', STORAGE_KEYS.maxSegmentLength);
             
             // Initialize worker options and output option states
             updateWorkerOptions();

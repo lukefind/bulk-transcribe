@@ -261,20 +261,54 @@ def list_jobs(session_id: str, limit: int = 20) -> list:
         if manifest:
             outputs = manifest.get('outputs', [])
             valid_outputs = [o for o in outputs if not o.get('error')]
-            
+            inputs = manifest.get('inputs', [])
+            options = manifest.get('options', {})
+
             # Job is reviewable if it has any transcript-like output
             reviewable = any(
                 o.get('type') in REVIEWABLE_OUTPUT_TYPES 
                 for o in valid_outputs
             )
+
+            primary_input = inputs[0] if inputs else {}
+            primary_filename = (
+                primary_input.get('originalFilename')
+                or primary_input.get('filename')
+                or primary_input.get('storedName')
+                or ''
+            )
+
+            def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
+                if not ts:
+                    return None
+                try:
+                    # Handle trailing "Z" from ISO timestamps
+                    return datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                except ValueError:
+                    return None
+
+            started_at = _parse_iso(manifest.get('startedAt'))
+            finished_at = _parse_iso(manifest.get('finishedAt'))
+            elapsed_seconds: Optional[float] = None
+            if started_at and finished_at:
+                elapsed_seconds = max(0.0, (finished_at - started_at).total_seconds())
             
             jobs.append({
                 'jobId': manifest.get('jobId', job_id),
                 'createdAt': manifest.get('createdAt'),
+                'startedAt': manifest.get('startedAt'),
+                'finishedAt': manifest.get('finishedAt'),
                 'status': manifest.get('status'),
                 'inputCount': len(manifest.get('inputs', [])),
                 'outputCount': len(valid_outputs),
-                'reviewable': reviewable
+                'reviewable': reviewable,
+                'primaryFilename': primary_filename,
+                'primaryDurationSec': primary_input.get('durationSec'),
+                'elapsedSeconds': elapsed_seconds,
+                'model': options.get('model'),
+                'backend': options.get('backend'),
+                'executionMode': manifest.get('executionMode', 'local'),
+                'diarizationEnabled': bool(options.get('diarizationEnabled')),
             })
     
     # Sort by createdAt descending
