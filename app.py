@@ -3883,6 +3883,150 @@ def _build_review_timeline(session_id: str, job_id: str, input_id: str, filename
     return timeline, review_state
 
 
+@app.route('/api/jobs/<job_id>/review/export-docx', methods=['GET'])
+def api_export_review_docx(job_id):
+    """Export review timeline as DOCX."""
+    from docx import Document
+    from docx.shared import Pt, Inches
+    import io
+    
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    input_id = request.args.get('inputId')
+    inputs = manifest.get('inputs', [])
+    if not inputs:
+        return jsonify({'error': 'No inputs in job'}), 400
+    
+    target_input = inputs[0] if not input_id else next((i for i in inputs if i.get('uploadId') == input_id), inputs[0])
+    input_id = target_input.get('uploadId')
+    filename = target_input.get('originalFilename', target_input.get('filename', 'unknown'))
+    safe_name = secure_filename(Path(filename).stem) or 'transcript'
+    
+    # Build timeline with review state
+    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest)
+    
+    # Create DOCX document
+    doc = Document()
+    doc.add_heading(filename, 0)
+    
+    # Format time helper
+    def fmt_time(seconds):
+        m, s = divmod(int(seconds), 60)
+        h, m = divmod(m, 60)
+        if h > 0:
+            return f"{h}:{m:02d}:{s:02d}"
+        return f"{m}:{s:02d}"
+    
+    # Build speaker lookup
+    speakers = {s.get('id'): s for s in (timeline.speakers or [])}
+    
+    for chunk in (timeline.chunks or []):
+        speaker_id = chunk.get('speaker_id')
+        speaker = speakers.get(speaker_id, {})
+        speaker_label = speaker.get('label', speaker_id or 'Unknown')
+        timestamp = fmt_time(chunk.get('start', 0))
+        text = chunk.get('text', '')
+        
+        para = doc.add_paragraph()
+        run = para.add_run(f"[{timestamp}] {speaker_label}: ")
+        run.bold = True
+        para.add_run(text)
+    
+    # Write to buffer
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    
+    return Response(
+        buffer.getvalue(),
+        mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        headers={'Content-Disposition': f'attachment; filename="{safe_name}_review.docx"'}
+    )
+
+
+@app.route('/api/jobs/<job_id>/review/export-pdf', methods=['GET'])
+def api_export_review_pdf(job_id):
+    """Export review timeline as PDF."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.units import inch
+    import io
+    
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    input_id = request.args.get('inputId')
+    inputs = manifest.get('inputs', [])
+    if not inputs:
+        return jsonify({'error': 'No inputs in job'}), 400
+    
+    target_input = inputs[0] if not input_id else next((i for i in inputs if i.get('uploadId') == input_id), inputs[0])
+    input_id = target_input.get('uploadId')
+    filename = target_input.get('originalFilename', target_input.get('filename', 'unknown'))
+    safe_name = secure_filename(Path(filename).stem) or 'transcript'
+    
+    # Build timeline with review state
+    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest)
+    
+    # Format time helper
+    def fmt_time(seconds):
+        m, s = divmod(int(seconds), 60)
+        h, m = divmod(m, 60)
+        if h > 0:
+            return f"{h}:{m:02d}:{s:02d}"
+        return f"{m}:{s:02d}"
+    
+    # Build speaker lookup
+    speakers = {s.get('id'): s for s in (timeline.speakers or [])}
+    
+    # Create PDF
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)
+    
+    styles = getSampleStyleSheet()
+    title_style = styles['Heading1']
+    chunk_style = ParagraphStyle(
+        'ChunkStyle',
+        parent=styles['Normal'],
+        fontSize=10,
+        leading=14,
+        spaceAfter=8
+    )
+    
+    story = []
+    story.append(Paragraph(filename, title_style))
+    story.append(Spacer(1, 0.25 * inch))
+    
+    for chunk in (timeline.chunks or []):
+        speaker_id = chunk.get('speaker_id')
+        speaker = speakers.get(speaker_id, {})
+        speaker_label = speaker.get('label', speaker_id or 'Unknown')
+        timestamp = fmt_time(chunk.get('start', 0))
+        text = chunk.get('text', '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        
+        line = f"<b>[{timestamp}] {speaker_label}:</b> {text}"
+        story.append(Paragraph(line, chunk_style))
+    
+    doc.build(story)
+    buffer.seek(0)
+    
+    return Response(
+        buffer.getvalue(),
+        mimetype='application/pdf',
+        headers={'Content-Disposition': f'attachment; filename="{safe_name}_review.pdf"'}
+    )
+
+
 def _build_job_export_files(session_id: str, job_id: str, input_id: str = None) -> dict:
     """
     Build export files for a single job. Returns dict of {filename: content_bytes}.

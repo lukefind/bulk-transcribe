@@ -99,6 +99,17 @@ By default, files that already have a `_transcription.md` output are skipped. Th
 - **Word-level Timestamps** - Detailed per-word timing (slower)
 - **Overwrite existing files** - Re-transcribe files that already have output
 
+## Review Exports
+
+The review interface supports multiple export formats:
+
+- **Project (.btproj)** - Full project archive for backup/transfer
+- **Markdown (.md)** - Speaker-attributed transcript with timestamps
+- **Text (.txt)** - Plain text transcript
+- **Timeline (.json)** - Structured JSON with chunks and speakers
+- **Word (.docx)** - Microsoft Word document (uses `python-docx`)
+- **PDF (.pdf)** - Portable document format (uses `reportlab`)
+
 ### JSON Output Format
 
 Each transcription produces a JSON file with segment-level data. Segments include:

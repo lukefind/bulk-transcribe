@@ -55,6 +55,23 @@
         :root.theme-light .border-primary-900\/30 { border-color: rgba(99, 102, 241, 0.2) !important; }
         :root.theme-light header { background-color: rgba(255, 255, 255, 0.9); }
         :root.theme-light .btn-primary { color: white !important; }
+        
+        /* Export menu styling (theme-aware) */
+        .export-menu { background-color: #1e293b; border: 1px solid #334155; }
+        .export-menu-item { color: #cbd5e1; }
+        .export-menu-item:hover { background-color: #334155; }
+        .export-menu-separator { border-top: 1px solid #334155; }
+        :root.theme-light .export-menu { background-color: #ffffff; border-color: #cbd5e1; }
+        :root.theme-light .export-menu-item { color: #1e293b; }
+        :root.theme-light .export-menu-item:hover { background-color: #f1f5f9; }
+        :root.theme-light .export-menu-separator { border-color: #e2e8f0; }
+        
+        /* Timeline and surfaces for light theme */
+        :root.theme-light .bg-surface-800\/30 { background-color: rgba(241, 245, 249, 0.7) !important; }
+        :root.theme-light .chunk-row:hover { background-color: rgba(226, 232, 240, 0.5) !important; }
+        :root.theme-light .hover\:bg-surface-700\/30:hover { background-color: rgba(226, 232, 240, 0.5) !important; }
+        :root.theme-light #speakerSidebar { background-color: #f8fafc; }
+        :root.theme-light #reviewTimelineContent { background-color: #ffffff; }
     </style>
 </head>
 <body class="text-gray-100 min-h-screen">
@@ -65,7 +82,7 @@
                 <img src="/static/apple-icon-60x60.png" alt="Bulk Transcribe" class="w-14 h-14 rounded-2xl shadow-lg shadow-primary-500/20">
                 <div>
                     <h1 class="text-2xl font-bold bg-gradient-to-r from-white to-primary-200 bg-clip-text text-transparent">Bulk Transcribe</h1>
-                    <p class="text-sm text-gray-400">Audio to markdown using OpenAI Whisper</p>
+                    <p class="text-sm text-gray-400">Local-first transcription with a review workflow built for 100% accuracy</p>
                 </div>
             </div>
         </div>
@@ -723,11 +740,14 @@
                             Export
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
                         </button>
-                        <div id="exportDropdownMenu" class="hidden absolute right-0 top-full mt-1 bg-surface-800 border border-gray-700 rounded-lg shadow-lg py-1 min-w-[160px] z-50">
-                            <button onclick="exportReviewProject(); closeExportDropdown()" class="w-full px-3 py-2 text-left text-sm text-gray-300 hover:bg-surface-700">Export Project (.btproj)</button>
-                            <button onclick="exportReviewMd(); closeExportDropdown()" class="w-full px-3 py-2 text-left text-sm text-gray-300 hover:bg-surface-700">Export Markdown (.md)</button>
-                            <button onclick="exportReviewTxt(); closeExportDropdown()" class="w-full px-3 py-2 text-left text-sm text-gray-300 hover:bg-surface-700">Export Text (.txt)</button>
-                            <button onclick="exportReviewJson(); closeExportDropdown()" class="w-full px-3 py-2 text-left text-sm text-gray-300 hover:bg-surface-700">Export Timeline (.json)</button>
+                        <div id="exportDropdownMenu" class="export-menu hidden absolute right-0 top-full mt-1 rounded-lg shadow-lg py-1 min-w-[180px] z-50">
+                            <button onclick="exportReviewProject(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Project (.btproj)</button>
+                            <button onclick="exportReviewMd(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Markdown (.md)</button>
+                            <button onclick="exportReviewTxt(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Text (.txt)</button>
+                            <button onclick="exportReviewJson(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Timeline (.json)</button>
+                            <div class="export-menu-separator my-1"></div>
+                            <button onclick="exportReviewDocx(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Word (.docx)</button>
+                            <button onclick="exportReviewPdf(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export PDF (.pdf)</button>
                         </div>
                     </div>
                 </div>
@@ -4004,12 +4024,35 @@
             // Language
             setField('summaryLanguage', job.language || null);
             
-            // Diarization
-            setField('summaryDiarization', job.diarizationEnabled ? 'Yes' : 'No');
+            // Diarization - robust detection
+            let diarizationUsed = false;
+            // Check manifest options
+            if (job.options?.diarization === true || job.options?.diarizationEnabled === true) {
+                diarizationUsed = true;
+            }
+            // Check top-level flag
+            if (job.diarizationEnabled === true) {
+                diarizationUsed = true;
+            }
+            // Check outputs for diarization artifacts
+            if (job.outputs && Array.isArray(job.outputs)) {
+                for (const output of job.outputs) {
+                    if (output.type === 'diarization-json' || output.type === 'speaker-markdown') {
+                        diarizationUsed = true;
+                        break;
+                    }
+                }
+            }
+            // Check timeline speakers
+            if (reviewTimeline?.speakers?.length > 1) {
+                diarizationUsed = true;
+            }
+            setField('summaryDiarization', diarizationUsed ? 'Yes' : 'No');
             
             // Auto-split
-            if (job.diarizationEnabled) {
-                setField('summaryAutoSplit', job.diarizationAutoSplit ? 'Yes' : 'No');
+            if (diarizationUsed) {
+                const autoSplit = job.diarizationAutoSplit || job.options?.diarizationAutoSplit;
+                setField('summaryAutoSplit', autoSplit ? 'Yes' : 'No');
             } else {
                 setField('summaryAutoSplit', null);
             }
@@ -4677,6 +4720,18 @@
             if (!reviewJobData?.jobId) return;
             const inputId = reviewSelectedInputId || '';
             window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-timeline-json?inputId=${inputId}`;
+        }
+        
+        function exportReviewDocx() {
+            if (!reviewJobData?.jobId) return;
+            const inputId = reviewSelectedInputId || '';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-docx?inputId=${inputId}`;
+        }
+        
+        function exportReviewPdf() {
+            if (!reviewJobData?.jobId) return;
+            const inputId = reviewSelectedInputId || '';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-pdf?inputId=${inputId}`;
         }
         
         // Keyboard shortcuts
