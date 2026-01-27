@@ -232,8 +232,10 @@ class ReviewTimeline:
                     likely_duplicate = True
                 
                 if likely_duplicate:
-                    # Score this duplicate candidate: prefer exact match, higher overlap, closer start, longer text
+                    # Score this duplicate candidate: prefer same speaker, exact match, higher overlap, closer start, longer text
+                    same_speaker = 1 if (chunk.speaker_id and candidate.speaker_id and chunk.speaker_id == candidate.speaker_id) else 0
                     dup_score = (
+                        same_speaker,
                         1 if exact_match else 0,
                         overlap_ratio,
                         -start_delta,
