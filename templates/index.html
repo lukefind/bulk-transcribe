@@ -243,6 +243,24 @@
             background-color: rgba(99, 102, 241, 0.08);
             border-color: rgba(99, 102, 241, 0.4);
         }
+        
+        /* Light mode: cancel buttons */
+        :root.theme-light #cancelAfterBtn {
+            background-color: #fef3c7 !important;
+            border-color: #f59e0b !important;
+            color: #92400e !important;
+        }
+        :root.theme-light #cancelAfterBtn:hover {
+            background-color: #fde68a !important;
+        }
+        :root.theme-light #forceStopBtn {
+            background-color: #fee2e2 !important;
+            border-color: #ef4444 !important;
+            color: #991b1b !important;
+        }
+        :root.theme-light #forceStopBtn:hover {
+            background-color: #fecaca !important;
+        }
     </style>
 </head>
 <body class="text-gray-100 min-h-screen">
@@ -1007,6 +1025,10 @@
                         <div><kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">Space</kbd> Play/pause</div>
                         <div><kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">[</kbd> <kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">]</kbd> Prev/next chunk</div>
                         <div><kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">1-9</kbd> Assign speaker</div>
+                        <div><kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">E</kbd> Edit chunk</div>
+                        <div><kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">S</kbd> Split at cursor</div>
+                        <div><kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">Enter</kbd> Save edit</div>
+                        <div><kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">Esc</kbd> Cancel edit</div>
                     </div>
                 </div>
                 
@@ -3055,6 +3077,9 @@
                 clearActivityLog();
                 addActivityLogEntry('Job started', '');
                 
+                // Reset button now that job is successfully queued
+                resetSubmitButton();
+                
                 // Start polling for job status
                 pollJobStatus();
                 
@@ -4142,6 +4167,7 @@
         let reviewSelectedInputId = null;
         let reviewSelectedChunkIndex = -1;
         let reviewCurrentChunkIndex = -1;
+        let reviewEditingChunkIndex = null;  // Track which chunk is being edited
         let reviewHasUnsavedChanges = false;
         let searchDebounceTimer = null;
         let saveDebounceTimer = null;
@@ -4983,6 +5009,9 @@
         function editChunkText(chunkIndex) {
             if (!reviewTimeline?.chunks?.[chunkIndex]) return;
             
+            // Track editing state
+            reviewEditingChunkIndex = chunkIndex;
+            
             const chunk = reviewTimeline.chunks[chunkIndex];
             const chunkRow = document.querySelector(`.chunk-row[data-chunk-index="${chunkIndex}"]`);
             if (!chunkRow) return;
@@ -4998,7 +5027,7 @@
             textDiv.innerHTML = `
                 <textarea class="w-full bg-surface-700 border border-primary-500 rounded p-2 text-gray-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary-500" 
                           rows="3" id="editTextarea">${escapeHtml(currentText)}</textarea>
-                <div class="flex gap-2 mt-2">
+                <div class="flex gap-2 mt-2 edit-actions">
                     <button onclick="event.stopPropagation(); saveChunkText(${chunkIndex})" 
                             class="px-3 py-1 bg-primary-600 hover:bg-primary-500 text-white text-xs rounded">Save</button>
                     <button onclick="event.stopPropagation(); cancelChunkEdit(${chunkIndex})" 
@@ -5013,12 +5042,13 @@
             textarea.focus();
             textarea.setSelectionRange(textarea.value.length, textarea.value.length);
             
-            // Handle Escape and Ctrl+Enter
+            // Handle keyboard shortcuts in edit mode
             textarea.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
                     e.preventDefault();
                     cancelChunkEdit(chunkIndex);
-                } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                } else if (e.key === 'Enter' && !e.shiftKey) {
+                    // Enter saves (Shift+Enter for newline)
                     e.preventDefault();
                     saveChunkText(chunkIndex);
                 }
@@ -5041,6 +5071,9 @@
             }
             reviewState.chunkEdits[chunk.chunk_id].text = newText;
             
+            // Clear editing state
+            reviewEditingChunkIndex = null;
+            
             // Mark unsaved and save
             markUnsaved();
             debounceSave();
@@ -5051,6 +5084,8 @@
         }
         
         function cancelChunkEdit(chunkIndex) {
+            // Clear editing state
+            reviewEditingChunkIndex = null;
             // Just re-render to restore original display
             renderTimeline();
             if (chunkIndex >= 0) selectChunk(chunkIndex);
@@ -5069,6 +5104,9 @@
                     delete reviewState.chunkEdits[chunk.chunk_id];
                 }
             }
+            
+            // Clear editing state
+            reviewEditingChunkIndex = null;
             
             // Mark unsaved and save
             markUnsaved();
@@ -5100,6 +5138,71 @@
             
             // Debounce save
             debounceSave();
+        }
+        
+        function splitChunkAtCursor(chunkIndex) {
+            if (!reviewTimeline?.chunks?.[chunkIndex]) return;
+            
+            const textarea = document.getElementById('editTextarea');
+            if (!textarea) return;
+            
+            const cursorPos = textarea.selectionStart;
+            const text = textarea.value;
+            
+            // Don't split at the very beginning or end
+            if (cursorPos <= 0 || cursorPos >= text.length) {
+                return;
+            }
+            
+            const chunk = reviewTimeline.chunks[chunkIndex];
+            const beforeText = text.substring(0, cursorPos).trim();
+            const afterText = text.substring(cursorPos).trim();
+            
+            // Both parts must have content
+            if (!beforeText || !afterText) return;
+            
+            // Calculate approximate timing split based on text position ratio
+            const ratio = cursorPos / text.length;
+            const duration = chunk.end - chunk.start;
+            const splitTime = chunk.start + (duration * ratio);
+            
+            // Create two new chunks
+            const newChunk1 = {
+                chunk_id: `${chunk.chunk_id}_a`,
+                start: chunk.start,
+                end: splitTime,
+                speaker_id: chunk.speaker_id,
+                text: beforeText
+            };
+            
+            const newChunk2 = {
+                chunk_id: `${chunk.chunk_id}_b`,
+                start: splitTime,
+                end: chunk.end,
+                speaker_id: chunk.speaker_id,
+                text: afterText
+            };
+            
+            // Replace the original chunk with the two new ones
+            reviewTimeline.chunks.splice(chunkIndex, 1, newChunk1, newChunk2);
+            
+            // Clear editing state
+            reviewEditingChunkIndex = null;
+            
+            // Mark as changed
+            markUnsaved();
+            debounceSave();
+            
+            // Re-render and select the second (new) chunk
+            renderTimeline();
+            const newIndex = chunkIndex + 1;
+            selectChunk(newIndex);
+            
+            // Ensure speaker buttons are visible on the new chunk
+            setTimeout(() => {
+                const row = document.querySelector(`.chunk-row[data-chunk-index="${newIndex}"]`);
+                row?.querySelector('.speaker-buttons')?.classList.remove('hidden');
+            }, 50);
         }
         
         function markUnsaved() {
@@ -5217,10 +5320,34 @@
         }
         
         function handleReviewKeydown(e) {
-            // Don't handle if typing in input
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+            const isTyping = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable;
+            
             // Don't handle if review workspace is hidden
             if (document.getElementById('reviewWorkspace').classList.contains('hidden')) return;
+            
+            // Escape always cancels edit mode
+            if (e.key === 'Escape' && reviewEditingChunkIndex !== null) {
+                e.preventDefault();
+                cancelChunkEdit(reviewEditingChunkIndex);
+                return;
+            }
+            
+            // Don't hijack typing (except Escape handled above)
+            if (isTyping) return;
+            
+            // E = edit selected chunk (when not editing)
+            if ((e.key === 'e' || e.key === 'E') && reviewSelectedChunkIndex >= 0 && reviewEditingChunkIndex === null) {
+                e.preventDefault();
+                editChunkText(reviewSelectedChunkIndex);
+                return;
+            }
+            
+            // S = split at cursor (when editing)
+            if ((e.key === 's' || e.key === 'S') && reviewEditingChunkIndex !== null) {
+                e.preventDefault();
+                splitChunkAtCursor(reviewEditingChunkIndex);
+                return;
+            }
             
             switch (e.key) {
                 case ' ':
