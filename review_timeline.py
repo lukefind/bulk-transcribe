@@ -274,6 +274,194 @@ class ReviewTimeline:
         self.chunks = kept
         return removed
 
+    def postprocess_chunks(self) -> dict:
+        """
+        Post-processing pass to clean up chunks for human review.
+        
+        1) Drop contained fragments (small chunks fully inside larger ones with subset text)
+        2) Merge adjacent same-speaker chunks with small gaps
+        
+        Returns stats dict and stores on self.postprocess_stats.
+        """
+        import re
+        
+        def normalize_text(text: str) -> str:
+            if not text:
+                return ''
+            return re.sub(r'\s+', ' ', text.lower().strip())
+        
+        def duration(c) -> float:
+            return max(0.0, c.end - c.start)
+        
+        def overlap_seconds(a, b) -> float:
+            return max(0.0, min(a.end, b.end) - max(a.start, b.start))
+        
+        def overlap_ratio(a, b) -> float:
+            ov = overlap_seconds(a, b)
+            min_dur = min(duration(a), duration(b))
+            return ov / min_dur if min_dur > 1e-6 else 0.0
+        
+        def is_contained(inner, outer) -> bool:
+            return inner.start >= outer.start - 0.15 and inner.end <= outer.end + 0.15
+        
+        def text_is_subset(short_text: str, long_text: str) -> bool:
+            short_norm = normalize_text(short_text)
+            long_norm = normalize_text(long_text)
+            if len(short_norm) < 12:
+                return False
+            return short_norm == long_norm or short_norm in long_norm
+        
+        before_count = len(self.chunks)
+        
+        if before_count <= 1:
+            self.postprocess_stats = {
+                'before': before_count,
+                'afterContainmentDrop': before_count,
+                'afterMerge': before_count,
+                'droppedContained': 0,
+                'merged': 0
+            }
+            return self.postprocess_stats
+        
+        # Sort by (start, end) for deterministic processing
+        self.chunks.sort(key=lambda c: (c.start, c.end))
+        
+        # ========== PASS 1: Drop contained fragments ==========
+        WINDOW_TIME = 40.0
+        WINDOW_MAX = 20
+        
+        kept_after_drop = []
+        dropped_contained = 0
+        
+        for chunk in self.chunks:
+            chunk_norm = normalize_text(chunk.text)
+            
+            # Skip near-empty
+            if len(chunk_norm) < 3:
+                dropped_contained += 1
+                continue
+            
+            if not kept_after_drop:
+                kept_after_drop.append(chunk)
+                continue
+            
+            # Build window of recent candidates
+            window_start_time = chunk.start - WINDOW_TIME
+            candidates = []
+            for i in range(len(kept_after_drop) - 1, max(-1, len(kept_after_drop) - 1 - WINDOW_MAX), -1):
+                cand = kept_after_drop[i]
+                if cand.start >= window_start_time:
+                    candidates.append((i, cand))
+                else:
+                    break
+            
+            # Check if chunk should be dropped as contained fragment
+            should_drop = False
+            for idx, cand in candidates:
+                # Only drop if candidate is at least as long as chunk
+                if duration(cand) < duration(chunk):
+                    continue
+                
+                # Check containment
+                if not is_contained(chunk, cand):
+                    continue
+                
+                # Check text subset
+                if not text_is_subset(chunk.text, cand.text):
+                    continue
+                
+                # Same speaker OR very high overlap
+                same_speaker = chunk.speaker_id and cand.speaker_id and chunk.speaker_id == cand.speaker_id
+                high_overlap = overlap_ratio(chunk, cand) >= 0.9
+                
+                if same_speaker or high_overlap:
+                    should_drop = True
+                    break
+            
+            if should_drop:
+                dropped_contained += 1
+            else:
+                kept_after_drop.append(chunk)
+        
+        after_containment = len(kept_after_drop)
+        
+        # ========== PASS 2: Merge adjacent same-speaker chunks ==========
+        if len(kept_after_drop) <= 1:
+            self.chunks = kept_after_drop
+            self.postprocess_stats = {
+                'before': before_count,
+                'afterContainmentDrop': after_containment,
+                'afterMerge': after_containment,
+                'droppedContained': dropped_contained,
+                'merged': 0
+            }
+            return self.postprocess_stats
+        
+        # Sort again to ensure order
+        kept_after_drop.sort(key=lambda c: (c.start, c.end))
+        
+        merged_chunks = [kept_after_drop[0]]
+        merge_count = 0
+        
+        for i in range(1, len(kept_after_drop)):
+            cur = merged_chunks[-1]
+            next_chunk = kept_after_drop[i]
+            
+            # Check merge conditions
+            same_speaker = cur.speaker_id and next_chunk.speaker_id and cur.speaker_id == next_chunk.speaker_id
+            if not same_speaker:
+                merged_chunks.append(next_chunk)
+                continue
+            
+            gap = next_chunk.start - cur.end
+            if gap > 1.25:
+                merged_chunks.append(next_chunk)
+                continue
+            
+            combined_duration = next_chunk.end - cur.start
+            if combined_duration > 45.0:
+                merged_chunks.append(next_chunk)
+                continue
+            
+            cur_norm = normalize_text(cur.text)
+            next_norm = normalize_text(next_chunk.text)
+            combined_text_len = len(cur_norm) + len(next_norm) + 1
+            if combined_text_len > 600:
+                merged_chunks.append(next_chunk)
+                continue
+            
+            # Check hard boundary (sentence end + gap)
+            cur_text_stripped = cur.text.rstrip() if cur.text else ''
+            ends_with_punct = cur_text_stripped and cur_text_stripped[-1] in '.?!'
+            if ends_with_punct and gap > 0.4:
+                merged_chunks.append(next_chunk)
+                continue
+            
+            # Merge!
+            cur.end = next_chunk.end
+            cur.text = (cur.text.rstrip() + ' ' + next_chunk.text.lstrip()).strip()
+            
+            # Track merged chunk IDs in origin
+            if not hasattr(cur, 'origin') or cur.origin is None:
+                cur.origin = {}
+            merged_ids = cur.origin.get('mergedChunkIds', [cur.chunk_id])
+            if next_chunk.chunk_id not in merged_ids:
+                merged_ids.append(next_chunk.chunk_id)
+            cur.origin['mergedChunkIds'] = merged_ids
+            
+            merge_count += 1
+        
+        self.chunks = merged_chunks
+        
+        self.postprocess_stats = {
+            'before': before_count,
+            'afterContainmentDrop': after_containment,
+            'afterMerge': len(merged_chunks),
+            'droppedContained': dropped_contained,
+            'merged': merge_count
+        }
+        return self.postprocess_stats
+
 
 class TimelineParser:
     """Parses various transcript formats into a ReviewTimeline."""
@@ -319,11 +507,17 @@ class TimelineParser:
         
         # Final strict dedupe pass to remove duplicate/subset/overlapping chunks
         before_dedupe = len(timeline.chunks)
-        removed = timeline.dedupe_chunks_strict()
+        dedupe_removed = timeline.dedupe_chunks_strict()
+        after_dedupe = len(timeline.chunks)
+        
+        # Post-processing pass: drop contained fragments, merge same-speaker chunks
+        postprocess_stats = timeline.postprocess_chunks()
+        
         timeline.dedupe_stats = {
             'before': before_dedupe,
-            'after': len(timeline.chunks),
-            'removed': removed
+            'afterDedupe': after_dedupe,
+            'dedupeRemoved': dedupe_removed,
+            'postprocess': postprocess_stats
         }
         
         return timeline
