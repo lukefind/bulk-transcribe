@@ -397,6 +397,22 @@ class ReviewTimeline:
             }
             return self.postprocess_stats
         
+        # Short acknowledgment tokens that should stay separate
+        ACK_TOKENS = {
+            "yeah", "yep", "yes", "right", "exactly", "okay", "ok", "mm-hmm",
+            "mmhmm", "uh-huh", "uhhuh", "got it", "sure", "true", "indeed",
+            "absolutely", "definitely", "totally", "correct", "mhm", "uh huh"
+        }
+        
+        def is_short_ack(text: str) -> bool:
+            t = normalize_text(text)
+            if not t:
+                return False
+            if len(t) <= 12:
+                t_token = t.strip(" .,!?:;\"'")
+                return t_token in ACK_TOKENS or t_token.replace("-", "") in ACK_TOKENS
+            return False
+        
         # Sort again to ensure order
         kept_after_drop.sort(key=lambda c: (c.start, c.end))
         
@@ -434,6 +450,18 @@ class ReviewTimeline:
             cur_text_stripped = cur.text.rstrip() if cur.text else ''
             ends_with_punct = cur_text_stripped and cur_text_stripped[-1] in '.?!'
             if ends_with_punct and gap > 0.4:
+                merged_chunks.append(next_chunk)
+                continue
+            
+            # Guard: short acknowledgments should stay separate (often misassigned)
+            next_dur = duration(next_chunk)
+            if is_short_ack(next_chunk.text) and next_dur <= 1.8:
+                merged_chunks.append(next_chunk)
+                continue
+            
+            # Guard: very short next chunk after long current chunk
+            cur_dur = duration(cur)
+            if next_dur <= 0.7 and cur_dur >= 12.0:
                 merged_chunks.append(next_chunk)
                 continue
             
