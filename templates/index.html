@@ -641,6 +641,13 @@
                         <div class="text-sm font-medium text-white" id="reviewJobTitle">Review Transcript</div>
                         <div class="text-xs text-gray-500" id="reviewFileName">Loading...</div>
                     </div>
+                    <div class="h-6 w-px bg-gray-700 ml-2"></div>
+                    <div class="flex items-center gap-2">
+                        <label class="text-xs text-gray-500">Switch job:</label>
+                        <select id="reviewJobSelect" onchange="onReviewJobSelectChange()" 
+                                class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs max-w-[200px]">
+                        </select>
+                    </div>
                 </div>
                 <div class="flex items-center gap-3">
                     <!-- Save Status Indicator -->
@@ -1711,13 +1718,24 @@
                 list.appendChild(div);
             });
             
-            // Add clear old jobs button if there are jobs
+            // Add clear buttons if there are jobs
             if (jobs.length > 0) {
-                const clearBtn = document.createElement('button');
-                clearBtn.className = 'mt-3 w-full py-2 text-xs text-gray-500 hover:text-gray-300 hover:bg-surface-700/50 rounded-lg transition-all';
-                clearBtn.innerHTML = 'Clear old jobs (>24h)';
-                clearBtn.onclick = () => clearOldJobs();
-                list.appendChild(clearBtn);
+                const btnContainer = document.createElement('div');
+                btnContainer.className = 'mt-3 flex flex-col gap-1';
+                
+                const clearOldBtn = document.createElement('button');
+                clearOldBtn.className = 'w-full py-2 text-xs text-gray-500 hover:text-gray-300 hover:bg-surface-700/50 rounded-lg transition-all';
+                clearOldBtn.innerHTML = 'Clear old jobs (>24h)';
+                clearOldBtn.onclick = () => clearOldJobs();
+                btnContainer.appendChild(clearOldBtn);
+                
+                const clearDupesBtn = document.createElement('button');
+                clearDupesBtn.className = 'w-full py-2 text-xs text-gray-500 hover:text-gray-300 hover:bg-surface-700/50 rounded-lg transition-all';
+                clearDupesBtn.innerHTML = 'Clear duplicates (same filename)';
+                clearDupesBtn.onclick = () => clearDuplicateJobs();
+                btnContainer.appendChild(clearDupesBtn);
+                
+                list.appendChild(btnContainer);
             }
         }
         
@@ -1781,6 +1799,35 @@
                 }
             } catch (e) {
                 showError(`Failed to clear jobs: ${e.message}`);
+            }
+        }
+        
+        async function clearDuplicateJobs() {
+            if (!confirm('Clear duplicate jobs (keep most recent per filename)?')) return;
+            
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch('/api/jobs/clear-duplicates', {
+                    method: 'POST',
+                    headers
+                });
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    showError(data.error || 'Failed to clear duplicates');
+                    return;
+                }
+                
+                // Refresh job history
+                loadJobHistoryAndRestore();
+                
+                if (data.deleted > 0) {
+                    console.log(`Deleted ${data.deleted} duplicate jobs`);
+                }
+            } catch (e) {
+                showError(`Failed to clear duplicates: ${e.message}`);
             }
         }
         
@@ -1932,8 +1979,11 @@
                 
                 renderJobHistory(jobs);
                 
-                // Find any running job
-                const runningJob = jobs.find(j => j.status === 'running' || j.status === 'queued');
+                // Find any running job - deterministic: most recent first
+                const activeJobs = jobs
+                    .filter(j => j.status === 'running' || j.status === 'queued')
+                    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+                const runningJob = activeJobs[0];
                 
                 if (runningJob) {
                     // Auto-attach to running job
@@ -3333,6 +3383,90 @@
         let reviewHasUnsavedChanges = false;
         let searchDebounceTimer = null;
         let saveDebounceTimer = null;
+        let reviewJobList = [];  // Cache for job switcher dropdown
+        
+        async function loadReviewJobOptions(selectedJobId = null) {
+            try {
+                const response = await fetch('/api/jobs');
+                const data = await response.json();
+                reviewJobList = data.jobs || [];
+                
+                const select = document.getElementById('reviewJobSelect');
+                if (!select) return;
+                
+                select.innerHTML = '';
+                
+                // Filter to reviewable + active jobs
+                const eligibleJobs = reviewJobList.filter(j => 
+                    j.reviewable || j.status === 'running' || j.status === 'queued' || j.status === 'complete'
+                );
+                
+                // Sort by createdAt descending (most recent first)
+                eligibleJobs.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+                
+                // Limit to recent jobs
+                const recentJobs = eligibleJobs.slice(0, 20);
+                
+                for (const job of recentJobs) {
+                    const option = document.createElement('option');
+                    option.value = job.jobId;
+                    
+                    // Truncate filename for display
+                    const filename = job.primaryFilename || `${job.inputCount} file(s)`;
+                    const truncated = filename.length > 25 ? filename.substring(0, 22) + '...' : filename;
+                    const statusBadge = job.status === 'running' ? ' ⏳' : job.status === 'queued' ? ' 📋' : '';
+                    
+                    option.textContent = `${truncated}${statusBadge}`;
+                    option.title = filename;
+                    
+                    if (job.jobId === selectedJobId) {
+                        option.selected = true;
+                    }
+                    
+                    select.appendChild(option);
+                }
+            } catch (e) {
+                console.error('Failed to load review job options:', e);
+            }
+        }
+        
+        async function onReviewJobSelectChange() {
+            const select = document.getElementById('reviewJobSelect');
+            if (!select) return;
+            
+            const newJobId = select.value;
+            if (!newJobId || newJobId === reviewJobData?.jobId) return;
+            
+            // Find the job in our cached list
+            const newJob = reviewJobList.find(j => j.jobId === newJobId);
+            if (!newJob) {
+                // Fetch the job directly
+                try {
+                    const response = await fetch(`/api/jobs/${newJobId}`);
+                    const job = await response.json();
+                    if (job.error) {
+                        showError(job.error);
+                        return;
+                    }
+                    await openReviewPanel(job);
+                } catch (e) {
+                    showError(`Failed to load job: ${e.message}`);
+                }
+            } else {
+                // Fetch full job data
+                try {
+                    const response = await fetch(`/api/jobs/${newJobId}`);
+                    const job = await response.json();
+                    if (job.error) {
+                        showError(job.error);
+                        return;
+                    }
+                    await openReviewPanel(job);
+                } catch (e) {
+                    showError(`Failed to load job: ${e.message}`);
+                }
+            }
+        }
         
         async function openReviewPanel(job, inputId = null) {
             if (!job) return;
@@ -3374,6 +3508,9 @@
             
             // Load timeline from API
             await loadReviewTimeline();
+            
+            // Load job switcher options
+            await loadReviewJobOptions(job.jobId);
             
             // Setup keyboard shortcuts
             setupReviewKeyboardShortcuts();

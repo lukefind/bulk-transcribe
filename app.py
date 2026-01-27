@@ -2595,6 +2595,109 @@ def api_clear_jobs():
     })
 
 
+@app.route('/api/jobs/clear-duplicates', methods=['POST'])
+def api_clear_duplicate_jobs():
+    """Clear duplicate jobs, keeping most recent per filename."""
+    session_id = g.session_id
+    
+    session_dir = session_store.session_dir(session_id)
+    if not session_dir:
+        return jsonify({'kept': 0, 'deleted': 0, 'byFilename': []})
+    
+    jobs_dir = os.path.join(session_dir, 'jobs')
+    if not os.path.exists(jobs_dir):
+        return jsonify({'kept': 0, 'deleted': 0, 'byFilename': []})
+    
+    import shutil
+    from collections import defaultdict
+    
+    # Group jobs by primary filename
+    jobs_by_filename = defaultdict(list)
+    
+    for job_id in os.listdir(jobs_dir):
+        job_dir = os.path.join(jobs_dir, job_id)
+        if not os.path.isdir(job_dir):
+            continue
+        
+        manifest_path = os.path.join(job_dir, 'job.json')
+        if not os.path.exists(manifest_path):
+            continue
+        
+        manifest = session_store.read_json(manifest_path)
+        if not manifest:
+            continue
+        
+        # Get primary filename (first input)
+        inputs = manifest.get('inputs', [])
+        if inputs:
+            filename = inputs[0].get('originalFilename') or inputs[0].get('filename') or inputs[0].get('storedName') or ''
+        else:
+            filename = ''
+        
+        # Normalize filename for grouping (case-insensitive)
+        filename_key = filename.lower().strip()
+        
+        jobs_by_filename[filename_key].append({
+            'jobId': job_id,
+            'jobDir': job_dir,
+            'filename': filename,
+            'createdAt': manifest.get('createdAt', ''),
+            'status': manifest.get('status', 'unknown')
+        })
+    
+    kept = 0
+    deleted = 0
+    by_filename = []
+    
+    for filename_key, jobs in jobs_by_filename.items():
+        if len(jobs) <= 1:
+            kept += len(jobs)
+            continue
+        
+        # Sort by createdAt descending (most recent first)
+        jobs.sort(key=lambda j: j['createdAt'] or '', reverse=True)
+        
+        # Keep the first (most recent), delete the rest if not running
+        kept_job = jobs[0]
+        deleted_job_ids = []
+        
+        for job in jobs[1:]:
+            # Never delete running jobs
+            is_running = False
+            with _active_jobs_lock:
+                if (session_id, job['jobId']) in _active_jobs:
+                    job_info = _active_jobs[(session_id, job['jobId'])]
+                    if job_info.get('running'):
+                        is_running = True
+            
+            if is_running:
+                kept += 1
+                continue
+            
+            # Delete this duplicate
+            try:
+                shutil.rmtree(job['jobDir'])
+                deleted += 1
+                deleted_job_ids.append(job['jobId'])
+            except Exception:
+                kept += 1
+        
+        kept += 1  # The kept job
+        
+        if deleted_job_ids:
+            by_filename.append({
+                'filename': kept_job['filename'],
+                'keptJobId': kept_job['jobId'],
+                'deletedJobIds': deleted_job_ids
+            })
+    
+    return jsonify({
+        'kept': kept,
+        'deleted': deleted,
+        'byFilename': by_filename
+    })
+
+
 @app.route('/api/jobs/<job_id>/rerun', methods=['POST'])
 def api_rerun_job(job_id):
     """Create a new job using the same input files from a previous job."""
@@ -3400,13 +3503,15 @@ def api_get_review_timeline(job_id):
         transcript_md=transcript_md
     )
     
-    # Log debug info
+    # Log debug info including dedupe stats
+    dedupe_stats = getattr(timeline, 'dedupe_stats', {})
     log_event('info', 'review_timeline_debug',
               jobId=job_id, inputId=input_id,
               availableOutputs=available_outputs,
               selectedOutputs=selected_outputs,
               sourceUsed=source_used,
               numChunks=len(timeline.chunks),
+              dedupeStats=dedupe_stats,
               skippedCount=len(skipped_outputs))
     
     # Hard guarantee: if we have text but no chunks, create a fallback chunk

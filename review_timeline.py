@@ -128,6 +128,104 @@ class ReviewTimeline:
         for idx, speaker in enumerate(self.speakers):
             speaker.color = SPEAKER_COLORS[idx % len(SPEAKER_COLORS)]
 
+    def dedupe_chunks_strict(self) -> int:
+        """
+        Strict deduplication pass to remove duplicate/subset/overlapping chunks.
+        Returns the number of chunks removed.
+        
+        Handles:
+        1. Exact text duplicates at similar times
+        2. Subset text (short text contained in longer text) at overlapping times
+        3. Near-empty chunks (< 3 chars normalized)
+        
+        Keeps the "better" chunk: longer text > longer duration > earlier start.
+        """
+        import re
+        
+        def normalize_text(text: str) -> str:
+            """Lowercase, strip, collapse whitespace."""
+            if not text:
+                return ''
+            return re.sub(r'\s+', ' ', text.lower().strip())
+        
+        def is_subset_text(short: str, long: str) -> bool:
+            """Check if short text is a subset of long text."""
+            short_norm = normalize_text(short)
+            long_norm = normalize_text(long)
+            if len(short_norm) < 8:
+                return False
+            return short_norm == long_norm or short_norm in long_norm
+        
+        def calc_overlap_ratio(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
+            """Calculate overlap ratio relative to shorter chunk."""
+            overlap_seconds = max(0.0, min(a_end, b_end) - max(a_start, b_start))
+            duration_a = max(1e-6, a_end - a_start)
+            duration_b = max(1e-6, b_end - b_start)
+            min_duration = min(duration_a, duration_b)
+            return overlap_seconds / min_duration if min_duration > 0 else 0
+        
+        def chunk_score(chunk) -> tuple:
+            """Score for choosing better chunk: (text_len, duration, -start)."""
+            norm_len = len(normalize_text(chunk.text))
+            duration = max(0.0, chunk.end - chunk.start)
+            return (norm_len, duration, -chunk.start)
+        
+        if len(self.chunks) <= 1:
+            return 0
+        
+        # Sort by (start, end) for deterministic processing
+        self.chunks.sort(key=lambda c: (c.start, c.end))
+        
+        kept = []
+        removed = 0
+        
+        for chunk in self.chunks:
+            cur_norm = normalize_text(chunk.text)
+            
+            # Drop near-empty chunks
+            if len(cur_norm) < 3:
+                removed += 1
+                continue
+            
+            if not kept:
+                kept.append(chunk)
+                continue
+            
+            prev = kept[-1]
+            prev_norm = normalize_text(prev.text)
+            
+            # Calculate timing metrics
+            start_delta = abs(chunk.start - prev.start)
+            overlap_ratio = calc_overlap_ratio(prev.start, prev.end, chunk.start, chunk.end)
+            
+            # Check for subset relationship (either direction)
+            subset_relation = is_subset_text(cur_norm, prev_norm) or is_subset_text(prev_norm, cur_norm)
+            
+            # Exact match is always a duplicate if timing overlaps
+            exact_match = cur_norm == prev_norm
+            
+            # Determine if likely duplicate
+            likely_duplicate = False
+            if exact_match and (start_delta <= 1.0 or overlap_ratio >= 0.5):
+                likely_duplicate = True
+            elif subset_relation and (start_delta <= 1.0 or overlap_ratio >= 0.6):
+                likely_duplicate = True
+            
+            if likely_duplicate:
+                # Keep the better chunk
+                prev_score = chunk_score(prev)
+                cur_score = chunk_score(chunk)
+                
+                if cur_score > prev_score:
+                    kept[-1] = chunk
+                
+                removed += 1
+            else:
+                kept.append(chunk)
+        
+        self.chunks = kept
+        return removed
+
 
 class TimelineParser:
     """Parses various transcript formats into a ReviewTimeline."""
@@ -170,6 +268,16 @@ class TimelineParser:
 
         # Normalize speaker ordering for a more intuitive review experience.
         timeline.reorder_speakers_by_first_appearance()
+        
+        # Final strict dedupe pass to remove duplicate/subset/overlapping chunks
+        before_dedupe = len(timeline.chunks)
+        removed = timeline.dedupe_chunks_strict()
+        timeline.dedupe_stats = {
+            'before': before_dedupe,
+            'after': len(timeline.chunks),
+            'removed': removed
+        }
+        
         return timeline
     
     def _parse_diarization_json(self, timeline: ReviewTimeline, 
