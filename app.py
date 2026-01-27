@@ -1503,6 +1503,7 @@ def api_create_job():
         diarization_effective = compute_diarization_policy(
             diarization_enabled=diarization_enabled,
             diarization_auto_split=options.get('diarizationAutoSplit', False),
+            diarization_fast_switching=options.get('diarizationFastSwitching', False),
             requested_max_duration_seconds=options.get('diarizationMaxDurationSeconds'),
             requested_chunk_seconds=options.get('diarizationChunkSeconds'),
             requested_overlap_seconds=options.get('diarizationOverlapSeconds'),
@@ -1642,6 +1643,7 @@ def api_create_job():
             'numSpeakers': options.get('numSpeakers') if diarization_enabled else None,
             'diarizationMaxDurationSeconds': options.get('diarizationMaxDurationSeconds') if diarization_enabled else None,
             'diarizationAutoSplit': options.get('diarizationAutoSplit', False) if diarization_enabled else False,
+            'diarizationFastSwitching': options.get('diarizationFastSwitching', False) if diarization_enabled else False,
             'diarizationChunkSeconds': options.get('diarizationChunkSeconds') if diarization_enabled else None,
             'diarizationOverlapSeconds': options.get('diarizationOverlapSeconds') if diarization_enabled else None,
             'diarizationEffective': diarization_effective,
@@ -5055,6 +5057,7 @@ def api_compute_diarization_policy():
     
     diarization_enabled = data.get('diarizationEnabled', False)
     diarization_auto_split = data.get('diarizationAutoSplit', False)
+    diarization_fast_switching = data.get('diarizationFastSwitching', False)
     requested_max_duration = data.get('requestedMaxDurationSeconds')
     requested_chunk = data.get('requestedChunkSeconds')
     requested_overlap = data.get('requestedOverlapSeconds')
@@ -5066,6 +5069,7 @@ def api_compute_diarization_policy():
     policy = compute_diarization_policy(
         diarization_enabled=diarization_enabled,
         diarization_auto_split=diarization_auto_split,
+        diarization_fast_switching=diarization_fast_switching,
         requested_max_duration_seconds=requested_max_duration,
         requested_chunk_seconds=requested_chunk,
         requested_overlap_seconds=requested_overlap,

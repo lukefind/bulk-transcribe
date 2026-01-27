@@ -670,6 +670,13 @@
                         </div>
                         <p class="text-xs text-gray-500 mt-1" id="autoSplitHelp">Splits files longer than max duration into overlapping chunks.</p>
                         <p class="text-xs text-gray-500 mt-1">For ~25 minute files, 15 min with auto-split works well.</p>
+                        <div class="flex items-center gap-3 mt-3">
+                            <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer" title="Better for rapid back-and-forth conversations with frequent speaker changes">
+                                <input type="checkbox" id="diarizationFastSwitching" onchange="saveUIState(); updateDiarizationPolicy();" class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500">
+                                Fast Switching
+                            </label>
+                            <span class="text-xs text-gray-500">(short segments, higher overlap)</span>
+                        </div>
                     </div>
                 </div>
                 
@@ -981,6 +988,7 @@
                 <span id="summaryLanguage" class="hidden"><span class="text-gray-500">Lang:</span> <span class="text-gray-300"></span></span>
                 <span id="summaryDiarization" class="hidden"><span class="text-gray-500">Diarization:</span> <span class="text-gray-300"></span></span>
                 <span id="summaryAutoSplit" class="hidden"><span class="text-gray-500">Auto-split:</span> <span class="text-gray-300"></span></span>
+                <span id="summaryFastSwitching" class="hidden"><span class="text-gray-500">Fast-switch:</span> <span class="text-gray-300"></span></span>
                 <span id="summaryChunking" class="hidden"><span class="text-gray-500">Chunking:</span> <span class="text-gray-300"></span></span>
                 <span id="summaryCreated" class="hidden"><span class="text-gray-500">Created:</span> <span class="text-gray-300"></span></span>
             </div>
@@ -1026,7 +1034,8 @@
                         <div><kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">[</kbd> <kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">]</kbd> Prev/next chunk</div>
                         <div><kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">1-9</kbd> Assign speaker</div>
                         <div><kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">E</kbd> Edit chunk</div>
-                        <div><kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">S</kbd> Split at cursor</div>
+                        <div><kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">⌘/Ctrl+S</kbd> Split at cursor</div>
+                        <div><kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">⌘/Ctrl+⇧+S</kbd> Split interjection</div>
                         <div><kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">Enter</kbd> Save edit</div>
                         <div><kbd class="px-1 py-0.5 bg-surface-700 rounded text-gray-400">Esc</kbd> Cancel edit</div>
                     </div>
@@ -1424,6 +1433,7 @@
             maxSpeakers: 'bulk_transcribe_max_speakers',
             numSpeakers: 'bulk_transcribe_num_speakers',
             diarizationAutoSplit: 'bulk_transcribe_diarization_auto_split',
+            diarizationFastSwitching: 'bulk_transcribe_diarization_fast_switching',
             diarizationMaxDuration: 'bulk_transcribe_diarization_max_duration',
             includeSegments: 'bulk_transcribe_include_segments',
             includeFull: 'bulk_transcribe_include_full',
@@ -1514,6 +1524,7 @@
             _restoreSelect('maxSpeakers', STORAGE_KEYS.maxSpeakers);
             _restoreSelect('numSpeakers', STORAGE_KEYS.numSpeakers);
             _restoreCheckbox('diarizationAutoSplit', STORAGE_KEYS.diarizationAutoSplit);
+            _restoreCheckbox('diarizationFastSwitching', STORAGE_KEYS.diarizationFastSwitching);
             _restoreSelect('diarizationMaxDuration', STORAGE_KEYS.diarizationMaxDuration);
             _restoreCheckbox('includeSegments', STORAGE_KEYS.includeSegments);
             _restoreCheckbox('includeFull', STORAGE_KEYS.includeFull);
@@ -1552,6 +1563,9 @@
                     
                     const autoSplit = document.getElementById('diarizationAutoSplit')?.checked;
                     saveToStorage(STORAGE_KEYS.diarizationAutoSplit, autoSplit ? 'true' : 'false');
+                    
+                    const fastSwitching = document.getElementById('diarizationFastSwitching')?.checked;
+                    saveToStorage(STORAGE_KEYS.diarizationFastSwitching, fastSwitching ? 'true' : 'false');
                     
                     const maxDuration = document.getElementById('diarizationMaxDuration')?.value;
                     if (maxDuration) saveToStorage(STORAGE_KEYS.diarizationMaxDuration, maxDuration);
@@ -1886,6 +1900,8 @@
                 return;
             }
             
+            const fastSwitching = document.getElementById('diarizationFastSwitching')?.checked || false;
+            
             try {
                 const response = await fetch('/api/diarization/policy', {
                     method: 'POST',
@@ -1893,6 +1909,7 @@
                     body: JSON.stringify({
                         diarizationEnabled: true,
                         diarizationAutoSplit: autoSplit,
+                        diarizationFastSwitching: fastSwitching,
                         requestedMaxDurationSeconds: maxDuration
                     })
                 });
@@ -2730,6 +2747,7 @@
             persistSelect('maxSpeakers', STORAGE_KEYS.maxSpeakers);
             persistSelect('numSpeakers', STORAGE_KEYS.numSpeakers);
             persistCheckbox('diarizationAutoSplit', STORAGE_KEYS.diarizationAutoSplit);
+            persistCheckbox('diarizationFastSwitching', STORAGE_KEYS.diarizationFastSwitching);
             persistSelect('diarizationMaxDuration', STORAGE_KEYS.diarizationMaxDuration);
             persistCheckbox('includeSegments', STORAGE_KEYS.includeSegments);
             persistCheckbox('includeFull', STORAGE_KEYS.includeFull);
@@ -3040,6 +3058,9 @@
                 
                 const autoSplit = document.getElementById('diarizationAutoSplit')?.checked || false;
                 options.diarizationAutoSplit = autoSplit;
+                
+                const fastSwitching = document.getElementById('diarizationFastSwitching')?.checked || false;
+                options.diarizationFastSwitching = fastSwitching;
                 // Note: chunkSeconds and overlapSeconds are auto-computed by backend policy
             }
             
@@ -4470,8 +4491,13 @@
             if (diarizationUsed) {
                 const autoSplit = job.diarizationAutoSplit || job.options?.diarizationAutoSplit;
                 setField('summaryAutoSplit', autoSplit ? 'Yes' : 'No');
+                
+                // Fast Switching
+                const fastSwitching = job.diarizationFastSwitching || job.options?.diarizationFastSwitching;
+                setField('summaryFastSwitching', fastSwitching ? 'Yes' : 'No');
             } else {
                 setField('summaryAutoSplit', null);
+                setField('summaryFastSwitching', null);
             }
             
             // Chunking
@@ -5044,13 +5070,32 @@
             
             // Handle keyboard shortcuts in edit mode
             textarea.addEventListener('keydown', (e) => {
+                // Escape = cancel edit
                 if (e.key === 'Escape') {
                     e.preventDefault();
                     cancelChunkEdit(chunkIndex);
-                } else if (e.key === 'Enter' && !e.shiftKey) {
-                    // Enter saves (Shift+Enter for newline)
+                    return;
+                }
+                
+                // Enter saves (Shift+Enter for newline)
+                if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     saveChunkText(chunkIndex);
+                    return;
+                }
+                
+                // Cmd/Ctrl + S = split at cursor
+                if ((e.key === 's' || e.key === 'S') && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+                    e.preventDefault();
+                    splitChunkAtCursor(chunkIndex);
+                    return;
+                }
+                
+                // Cmd/Ctrl + Shift + S = split interjection (3-way, by selection)
+                if ((e.key === 's' || e.key === 'S') && (e.metaKey || e.ctrlKey) && e.shiftKey) {
+                    e.preventDefault();
+                    splitChunkBySelection(chunkIndex);
+                    return;
                 }
             });
         }
@@ -5205,6 +5250,94 @@
             }, 50);
         }
         
+        function splitChunkBySelection(chunkIndex) {
+            // 3-way split: before selection | selection | after selection
+            // Useful for extracting an interjection from the middle of a chunk
+            if (!reviewTimeline?.chunks?.[chunkIndex]) return;
+            
+            const textarea = document.getElementById('editTextarea');
+            if (!textarea) return;
+            
+            const selStart = textarea.selectionStart;
+            const selEnd = textarea.selectionEnd;
+            const text = textarea.value;
+            
+            // Must have a selection (not just cursor)
+            if (selStart === selEnd) {
+                // No selection - fall back to cursor split
+                splitChunkAtCursor(chunkIndex);
+                return;
+            }
+            
+            const chunk = reviewTimeline.chunks[chunkIndex];
+            const beforeText = text.substring(0, selStart).trim();
+            const selectedText = text.substring(selStart, selEnd).trim();
+            const afterText = text.substring(selEnd).trim();
+            
+            // Selected text must have content
+            if (!selectedText) return;
+            
+            // Calculate timing splits based on text position ratios
+            const duration = chunk.end - chunk.start;
+            const ratio1 = selStart / text.length;
+            const ratio2 = selEnd / text.length;
+            const splitTime1 = chunk.start + (duration * ratio1);
+            const splitTime2 = chunk.start + (duration * ratio2);
+            
+            // Build new chunks array
+            const newChunks = [];
+            
+            if (beforeText) {
+                newChunks.push({
+                    chunk_id: `${chunk.chunk_id}_a`,
+                    start: chunk.start,
+                    end: splitTime1,
+                    speaker_id: chunk.speaker_id,
+                    text: beforeText
+                });
+            }
+            
+            // Middle chunk (the interjection) - keep same speaker for now, user can reassign
+            newChunks.push({
+                chunk_id: `${chunk.chunk_id}_b`,
+                start: beforeText ? splitTime1 : chunk.start,
+                end: afterText ? splitTime2 : chunk.end,
+                speaker_id: chunk.speaker_id,
+                text: selectedText
+            });
+            
+            if (afterText) {
+                newChunks.push({
+                    chunk_id: `${chunk.chunk_id}_c`,
+                    start: splitTime2,
+                    end: chunk.end,
+                    speaker_id: chunk.speaker_id,
+                    text: afterText
+                });
+            }
+            
+            // Replace the original chunk with the new ones
+            reviewTimeline.chunks.splice(chunkIndex, 1, ...newChunks);
+            
+            // Clear editing state
+            reviewEditingChunkIndex = null;
+            
+            // Mark as changed
+            markUnsaved();
+            debounceSave();
+            
+            // Re-render and select the middle (interjection) chunk
+            renderTimeline();
+            const middleIndex = beforeText ? chunkIndex + 1 : chunkIndex;
+            selectChunk(middleIndex);
+            
+            // Ensure speaker buttons are visible on the new chunk
+            setTimeout(() => {
+                const row = document.querySelector(`.chunk-row[data-chunk-index="${middleIndex}"]`);
+                row?.querySelector('.speaker-buttons')?.classList.remove('hidden');
+            }, 50);
+        }
+        
         function markUnsaved() {
             reviewHasUnsavedChanges = true;
             updateSaveStatus('unsaved');
@@ -5342,12 +5475,7 @@
                 return;
             }
             
-            // S = split at cursor (when editing)
-            if ((e.key === 's' || e.key === 'S') && reviewEditingChunkIndex !== null) {
-                e.preventDefault();
-                splitChunkAtCursor(reviewEditingChunkIndex);
-                return;
-            }
+            // Note: S/Cmd+S split shortcuts are now handled in the textarea keydown handler
             
             switch (e.key) {
                 case ' ':

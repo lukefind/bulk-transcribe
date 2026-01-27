@@ -77,6 +77,7 @@ def compute_diarization_policy(
     *,
     diarization_enabled: bool,
     diarization_auto_split: bool,
+    diarization_fast_switching: bool = False,
     requested_max_duration_seconds: Optional[int] = None,
     requested_chunk_seconds: Optional[int] = None,
     requested_overlap_seconds: Optional[int] = None,
@@ -172,8 +173,16 @@ def compute_diarization_policy(
     # Determine if chunk/overlap are derived or user-specified
     derived = requested_chunk_seconds is None and requested_overlap_seconds is None
     
+    # Fast Switching mode: force shorter chunks (90s) and higher overlap (8s)
+    # This is better for rapid back-and-forth conversations
+    fast_switching_chunk = 90
+    fast_switching_overlap = 8
+    
     # Compute chunk seconds
-    if requested_chunk_seconds is not None:
+    if diarization_fast_switching and requested_chunk_seconds is None:
+        # Fast switching overrides derived chunk size
+        chunk_seconds = fast_switching_chunk
+    elif requested_chunk_seconds is not None:
         chunk_seconds = requested_chunk_seconds
     else:
         chunk_seconds = _derive_chunk_seconds(max_duration)
@@ -186,7 +195,10 @@ def compute_diarization_policy(
         clamped['chunkSecondsOriginal'] = original_chunk
     
     # Compute overlap seconds
-    if requested_overlap_seconds is not None:
+    if diarization_fast_switching and requested_overlap_seconds is None:
+        # Fast switching overrides derived overlap
+        overlap_seconds = fast_switching_overlap
+    elif requested_overlap_seconds is not None:
         overlap_seconds = requested_overlap_seconds
     else:
         overlap_seconds = _derive_overlap_seconds(
@@ -206,6 +218,7 @@ def compute_diarization_policy(
     return {
         'maxDurationSeconds': max_duration,
         'autoSplit': diarization_auto_split,
+        'fastSwitching': diarization_fast_switching,
         'chunkSeconds': chunk_seconds,
         'overlapSeconds': overlap_seconds,
         'derived': derived,
