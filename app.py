@@ -3709,6 +3709,180 @@ def api_export_review_project(job_id):
     )
 
 
+@app.route('/api/jobs/<job_id>/review/export-md', methods=['GET'])
+def api_export_review_md(job_id):
+    """Export review as speaker markdown with timestamps."""
+    from review_timeline import TimelineParser, apply_review_state
+    
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    input_id = request.args.get('inputId')
+    inputs = manifest.get('inputs', [])
+    if not inputs:
+        return jsonify({'error': 'No inputs in job'}), 400
+    
+    target_input = inputs[0] if not input_id else next((i for i in inputs if i.get('uploadId') == input_id), inputs[0])
+    input_id = target_input.get('uploadId')
+    filename = target_input.get('originalFilename', target_input.get('filename', 'unknown'))
+    safe_name = secure_filename(Path(filename).stem) or 'transcript'
+    
+    # Build timeline with review state
+    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest)
+    
+    # Format as markdown
+    lines = []
+    for chunk in timeline.chunks:
+        speaker = next((s for s in timeline.speakers if s.id == chunk.speaker_id), None)
+        label = speaker.label if speaker else chunk.speaker_id or 'Speaker'
+        
+        mins, secs = divmod(int(chunk.start), 60)
+        hours, mins = divmod(mins, 60)
+        timestamp = f'{hours:02d}:{mins:02d}:{secs:02d}' if hours else f'{mins:02d}:{secs:02d}'
+        
+        lines.append(f'[{timestamp}] {label}: {chunk.text}')
+    
+    content = '\n\n'.join(lines)
+    
+    return Response(
+        content,
+        mimetype='text/markdown',
+        headers={'Content-Disposition': f'attachment; filename="{safe_name}_review.md"'}
+    )
+
+
+@app.route('/api/jobs/<job_id>/review/export-txt', methods=['GET'])
+def api_export_review_txt(job_id):
+    """Export review as plain text."""
+    from review_timeline import TimelineParser, apply_review_state
+    
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    input_id = request.args.get('inputId')
+    inputs = manifest.get('inputs', [])
+    if not inputs:
+        return jsonify({'error': 'No inputs in job'}), 400
+    
+    target_input = inputs[0] if not input_id else next((i for i in inputs if i.get('uploadId') == input_id), inputs[0])
+    input_id = target_input.get('uploadId')
+    filename = target_input.get('originalFilename', target_input.get('filename', 'unknown'))
+    safe_name = secure_filename(Path(filename).stem) or 'transcript'
+    
+    # Build timeline with review state
+    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest)
+    
+    # Format as plain text
+    lines = []
+    for chunk in timeline.chunks:
+        speaker = next((s for s in timeline.speakers if s.id == chunk.speaker_id), None)
+        label = speaker.label if speaker else chunk.speaker_id or 'Speaker'
+        lines.append(f'{label}: {chunk.text}')
+    
+    content = '\n\n'.join(lines)
+    
+    return Response(
+        content,
+        mimetype='text/plain',
+        headers={'Content-Disposition': f'attachment; filename="{safe_name}_review.txt"'}
+    )
+
+
+@app.route('/api/jobs/<job_id>/review/export-timeline-json', methods=['GET'])
+def api_export_review_timeline_json(job_id):
+    """Export review timeline as JSON."""
+    from review_timeline import TimelineParser, apply_review_state
+    
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    input_id = request.args.get('inputId')
+    inputs = manifest.get('inputs', [])
+    if not inputs:
+        return jsonify({'error': 'No inputs in job'}), 400
+    
+    target_input = inputs[0] if not input_id else next((i for i in inputs if i.get('uploadId') == input_id), inputs[0])
+    input_id = target_input.get('uploadId')
+    filename = target_input.get('originalFilename', target_input.get('filename', 'unknown'))
+    safe_name = secure_filename(Path(filename).stem) or 'transcript'
+    
+    # Build timeline with review state
+    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest)
+    
+    content = timeline.to_json()
+    
+    return Response(
+        content,
+        mimetype='application/json',
+        headers={'Content-Disposition': f'attachment; filename="{safe_name}_review_timeline.json"'}
+    )
+
+
+def _build_review_timeline(session_id: str, job_id: str, input_id: str, filename: str, manifest: dict):
+    """Build timeline with review state applied. Returns (timeline, review_state)."""
+    from review_timeline import TimelineParser, apply_review_state
+    
+    outputs = manifest.get('outputs', [])
+    transcript_json = None
+    diarization_json = None
+    speaker_md = None
+    transcript_md = None
+    
+    for output in outputs:
+        if output.get('forUploadId') != input_id and output.get('forUploadId'):
+            continue
+        
+        output_type = output.get('type', '')
+        output_path = output.get('path')
+        
+        if not output_path or not os.path.exists(output_path):
+            continue
+        
+        try:
+            with open(output_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            if output_type == 'json':
+                transcript_json = content
+            elif output_type == 'diarization-json':
+                diarization_json = content
+            elif output_type == 'speaker-markdown':
+                speaker_md = content
+            elif output_type == 'markdown':
+                transcript_md = content
+        except Exception:
+            continue
+    
+    parser = TimelineParser(job_id, input_id, filename)
+    timeline = parser.parse(
+        transcript_json=transcript_json,
+        diarization_json=diarization_json,
+        speaker_md=speaker_md,
+        transcript_md=transcript_md
+    )
+    
+    job_dir = session_store.job_dir(session_id, job_id)
+    state_path = os.path.join(job_dir, 'review', 'review_state.json')
+    review_state = session_store.read_json(state_path) or {}
+    
+    if review_state:
+        timeline = apply_review_state(timeline, review_state)
+    
+    return timeline, review_state
+
+
 def _build_job_export_files(session_id: str, job_id: str, input_id: str = None) -> dict:
     """
     Build export files for a single job. Returns dict of {filename: content_bytes}.
