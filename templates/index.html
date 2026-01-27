@@ -714,13 +714,6 @@
                         </svg>
                         Save
                     </button>
-                    <!-- Re-run Button -->
-                    <button onclick="rerunReviewJob()" id="reviewRerunBtn" class="px-3 py-1.5 bg-surface-700 hover:bg-surface-600 border border-gray-600/50 rounded-lg text-gray-300 text-sm flex items-center gap-2 transition-colors">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-                        </svg>
-                        Re-run
-                    </button>
                     <!-- Export Dropdown -->
                     <div class="relative" id="exportDropdown">
                         <button onclick="toggleExportDropdown()" class="px-3 py-1.5 bg-surface-700 hover:bg-surface-600 border border-gray-600/50 rounded-lg text-gray-300 text-sm flex items-center gap-2 transition-colors">
@@ -740,6 +733,19 @@
                 </div>
             </div>
         </header>
+        
+        <!-- Job Settings Summary -->
+        <div id="reviewJobSettingsSummary" class="border-b border-gray-700/30 bg-surface-800/30 px-4 py-2 flex-shrink-0 hidden">
+            <div class="max-w-7xl mx-auto flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400">
+                <span id="summaryModel" class="hidden"><span class="text-gray-500">Model:</span> <span class="text-gray-300"></span></span>
+                <span id="summaryBackend" class="hidden"><span class="text-gray-500">Backend:</span> <span class="text-gray-300"></span></span>
+                <span id="summaryLanguage" class="hidden"><span class="text-gray-500">Lang:</span> <span class="text-gray-300"></span></span>
+                <span id="summaryDiarization" class="hidden"><span class="text-gray-500">Diarization:</span> <span class="text-gray-300"></span></span>
+                <span id="summaryAutoSplit" class="hidden"><span class="text-gray-500">Auto-split:</span> <span class="text-gray-300"></span></span>
+                <span id="summaryChunking" class="hidden"><span class="text-gray-500">Chunking:</span> <span class="text-gray-300"></span></span>
+                <span id="summaryCreated" class="hidden"><span class="text-gray-500">Created:</span> <span class="text-gray-300"></span></span>
+            </div>
+        </div>
         
         <!-- Audio Player Bar -->
         <div class="border-b border-gray-700/50 bg-surface-800/50 px-4 py-3 flex-shrink-0">
@@ -3873,17 +3879,6 @@
             }
         }
         
-        async function rerunReviewJob() {
-            if (!reviewJobData?.jobId) {
-                showError('No job loaded to re-run');
-                return;
-            }
-            
-            // Close review panel first, then re-run
-            closeReviewPanel();
-            await rerunJob(reviewJobData.jobId, { navigate: true });
-        }
-        
         async function onReviewJobSelectChange() {
             const select = document.getElementById('reviewJobSelect');
             if (!select) return;
@@ -3966,8 +3961,79 @@
             // Load job switcher options
             await loadReviewJobOptions(job.jobId);
             
+            // Render job settings summary
+            renderReviewJobSettingsSummary(job);
+            
             // Setup keyboard shortcuts
             setupReviewKeyboardShortcuts();
+        }
+        
+        function renderReviewJobSettingsSummary(job) {
+            const container = document.getElementById('reviewJobSettingsSummary');
+            if (!container || !job) {
+                if (container) container.classList.add('hidden');
+                return;
+            }
+            
+            container.classList.remove('hidden');
+            
+            // Helper to set field
+            const setField = (id, value) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                if (value) {
+                    el.classList.remove('hidden');
+                    el.querySelector('.text-gray-300').textContent = value;
+                } else {
+                    el.classList.add('hidden');
+                }
+            };
+            
+            // Model
+            setField('summaryModel', job.model || null);
+            
+            // Backend
+            let backendLabel = null;
+            if (job.executionMode === 'remote') {
+                backendLabel = 'Remote GPU';
+            } else if (job.backend) {
+                backendLabel = job.backend;
+            }
+            setField('summaryBackend', backendLabel);
+            
+            // Language
+            setField('summaryLanguage', job.language || null);
+            
+            // Diarization
+            setField('summaryDiarization', job.diarizationEnabled ? 'Yes' : 'No');
+            
+            // Auto-split
+            if (job.diarizationEnabled) {
+                setField('summaryAutoSplit', job.diarizationAutoSplit ? 'Yes' : 'No');
+            } else {
+                setField('summaryAutoSplit', null);
+            }
+            
+            // Chunking
+            if (job.chunkSeconds || job.overlapSeconds) {
+                const chunkInfo = `${job.chunkSeconds || '—'}s / ${job.overlapSeconds || '0'}s overlap`;
+                setField('summaryChunking', chunkInfo);
+            } else {
+                setField('summaryChunking', null);
+            }
+            
+            // Created time
+            if (job.createdAt) {
+                try {
+                    const d = new Date(job.createdAt);
+                    const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    setField('summaryCreated', timeStr);
+                } catch (e) {
+                    setField('summaryCreated', null);
+                }
+            } else {
+                setField('summaryCreated', null);
+            }
         }
         
         function closeReviewWorkspace() {
@@ -4304,15 +4370,27 @@
             // Handle save on Enter or blur
             const commitRename = async () => {
                 const newLabel = input.value.trim();
-                if (newLabel && newLabel !== speaker.label) {
+                const originalLabel = speaker.label || speaker.id;
+                
+                // Only persist non-empty labels that differ from original
+                if (newLabel && newLabel !== originalLabel) {
                     reviewState.speakerLabelMap[speakerId] = newLabel;
-                } else if (!newLabel || newLabel === speaker.label) {
+                } else {
+                    // Empty or same as original - remove override
                     delete reviewState.speakerLabelMap[speakerId];
                 }
+                
                 markUnsaved();
+                renderSpeakerLegend();
+                renderTimeline();
                 await saveReviewState();
-                updateSpeakerSidebar();
-                renderChunks();
+                
+                // Brief visual confirmation
+                const statusText = document.getElementById('saveStatusText');
+                if (statusText) {
+                    statusText.textContent = 'Saved!';
+                    setTimeout(() => { statusText.textContent = 'Saved'; }, 1200);
+                }
             };
             
             input.addEventListener('blur', commitRename);

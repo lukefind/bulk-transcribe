@@ -2543,7 +2543,7 @@ def api_clear_jobs():
     older_than_hours = data.get('olderThanHours', 24)
     
     # Get all jobs for this session
-    jobs_dir = session_store.session_jobs_dir(session_id)
+    jobs_dir = os.path.join(session_store.session_dir(session_id), 'jobs')
     if not jobs_dir or not os.path.exists(jobs_dir):
         return jsonify({'cleared': 0})
     
@@ -2567,19 +2567,19 @@ def api_clear_jobs():
                     skipped_running += 1
                     continue
         
-        # Check job age
-        manifest_path = os.path.join(job_dir, 'manifest.json')
+        # Check job age - use job.json (not manifest.json)
+        manifest_path = os.path.join(job_dir, 'job.json')
         if os.path.exists(manifest_path):
-            manifest = session_store.read_json(manifest_path)
-            if manifest:
-                created_at = manifest.get('createdAt')
-                if created_at:
-                    try:
+            try:
+                manifest = session_store.read_json(manifest_path)
+                if manifest:
+                    created_at = manifest.get('createdAt')
+                    if created_at:
                         job_time = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
                         if job_time >= cutoff:
                             continue  # Job is too recent
-                    except Exception:
-                        pass
+            except Exception:
+                pass  # Skip unreadable jobs safely
         
         # Delete job
         try:
