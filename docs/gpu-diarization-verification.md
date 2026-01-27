@@ -5,7 +5,7 @@ This document provides step-by-step verification that GPU diarization is working
 ## Prerequisites
 
 1. Controller deployed with latest commits
-2. Worker deployed on RunPod with A40 GPU
+2. Worker deployed on RunPod with A40 or L40 GPU
 3. `DIARIZATION_DEVICE=cuda` set on worker (or `auto` with CUDA available)
 4. `WORKER_TOKEN` matching between controller and worker
 
@@ -208,7 +208,7 @@ If job shows complete but `outputsReceived: 0`:
 
 ## Optimal Settings for A40
 
-For best diarization performance on NVIDIA A40:
+For best diarization performance on NVIDIA A40/L40:
 
 | Setting | Value | Reason |
 |---------|-------|--------|

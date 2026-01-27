@@ -26,7 +26,9 @@ The system is designed for heavy batch workloads with:
 
 | GPU | VRAM | Recommended `WORKER_MAX_CONCURRENT_JOBS` | Notes |
 |-----|------|------------------------------------------|-------|
-| RTX 4090 | 24GB | 2-3 | Can run large-v3 + diarization concurrently |
+| RTX 4090 | 24GB | 2-3 | Good fallback |
+| A40 | 48GB | 2-3 | Strong balance |
+| L40 / L40S | 48GB | 2-3 | Best throughput |
 | RTX 3090 | 24GB | 2 | Slightly slower than 4090 |
 | RTX 3080 | 10GB | 1 | Limited VRAM for large models |
 | A100 40GB | 40GB | 4-6 | Data center GPU, excellent throughput |
@@ -38,6 +40,7 @@ When diarization is enabled:
 - VRAM usage increases significantly
 - Reduce `WORKER_MAX_CONCURRENT_JOBS` by 1
 - Consider using `--diarization-max-duration` to limit segment length
+- **Fast Switching** (shorter chunks + higher overlap) improves turn-taking but slows runtime
 
 ## Controller Configuration
 

@@ -61,6 +61,11 @@ The push script will output the `IMAGE_DIGEST` - save this for provable identity
 | `WORKER_TOKEN` | Your shared secret (generate with `openssl rand -hex 32`) |
 | `HF_TOKEN` | Your HuggingFace token (for diarization) |
 | `WORKER_PORT` | `8477` |
+| `WORKER_MODEL` | `large-v3` |
+| `WORKER_MAX_CONCURRENT_JOBS` | `1` |
+| `WORKER_MAX_FILE_MB` | `2000` |
+| `WORKER_TMP_DIR` | `/tmp/bt-worker` |
+| `DIARIZATION_DEVICE` | `cuda` |
 
 5. Expose HTTP Ports: `8477`
 
@@ -75,10 +80,9 @@ The push script will output the `IMAGE_DIGEST` - save this for provable identity
 
 | GPU | VRAM | Cost | Recommendation |
 |-----|------|------|----------------|
-| RTX 3090 | 24GB | ~$0.40/hr | Good for testing |
-| RTX 4090 | 24GB | ~$0.70/hr | Fast, good value |
-| A10 | 24GB | ~$0.50/hr | Reliable |
-| A40 | 48GB | ~$1.00/hr | Long files + diarization |
+| RTX 4090 | 24GB | ~$0.70/hr | Good fallback |
+| A40 | 48GB | ~$1.00/hr | Strong balance |
+| L40 / L40S | 48GB | ~$1.00–$1.50/hr | Best throughput |
 | A100 | 80GB | ~$1.50-2.50/hr | Maximum speed |
 
 5. Select "On-Demand" (not Spot for production)

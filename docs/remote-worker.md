@@ -1,6 +1,6 @@
 # Remote GPU Worker Setup Guide
 
-This guide explains how to set up and configure the Remote GPU Worker for Bulk Transcribe, enabling you to offload transcription and diarization to a dedicated GPU server.
+This guide explains how to set up and configure the Remote GPU Worker for Bulk Transcribe, enabling you to offload transcription and diarization to a dedicated GPU server. Remote GPU is **optional** and only used when explicitly configured in the UI.
 
 ## Architecture Overview
 
@@ -58,10 +58,12 @@ WORKER_TOKEN=your-shared-secret-token  # Must match REMOTE_WORKER_TOKEN
 WORKER_PORT=8477
 WORKER_TMP_DIR=/tmp/bt-worker
 WORKER_MAX_FILE_MB=2000
+WORKER_MAX_CONCURRENT_JOBS=1
 WORKER_MODEL=large-v3
 
 # For diarization
 HF_TOKEN=your-huggingface-token
+DIARIZATION_DEVICE=cuda  # or auto
 ```
 
 ## Deployment Options
@@ -103,7 +105,7 @@ services:
 
 ### Option 2: RunPod Deployment
 
-1. Create a RunPod GPU pod with NVIDIA GPU (RTX 3090+ recommended)
+1. Create a RunPod GPU pod with NVIDIA GPU (L40/L40S or A40 recommended; RTX 4090 is a good fallback)
 
 2. SSH into the pod and clone the repo:
    ```bash

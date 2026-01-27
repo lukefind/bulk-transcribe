@@ -30,7 +30,7 @@ Diarization adds significant processing time:
 | 1 hour | +8-15 min | Significant |
 | 2 hours | +20-40 min | Consider chunking |
 
-**Rule of thumb**: Diarization adds 15-30% to total processing time on GPU, 50-100% on CPU.
+**Rule of thumb**: Diarization adds 15-30% to total processing time on GPU, 50-100% on CPU. Fast Switching (shorter chunks + higher overlap) increases diarization time further.
 
 ## Cost Estimation
 
@@ -158,6 +158,7 @@ GPU instances charge by the minute/hour even when idle. Stop them when done.
 - GPU vs CPU does not affect accuracy (same model)
 - Diarization accuracy depends on audio quality and speaker distinctiveness
 - Word-level timestamps slightly reduce speed but improve review workflow
+- L40/L40S and A40 are strong choices for large-v3 + diarization
 
 ## Limitations
 

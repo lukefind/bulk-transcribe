@@ -10,6 +10,9 @@ Deploy Bulk Transcribe on an Ubuntu server using Docker Compose.
 - At least 8GB RAM (16GB+ recommended for larger models)
 - 10GB+ free disk space
 
+Notes:
+- DOCX/PDF exports require `python-docx` and `reportlab` (included in server requirements).
+
 ## Quick Start (CPU)
 
 ```bash

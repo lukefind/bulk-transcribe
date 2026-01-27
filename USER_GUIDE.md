@@ -1,203 +1,166 @@
 # Bulk Transcribe User Guide
 
-A simple, powerful tool for batch transcribing audio files to markdown using OpenAI Whisper.
-
-## Getting Started
-
-### Launching the App
-
-1. Double-click **Bulk Transcribe.app** in your Applications folder
-2. The app opens in its own native window (no browser required)
-
-### Quick Start
-
-1. Click **Browse** next to "Input Folder" and select a folder containing audio files
-2. Click **Browse** next to "Output Folder" and select where to save transcriptions
-3. Choose your preferred model and language
-4. Click **Start Transcription**
-
-## Interface Overview
-
-### Input Folder
-Select the folder containing your audio files. Supported formats:
-- MP3, WAV, M4A, FLAC, OGG
-- WebM, MP4, MOV, AVI
-
-The app will automatically find all audio files in the folder and subfolders.
-
-### Output Folder
-Select where to save the transcription markdown files. Each audio file will generate a corresponding `_transcription.md` file.
-
-### Model Selection
-
-| Model | Speed | Accuracy | RAM Required | Best For |
-|-------|-------|----------|--------------|----------|
-| **tiny** | Fastest | Basic | ~1 GB | Quick tests |
-| **base** | Fast | Good | ~1 GB | Light usage |
-| **small** | Balanced | Better | ~2 GB | General use |
-| **medium** | Slow | High | ~5 GB | Better quality |
-| **large** | Slowest | Best | ~10 GB | Best quality |
-| **large-v3** | Slowest | Best | ~10 GB | **Recommended** |
-
-**Recommendation:** The `large-v3` model offers the best accuracy for most use cases. It's selected by default and marked as "recommended" in the UI.
-
-### Model Management
-
-Click **Manage** next to the model dropdown to:
-- **View downloaded models** - See which models are available locally
-- **Download new models** - Click "Download" to add a model
-- **Delete models** - Remove models you no longer need to free disk space
-
-### Language Selection
-
-- **Auto-detect**: Whisper will automatically detect the spoken language
-- **Specific language**: Select a language for better accuracy and faster processing
-
-### Output Options
-
-#### Segmented Transcription
-Splits the transcription into timestamped segments. Useful for:
-- Long recordings
-- Finding specific parts of audio
-- Creating subtitles
-
-#### Full Transcription
-Includes the complete text as a single block. Useful for:
-- Reading the full content
-- Copy/pasting text
-- Document creation
-
-#### Include Timestamps
-Adds start/end times to each segment in HH:MM:SS format.
-
-#### Word-level Timestamps
-Provides more detailed timing for each word. Note: This significantly increases processing time.
-
-#### Overwrite Existing Files
-By default, files that already have output are **skipped**. This allows you to:
-- Resume interrupted transcription jobs
-- Add new files to a folder without re-transcribing existing ones
-
-Check this option to re-transcribe all files, even if output already exists.
-
-## Processing Modes
-
-### Metal GPU (Recommended)
-- **Speed**: ~5-6x realtime (20 min audio in ~3-4 min)
-- **Workers**: Single worker only
-- **Best for**: Apple Silicon Macs (M1/M2/M3)
-
-Metal GPU uses Apple's Metal Performance Shaders for hardware-accelerated transcription. This is the fastest option on Apple Silicon and is selected by default.
-
-### CPU Mode
-- **Speed**: ~0.5-1x realtime (20 min audio in ~20-40 min)
-- **Workers**: 1-2 parallel workers
-- **Best for**: Compatibility, older Intel Macs
-
-CPU mode is slower but more compatible. Use this if you experience errors with Metal GPU mode. With 2 workers, you can process 2 files simultaneously.
-
-## During Transcription
-
-### Progress Indicators
-
-- **Overall progress bar**: Shows how many files have been completed (e.g., "3/47")
-- **Current file**: Shows which file is being processed
-- **Per-file progress bar**: Shows percentage completion for the current file
-- **Elapsed time**: Shows how long the job has been running
-- **ETA**: Estimated time remaining based on completed files
-- **Status messages**: Shows current activity (loading model, transcribing)
-- **Skipped files**: Shown in yellow if output already exists
-- **Completed files**: Shows processing time and speed (e.g., "3m 27s · 5.8x")
-
-### Cancelling
-
-Two cancel options are available:
-
-- **Cancel After File** (yellow button) - Completes the current file, then stops. Use this to safely stop without losing progress on the current file.
-- **Force Stop** (red button) - Stops immediately. The current file may be incomplete, but all previously completed files are saved.
-
-### Persistent Settings
-
-Your folder selections and language preference are automatically saved and restored when you reopen the app.
-
-## Output Format
-
-Each transcription is saved as a markdown file with the following structure:
-
-```markdown
-# Transcription: audio_file.mp3
-
-**Source File:** `audio_file.mp3`
-**Model Used:** `large-v3`
-**Detected Language:** `en`
+Local-first transcription with a review workflow built for 100% accuracy. The app runs as a local web UI and can optionally offload processing to a remote GPU worker.
 
 ---
 
-## Segmented Transcription
+## Getting Started
 
-### Segment 1 (00:00.00 - 00:15.23)
+### Launch (Local)
 
-[Transcribed text for this segment]
-
-### Segment 2 (00:15.23 - 00:32.45)
-
-[Transcribed text for this segment]
+```bash
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
+./venv/bin/python app.py
 ```
 
-## Tips for Best Results
+Open: http://localhost:8476
 
-### Audio Quality
-- Clear audio with minimal background noise produces best results
-- Higher quality recordings (44.1kHz or higher) are preferred
-- Mono or stereo both work well
+### Launch (Docker)
 
-### Model Selection
-- **For most use cases**: `large-v3` (recommended - best accuracy)
-- For quick drafts: `tiny` or `base`
-- For important content: `small` or `medium`
-- For critical accuracy: `large`
+```bash
+docker compose up -d app
+```
 
-### Language
-- Always specify the language if you know it - this improves accuracy and speed
-- Auto-detect works well for single-language content
-- For mixed-language content, use auto-detect
+Open: http://localhost:8476
 
-### Large Files
-- Very long files (>1 hour) may take significant time
-- Consider splitting large files before transcription
-- The `medium` or `large` models handle long content better
+---
+
+## Core Workflow
+
+1. Upload audio files (drag/drop or folder selection)
+2. Choose model and language
+3. Configure output options
+4. Enable diarization if needed
+5. Start transcription
+6. Review and correct in the Review workspace
+7. Export final outputs
+
+---
+
+## Models
+
+Supported Whisper models:
+
+- `tiny`, `base`, `small`, `medium`, `large`, `large-v3`
+
+**Recommendation**: `large-v3` for best accuracy.
+
+---
+
+## Output Options
+
+- **Segmented transcription** — timestamped chunks for review
+- **Full transcription** — single block of text
+- **Include timestamps** — add timecodes to segments
+- **Word-level timestamps** — slower, but enables max segment length splitting
+- **Overwrite existing files** — re-transcribe even if outputs exist
+
+---
+
+## Speaker Diarization
+
+Enable diarization to assign speakers.
+
+### Key controls
+
+- **Min speakers / Max speakers / Fixed speakers**
+- **Max duration per segment** (auto-split long audio)
+- **Auto-split long audio**
+- **Fast Switching** (shorter segments, higher overlap)
+
+### Recommended settings (adult + 2 kids)
+
+- **Fixed speakers**: 3
+- **Min speakers**: 2
+- **Max speakers**: 3
+- **Max duration per segment**: 3–5 min
+- **Auto-split**: ON
+- **Fast Switching**: ON (slower, but better turn-taking)
+
+> **Note:** Fast Switching increases diarization time.
+
+---
+
+## Review Workspace
+
+The Review UI is designed for fast correction:
+
+### Speaker relabeling
+- Click a speaker label in the sidebar to rename
+- Colors can be changed via the palette
+- Labels + colors persist per session
+
+### Editing text
+- Click the pencil icon or press **E** on a selected chunk
+- **Enter** saves and exits
+- **Shift+Enter** inserts a newline
+- **Esc** cancels edit
+
+### Split mid‑segment interjections
+- While editing:
+  - **Cmd/Ctrl + S** → split at cursor
+  - **Cmd/Ctrl + Shift + S** → split by selection (3‑way)
+
+This lets you insert short interjections as separate chunks and assign a different speaker.
+
+### Assign speaker
+- Use number keys **1–9** to assign speaker
+- Speaker buttons appear on hover or when chunk is selected
+
+---
+
+## Exports
+
+From Review:
+
+- **Project (.btproj)** — full archive
+- **Markdown (.md)** — timestamped speaker transcript
+- **Timeline (.json)** — structured review data
+- **Word (.docx)** — timestamped transcript with speaker colors
+- **PDF (.pdf)** — timestamped transcript with speaker colors
+
+---
+
+## Remote GPU Worker (Optional)
+
+Use a remote worker for large batches or diarization-heavy runs.
+
+Guides:
+- [Remote Worker Setup](docs/remote-worker.md)
+- [RunPod GPU Worker](docs/gpu-worker-runpod.md)
+
+---
+
+## Performance Tips
+
+- Use `large-v3` for accuracy
+- Enable diarization only when needed (it adds time)
+- For large batches, keep a GPU worker running and queue all files
+
+---
 
 ## Troubleshooting
 
-### App Won't Launch
-- Ensure you have macOS 10.15 or later
-- Try right-clicking and selecting "Open" if blocked by Gatekeeper
+### Remote worker required but offline
+- Verify worker URL and token in UI
+- RunPod proxy URL may rotate — re-copy if needed
+- Restart pod if `/v1/ping` times out
 
-### Transcription Fails
-- **"Out of memory"**: Try a smaller model
-- **"Audio file not found"**: Check the file isn't corrupted
+### Diarization missing switches
+- Use **Fixed speakers** (e.g., 3)
+- Turn on **Fast Switching**
+- Reduce max duration (3–5 min)
 
-### Poor Accuracy
-- Try a larger model
-- Specify the correct language
-- Check audio quality
-- Ensure clear speech without heavy accents or background noise
+### Slow performance
+- First run is slower due to model download
+- Diarization increases runtime
+- For heavy batches, use a GPU worker (L40/L40S/A40 recommended)
 
-### Slow Performance
-- **Use Metal GPU mode** (default) - ~5-6x faster than CPU on Apple Silicon
-- Use a smaller model (tiny or base for quick drafts)
-- Close other applications to free RAM
-- For CPU mode, try 2 workers for parallel processing
+---
 
 ## Privacy
 
-- All processing happens locally on your Mac
-- No audio is sent to external servers
-- Whisper models are downloaded once and cached locally
-
-## System Requirements
-
-- **macOS**: 10.15 (Catalina) or later
-- **Processor**: Apple Silicon (M1/M2/M3) recommended for Metal GPU acceleration
-- **RAM**: 8GB minimum, 16GB+ recommended for large-v3 model
-- **Storage**: ~500MB for app, plus model cache (~3GB for large-v3 model)
+- All processing is local by default
+- Remote GPU is explicit and opt‑in
+- Treat all inputs/outputs as sensitive
