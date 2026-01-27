@@ -293,7 +293,7 @@ MODEL_FILENAMES = {
     'base': 'base.pt',
     'small': 'small.pt',
     'medium': 'medium.pt',
-    'large': 'large-v3.pt',
+    'large': 'large.pt',
     'large-v3': 'large-v3.pt',
 }
 
