@@ -3709,6 +3709,318 @@ def api_export_review_project(job_id):
     )
 
 
+def _build_job_export_files(session_id: str, job_id: str, input_id: str = None) -> dict:
+    """
+    Build export files for a single job. Returns dict of {filename: content_bytes}.
+    Raises exception on failure.
+    """
+    from review_timeline import TimelineParser, apply_review_state
+    
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        raise ValueError('Job not found')
+    
+    inputs = manifest.get('inputs', [])
+    if not inputs:
+        raise ValueError('No inputs in job')
+    
+    target_input = None
+    if input_id:
+        for inp in inputs:
+            if inp.get('uploadId') == input_id:
+                target_input = inp
+                break
+        if not target_input:
+            raise ValueError('Input not found')
+    else:
+        target_input = inputs[0]
+        input_id = target_input.get('uploadId')
+    
+    filename = target_input.get('originalFilename', target_input.get('filename', 'unknown'))
+    
+    files = {}
+    
+    # Manifest snapshot
+    safe_manifest = {
+        'jobId': manifest.get('jobId'),
+        'createdAt': manifest.get('createdAt'),
+        'status': manifest.get('status'),
+        'options': manifest.get('options'),
+        'inputs': [{'uploadId': i.get('uploadId'), 'filename': i.get('originalFilename', i.get('filename'))} 
+                  for i in manifest.get('inputs', [])],
+        'outputs': [{'id': o.get('id'), 'filename': o.get('filename'), 'type': o.get('type')} 
+                   for o in manifest.get('outputs', []) if not o.get('error')],
+        'exportedAt': datetime.now(timezone.utc).isoformat(),
+        'buildCommit': os.environ.get('BUILD_COMMIT', 'unknown'),
+    }
+    files['manifest_snapshot.json'] = json.dumps(safe_manifest, indent=2).encode('utf-8')
+    
+    # Review state
+    job_dir = session_store.job_dir(session_id, job_id)
+    state_path = os.path.join(job_dir, 'review', 'review_state.json')
+    review_state = session_store.read_json(state_path) or {}
+    files['review_state.json'] = json.dumps(review_state, indent=2).encode('utf-8')
+    
+    # Outputs and timeline parsing
+    outputs = manifest.get('outputs', [])
+    transcript_json = None
+    diarization_json = None
+    speaker_md = None
+    transcript_md = None
+    
+    for output in outputs:
+        if output.get('forUploadId') != input_id and output.get('forUploadId'):
+            continue
+        
+        output_type = output.get('type', '')
+        output_path = output.get('path')
+        output_filename = output.get('filename', '')
+        
+        if not output_path or not os.path.exists(output_path):
+            continue
+        
+        try:
+            with open(output_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            files[f'outputs/{output_filename}'] = content.encode('utf-8')
+            
+            if output_type == 'json':
+                transcript_json = content
+            elif output_type == 'diarization-json':
+                diarization_json = content
+            elif output_type == 'speaker-markdown':
+                speaker_md = content
+            elif output_type == 'markdown':
+                transcript_md = content
+        except Exception:
+            continue
+    
+    # Generate timeline
+    parser = TimelineParser(job_id, input_id, filename)
+    timeline = parser.parse(
+        transcript_json=transcript_json,
+        diarization_json=diarization_json,
+        speaker_md=speaker_md,
+        transcript_md=transcript_md
+    )
+    if review_state:
+        timeline = apply_review_state(timeline, review_state)
+    
+    files['timeline.json'] = timeline.to_json().encode('utf-8')
+    
+    return files, filename
+
+
+@app.route('/api/jobs/bulk-export', methods=['POST'])
+def api_bulk_export_jobs():
+    """
+    Export multiple jobs as a single zip containing subfolders per job.
+    
+    Request JSON:
+    {
+        "jobIds": ["job1", "job2", ...],
+        "inputIdMode": "first"  // optional, default "first"
+    }
+    """
+    session_id = g.session_id
+    
+    data = request.json or {}
+    job_ids = data.get('jobIds', [])
+    
+    if not job_ids:
+        return jsonify({'error': 'No job IDs provided'}), 400
+    
+    if len(job_ids) > 100:
+        return jsonify({'error': 'Maximum 100 jobs per bulk export'}), 400
+    
+    zip_buffer = io.BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for job_id in job_ids:
+            try:
+                files, filename = _build_job_export_files(session_id, job_id)
+                safe_name = secure_filename(Path(filename).stem) or 'project'
+                folder_name = f'{job_id}__{safe_name}'
+                
+                for file_path, content in files.items():
+                    zf.writestr(f'bulk_export/{folder_name}/{file_path}', content)
+                    
+            except Exception as e:
+                # Include error file for failed jobs
+                error_content = f'Export failed: {str(e)[:200]}'
+                zf.writestr(f'bulk_export/{job_id}__error/error.txt', error_content.encode('utf-8'))
+    
+    zip_buffer.seek(0)
+    
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    return send_file(
+        zip_buffer,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=f'bulk-review-export-{timestamp}.zip'
+    )
+
+_CSRF_PROTECTED_ENDPOINTS.add('api_bulk_export_jobs')
+
+
+@app.route('/api/review/import-bulk', methods=['POST'])
+def api_bulk_import_projects():
+    """
+    Import multiple .btproj.zip files at once.
+    
+    Multipart form with 'files' containing multiple zip files.
+    """
+    session_id = g.session_id
+    
+    if 'files' not in request.files:
+        return jsonify({'error': 'No files provided'}), 400
+    
+    files = request.files.getlist('files')
+    
+    if not files:
+        return jsonify({'error': 'No files selected'}), 400
+    
+    if len(files) > 50:
+        return jsonify({'error': 'Maximum 50 files per bulk import'}), 400
+    
+    MAX_PROJECT_SIZE = 50 * 1024 * 1024
+    imported = []
+    failed = []
+    
+    for file in files:
+        filename = file.filename or 'unknown.zip'
+        
+        if not filename.endswith('.btproj.zip'):
+            failed.append({'filename': filename, 'error': 'File must be a .btproj.zip'})
+            continue
+        
+        try:
+            zip_bytes = file.read()
+            if len(zip_bytes) > MAX_PROJECT_SIZE:
+                failed.append({'filename': filename, 'error': f'File too large (max {MAX_PROJECT_SIZE // (1024*1024)}MB)'})
+                continue
+            
+            zip_data = io.BytesIO(zip_bytes)
+            with zipfile.ZipFile(zip_data, 'r') as zf:
+                names = zf.namelist()
+                
+                if 'manifest_snapshot.json' not in names:
+                    failed.append({'filename': filename, 'error': 'Invalid project: missing manifest_snapshot.json'})
+                    continue
+                
+                # Check for zip slip attacks
+                for name in names:
+                    if name.startswith('/') or '..' in name:
+                        failed.append({'filename': filename, 'error': 'Invalid project: path traversal detected'})
+                        continue
+                
+                manifest_data = json.loads(zf.read('manifest_snapshot.json'))
+                
+                project_id = session_store.new_id(16)
+                project_dir = os.path.join(
+                    session_store.session_dir(session_id),
+                    'projects',
+                    project_id
+                )
+                os.makedirs(project_dir, exist_ok=True)
+                
+                outputs_dir = os.path.join(project_dir, 'outputs')
+                os.makedirs(outputs_dir, exist_ok=True)
+                
+                imported_outputs = []
+                for name in names:
+                    if name.startswith('outputs/') and not name.endswith('/'):
+                        out_filename = os.path.basename(name)
+                        if out_filename:
+                            safe_name = secure_filename(out_filename)
+                            output_path = os.path.join(outputs_dir, safe_name)
+                            with open(output_path, 'wb') as f:
+                                f.write(zf.read(name))
+                            
+                            output_type = 'text'
+                            if safe_name.endswith('.json'):
+                                if 'diarization' in safe_name:
+                                    output_type = 'diarization-json'
+                                else:
+                                    output_type = 'json'
+                            elif safe_name.endswith('.md'):
+                                if 'speaker' in safe_name:
+                                    output_type = 'speaker-markdown'
+                                else:
+                                    output_type = 'markdown'
+                            
+                            imported_outputs.append({
+                                'id': session_store.new_id(8),
+                                'filename': safe_name,
+                                'path': output_path,
+                                'type': output_type,
+                                'sizeBytes': os.path.getsize(output_path)
+                            })
+                
+                review_dir = os.path.join(project_dir, 'review')
+                os.makedirs(review_dir, exist_ok=True)
+                
+                if 'review_state.json' in names:
+                    with open(os.path.join(review_dir, 'review_state.json'), 'wb') as f:
+                        f.write(zf.read('review_state.json'))
+                
+                if 'timeline.json' in names:
+                    with open(os.path.join(review_dir, 'timeline.json'), 'wb') as f:
+                        f.write(zf.read('timeline.json'))
+                
+                project_manifest = {
+                    'projectId': project_id,
+                    'jobId': project_id,
+                    'sessionId': session_id,
+                    'isImportedProject': True,
+                    'importedFrom': manifest_data.get('jobId'),
+                    'createdAt': datetime.now(timezone.utc).isoformat(),
+                    'status': 'complete',
+                    'inputs': manifest_data.get('inputs', []),
+                    'outputs': imported_outputs,
+                    'options': manifest_data.get('options', {}),
+                }
+                
+                manifest_path = os.path.join(project_dir, 'manifest.json')
+                session_store.atomic_write_json(manifest_path, project_manifest)
+                
+                projects_list_path = os.path.join(
+                    session_store.session_dir(session_id),
+                    'projects.json'
+                )
+                projects_list = session_store.read_json(projects_list_path) or {'projects': []}
+                projects_list['projects'].insert(0, {
+                    'projectId': project_id,
+                    'name': manifest_data.get('inputs', [{}])[0].get('filename', 'Imported Project'),
+                    'importedAt': datetime.now(timezone.utc).isoformat(),
+                })
+                session_store.atomic_write_json(projects_list_path, projects_list)
+                
+                imported.append({
+                    'filename': filename,
+                    'projectId': project_id,
+                    'outputs': len(imported_outputs)
+                })
+                
+        except zipfile.BadZipFile:
+            failed.append({'filename': filename, 'error': 'Invalid zip file'})
+        except json.JSONDecodeError:
+            failed.append({'filename': filename, 'error': 'Invalid project: corrupt JSON'})
+        except Exception as e:
+            failed.append({'filename': filename, 'error': f'Import failed: {str(e)[:100]}'})
+    
+    return jsonify({
+        'imported': imported,
+        'failed': failed
+    })
+
+_CSRF_PROTECTED_ENDPOINTS.add('api_bulk_import_projects')
+
+
 @app.route('/api/review/import', methods=['POST'])
 def api_import_review_project():
     """

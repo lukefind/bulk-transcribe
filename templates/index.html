@@ -111,8 +111,15 @@
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
                             </svg>
-                            Import Project
+                            Import
                         </button>
+                        <label class="text-xs text-primary-400 hover:text-primary-300 flex items-center gap-1 cursor-pointer">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+                            </svg>
+                            Bulk Import
+                            <input type="file" accept=".zip" multiple class="hidden" onchange="bulkImportProjects(this.files); this.value='';">
+                        </label>
                         <button type="button" onclick="loadJobHistory()" class="text-xs text-gray-400 hover:text-gray-300">Refresh</button>
                     </div>
                 </div>
@@ -1775,6 +1782,22 @@
                 rerunSelectedBtn.onclick = () => rerunSelectedJobs();
                 btnContainer.appendChild(rerunSelectedBtn);
                 
+                const exportSelectedBtn = document.createElement('button');
+                exportSelectedBtn.id = 'exportSelectedBtn';
+                exportSelectedBtn.className = 'w-full py-2 text-xs text-gray-500 hover:text-gray-300 hover:bg-surface-700/50 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed';
+                exportSelectedBtn.innerHTML = `Bulk export selected (${selectedJobIds.size})`;
+                exportSelectedBtn.disabled = selectedJobIds.size === 0;
+                exportSelectedBtn.onclick = () => bulkExportSelectedJobs();
+                btnContainer.appendChild(exportSelectedBtn);
+                
+                const clearSelectionBtn = document.createElement('button');
+                clearSelectionBtn.id = 'clearSelectionBtn';
+                clearSelectionBtn.className = 'w-full py-2 text-xs text-gray-500 hover:text-gray-300 hover:bg-surface-700/50 rounded-lg transition-all';
+                clearSelectionBtn.innerHTML = 'Clear selection';
+                clearSelectionBtn.style.display = selectedJobIds.size > 0 ? 'block' : 'none';
+                clearSelectionBtn.onclick = () => clearJobSelection();
+                btnContainer.appendChild(clearSelectionBtn);
+                
                 list.appendChild(btnContainer);
             }
         }
@@ -1825,6 +1848,105 @@
             if (btn) {
                 btn.innerHTML = `Re-run selected jobs (${selectedJobIds.size})`;
                 btn.disabled = selectedJobIds.size === 0;
+            }
+            const exportBtn = document.getElementById('exportSelectedBtn');
+            if (exportBtn) {
+                exportBtn.innerHTML = `Bulk export selected (${selectedJobIds.size})`;
+                exportBtn.disabled = selectedJobIds.size === 0;
+            }
+            const clearBtn = document.getElementById('clearSelectionBtn');
+            if (clearBtn) {
+                clearBtn.style.display = selectedJobIds.size > 0 ? 'block' : 'none';
+            }
+        }
+        
+        function clearJobSelection() {
+            selectedJobIds.clear();
+            document.querySelectorAll('.job-select-checkbox').forEach(cb => cb.checked = false);
+            updateRerunSelectedButton();
+        }
+        
+        async function bulkExportSelectedJobs() {
+            const count = selectedJobIds.size;
+            if (count === 0) return;
+            
+            if (!confirm(`Export ${count} selected job(s) as a single zip?`)) return;
+            
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch('/api/jobs/bulk-export', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ jobIds: Array.from(selectedJobIds) })
+                });
+                
+                if (!response.ok) {
+                    const contentType = response.headers.get('content-type') || '';
+                    if (contentType.includes('application/json')) {
+                        const data = await response.json();
+                        showError(data.error || 'Bulk export failed');
+                    } else {
+                        showError(`Bulk export failed (${response.status})`);
+                    }
+                    return;
+                }
+                
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `bulk-review-export-${new Date().toISOString().slice(0,10)}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                console.log(`Bulk export complete: ${count} jobs`);
+            } catch (e) {
+                showError(`Bulk export failed: ${e.message}`);
+            }
+        }
+        
+        async function bulkImportProjects(files) {
+            if (!files || files.length === 0) return;
+            
+            try {
+                const formData = new FormData();
+                for (const file of files) {
+                    formData.append('files', file);
+                }
+                
+                const headers = {};
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch('/api/review/import-bulk', {
+                    method: 'POST',
+                    headers,
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    showError(data.error || 'Bulk import failed');
+                    return;
+                }
+                
+                const importedCount = data.imported?.length || 0;
+                const failedCount = data.failed?.length || 0;
+                
+                if (failedCount > 0) {
+                    console.warn('Bulk import failures:', data.failed);
+                    showError(`Imported ${importedCount}, failed ${failedCount}. Check console for details.`);
+                } else {
+                    console.log(`Bulk import complete: ${importedCount} projects imported`);
+                }
+                
+                loadJobHistoryAndRestore();
+            } catch (e) {
+                showError(`Bulk import failed: ${e.message}`);
             }
         }
         
