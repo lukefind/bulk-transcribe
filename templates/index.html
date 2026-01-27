@@ -776,6 +776,9 @@
                 <!-- Last error info (shown for transient errors during execution) -->
                 <div id="jobLastError" class="text-xs text-orange-400 bg-orange-500/10 rounded-lg px-3 py-2 mb-3 hidden"></div>
                 
+                <!-- Degraded remote status warning -->
+                <div id="jobDegradedWarning" class="text-xs text-yellow-400 bg-yellow-500/10 rounded-lg px-3 py-2 mb-3 hidden"></div>
+                
                 <!-- Timing info -->
                 <div class="grid grid-cols-2 gap-4 mb-4 text-sm">
                     <div class="bg-surface-700/30 rounded-lg p-3">
@@ -1425,6 +1428,10 @@
                 const data = await response.json();
                 if (data.error) {
                     console.error('Cancel failed:', data.error);
+                } else {
+                    // Force refresh after successful cancel
+                    await loadJobHistoryAndRestore();
+                    pollJobStatus();
                 }
             } catch (e) {
                 console.error('Cancel failed:', e);
@@ -3279,6 +3286,18 @@
                     lastErrorInfo.innerHTML = `<span class="font-mono text-xs">${remoteLastErrorCode}</span>: ${remoteLastErrorMessage || 'Unknown error'} <span class="text-gray-500">(${errorTime})</span>`;
                 } else {
                     lastErrorInfo.classList.add('hidden');
+                }
+            }
+            
+            // Show degraded remote status warning
+            const degradedWarning = document.getElementById('jobDegradedWarning');
+            if (degradedWarning) {
+                if (job.remoteStatus?.degraded && job.status === 'running') {
+                    degradedWarning.classList.remove('hidden');
+                    const errors = job.remoteStatus.consecutiveErrors || 0;
+                    degradedWarning.textContent = `Remote worker slow to respond (${errors} retries) — retrying...`;
+                } else {
+                    degradedWarning.classList.add('hidden');
                 }
             }
             

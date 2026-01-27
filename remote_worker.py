@@ -515,8 +515,8 @@ class RemoteWorkerClient:
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         """Make authenticated request to worker."""
         url = f"{self.url}{path}"
-        # Set default timeouts (connect, read)
-        kwargs.setdefault('timeout', (10, 30))
+        # Set default timeouts (connect, read) - increased read timeout for stability
+        kwargs.setdefault('timeout', (10, 60))
         
         try:
             response = self.session.request(method, url, **kwargs)
@@ -896,6 +896,11 @@ def dispatch_to_remote_worker(
 
                 update_manifest_callback(
                     progress=progress_update,
+                    remoteStatus={
+                        'degraded': False,
+                        'reason': None,
+                        'consecutiveErrors': 0,
+                    },
                     worker={
                         'workerJobId': worker_job_id,
                         'url': config['url'],
@@ -957,12 +962,18 @@ def dispatch_to_remote_worker(
                           jobId=job_id, error=str(e), 
                           consecutiveErrors=consecutive_errors, backoffSeconds=backoff)
                 
-                # Update manifest with error info
+                # Update manifest with error info and degraded status
                 now_iso = datetime.now(timezone.utc).isoformat()
+                is_degraded = consecutive_errors >= 3
                 update_manifest_callback(
                     lastErrorCode='REMOTE_WORKER_UNREACHABLE',
                     lastErrorMessage=str(e)[:200],
                     lastErrorAt=now_iso,
+                    remoteStatus={
+                        'degraded': is_degraded,
+                        'reason': 'poll_timeout' if is_degraded else None,
+                        'consecutiveErrors': consecutive_errors,
+                    },
                     remote={
                         'workerJobId': worker_job_id,
                         'lastError': {
