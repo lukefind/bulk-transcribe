@@ -123,6 +123,47 @@
             color: #374151; /* fallback gray-700 */
             color: color-mix(in srgb, var(--speaker-color) 40%, #374151);
         }
+        
+        /* Timeline readability polish */
+        .chunk-row {
+            border-bottom: 1px solid rgba(55, 65, 81, 0.3);
+            transition: background-color 0.15s ease;
+        }
+        .chunk-row:hover {
+            background-color: rgba(55, 65, 81, 0.25) !important;
+        }
+        .chunk-row.selected {
+            background-color: rgba(99, 102, 241, 0.15) !important;
+            border-left-width: 4px !important;
+        }
+        .chunk-row .timestamp {
+            color: #9ca3af;
+            font-size: 0.7rem;
+        }
+        :root.theme-light .chunk-row {
+            border-bottom-color: rgba(203, 213, 225, 0.5);
+        }
+        :root.theme-light .chunk-row:hover {
+            background-color: rgba(226, 232, 240, 0.6) !important;
+        }
+        :root.theme-light .chunk-row.selected {
+            background-color: rgba(99, 102, 241, 0.1) !important;
+        }
+        
+        /* Bulk selection toolbar */
+        .bulk-toolbar {
+            position: sticky;
+            bottom: 0;
+            background: linear-gradient(to top, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.9));
+            backdrop-filter: blur(8px);
+            border-top: 1px solid rgba(99, 102, 241, 0.3);
+            padding: 0.75rem 1rem;
+            z-index: 50;
+        }
+        :root.theme-light .bulk-toolbar {
+            background: linear-gradient(to top, rgba(248, 250, 252, 0.95), rgba(248, 250, 252, 0.9));
+            border-top-color: rgba(99, 102, 241, 0.2);
+        }
     </style>
 </head>
 <body class="text-gray-100 min-h-screen">
@@ -224,6 +265,16 @@
                     </div>
                 </div>
                 <div id="jobHistoryList" class="space-y-2 max-h-48 overflow-auto"></div>
+                <!-- Bulk Selection Toolbar -->
+                <div id="bulkSelectionToolbar" class="bulk-toolbar hidden mt-2 rounded-lg flex items-center justify-between">
+                    <span class="text-sm text-gray-300"><span id="bulkSelectedCount">0</span> selected</span>
+                    <div class="flex items-center gap-2">
+                        <button onclick="bulkExportSelectedJobs()" class="px-3 py-1.5 text-xs bg-primary-600/70 hover:bg-primary-600 text-white rounded transition-all">Bulk Export</button>
+                        <button onclick="rerunSelectedJobs()" class="px-3 py-1.5 text-xs bg-surface-600/70 hover:bg-surface-600 text-gray-200 rounded transition-all">Re-run Selected</button>
+                        <button onclick="selectAllJobsForBulkActions()" class="px-3 py-1.5 text-xs bg-surface-700/70 hover:bg-surface-700 text-gray-300 rounded transition-all">Select All</button>
+                        <button onclick="clearAllJobsForBulkActions()" class="px-3 py-1.5 text-xs text-gray-400 hover:text-white transition-all">Clear</button>
+                    </div>
+                </div>
             </div>
             {% else %}
             <!-- LOCAL MODE: Folder-based workflow -->
@@ -304,7 +355,7 @@
                             Manage
                         </button>
                     </div>
-                    <select id="model" 
+                    <select id="model" onchange="saveUIState()"
                             class="input-field w-full px-4 py-2.5 bg-surface-800/50 border border-gray-700/50 rounded-xl text-white text-sm">
                     </select>
                     <div id="modelWarning" class="mt-2 text-xs text-amber-400 hidden">
@@ -320,7 +371,7 @@
                         </svg>
                         Language
                     </label>
-                    <select id="language" 
+                    <select id="language" onchange="saveUIState()"
                             class="input-field w-full px-4 py-2.5 bg-surface-800/50 border border-gray-700/50 rounded-xl text-white text-sm">
                         {% for code, name in languages %}
                         <option value="{{ code }}">{{ name }}</option>
@@ -355,34 +406,37 @@
 
             <!-- Output Options -->
             <div class="glass rounded-2xl p-5 card">
-                <label class="flex items-center gap-2 text-sm font-semibold text-white mb-4">
-                    <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path>
-                    </svg>
-                    Output Options
-                </label>
+                <div class="flex items-center justify-between mb-4">
+                    <label class="flex items-center gap-2 text-sm font-semibold text-white">
+                        <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path>
+                        </svg>
+                        Output Options
+                    </label>
+                    <span id="settingsSavedIndicator" class="text-xs text-green-400 opacity-0 transition-opacity duration-300">Saved</span>
+                </div>
                 
                 <div class="grid md:grid-cols-2 gap-4">
                     <div class="space-y-3">
                         <label class="flex items-center gap-3 cursor-pointer group">
-                            <input type="checkbox" id="includeSegments" checked onchange="updateOutputOptions()"
+                            <input type="checkbox" id="includeSegments" checked onchange="updateOutputOptions(); saveUIState()"
                                    class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0">
                             <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Segmented transcription</span>
                         </label>
                         <label class="flex items-center gap-3 cursor-pointer group">
-                            <input type="checkbox" id="includeFull"
+                            <input type="checkbox" id="includeFull" onchange="saveUIState()"
                                    class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0">
                             <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Full transcription</span>
                         </label>
                     </div>
                     <div class="space-y-3">
                         <label id="includeTimestampsLabel" class="flex items-center gap-3 cursor-pointer group">
-                            <input type="checkbox" id="includeTimestamps" checked
+                            <input type="checkbox" id="includeTimestamps" checked onchange="saveUIState()"
                                    class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0">
                             <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Include timestamps</span>
                         </label>
                         <label id="wordTimestampsLabel" class="flex items-center gap-3 cursor-pointer group">
-                            <input type="checkbox" id="wordTimestamps" onchange="updateOutputOptions()"
+                            <input type="checkbox" id="wordTimestamps" onchange="updateOutputOptions(); saveUIState()"
                                    class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0">
                             <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Word-level timestamps</span>
                         </label>
@@ -437,7 +491,7 @@
                         Speaker Diarization
                     </label>
                     <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" id="diarizationEnabled" onchange="updateDiarizationOptions()" class="sr-only peer">
+                        <input type="checkbox" id="diarizationEnabled" onchange="updateDiarizationOptions(); saveUIState()" class="sr-only peer">
                         <div class="w-9 h-5 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary-500"></div>
                     </label>
                 </div>
@@ -448,7 +502,7 @@
                     <div class="grid grid-cols-3 gap-3">
                         <div>
                             <label class="text-xs text-gray-400 mb-1 block">Min speakers</label>
-                            <select id="minSpeakers" class="w-full px-2 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                            <select id="minSpeakers" onchange="saveUIState()" class="w-full px-2 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
                                 <option value="">Auto</option>
                                 <option value="1">1</option>
                                 <option value="2">2</option>
@@ -459,7 +513,7 @@
                         </div>
                         <div>
                             <label class="text-xs text-gray-400 mb-1 block">Max speakers</label>
-                            <select id="maxSpeakers" class="w-full px-2 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                            <select id="maxSpeakers" onchange="saveUIState()" class="w-full px-2 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
                                 <option value="">Auto</option>
                                 <option value="2">2</option>
                                 <option value="3">3</option>
@@ -472,7 +526,7 @@
                         </div>
                         <div>
                             <label class="text-xs text-gray-400 mb-1 block">Fixed count</label>
-                            <select id="numSpeakers" class="w-full px-2 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                            <select id="numSpeakers" onchange="saveUIState()" class="w-full px-2 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
                                 <option value="">Auto</option>
                                 <option value="1">1</option>
                                 <option value="2">2</option>
@@ -488,7 +542,7 @@
                     <div class="border-t border-gray-700/50 pt-3">
                         <div class="flex items-center justify-between mb-2">
                             <label class="text-xs text-gray-400">Max duration per segment</label>
-                            <select id="diarizationMaxDuration" class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs">
+                            <select id="diarizationMaxDuration" onchange="saveUIState()" class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs">
                                 <option value="180">3 min</option>
                                 <option value="300">5 min</option>
                                 <option value="600">10 min</option>
@@ -499,7 +553,7 @@
                         </div>
                         <div class="flex items-center gap-3 mt-2">
                             <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-                                <input type="checkbox" id="diarizationAutoSplit" class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500" checked>
+                                <input type="checkbox" id="diarizationAutoSplit" onchange="saveUIState()" class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500" checked>
                                 Auto-split long audio
                             </label>
                         </div>
@@ -519,7 +573,7 @@
                     <div id="advancedSection" class="hidden mt-3 space-y-3">
                         <div class="flex items-center justify-between">
                             <label class="text-sm text-gray-300">Quality preset</label>
-                            <select id="qualityPreset" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                            <select id="qualityPreset" onchange="saveUIState()" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
                                 <option value="balanced" selected>Balanced (default)</option>
                                 <option value="conservative">Conservative (keeps more; stricter quality checks)</option>
                                 <option value="aggressive">Aggressive (skips more silence; looser quality checks)</option>
@@ -527,7 +581,7 @@
                         </div>
                         <div class="flex items-center justify-between">
                              <label class="text-sm text-gray-300" title="Higher = stricter (skips more potential non-speech)">Silence threshold</label>
-                             <select id="noSpeechThreshold" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                             <select id="noSpeechThreshold" onchange="saveUIState()" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
                                  <option value="0.5">0.5 (most permissive; keeps more)</option>
                                  <option value="0.6" selected>0.6 (default)</option>
                                  <option value="0.7">0.7 (stricter; skips more)</option>
@@ -536,7 +590,7 @@
                          </div>
                          <div class="flex items-center justify-between">
                             <label class="text-sm text-gray-300" title="Only works with word timestamps enabled">Max segment length</label>
-                            <select id="maxSegmentDuration" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                            <select id="maxSegmentDuration" onchange="saveUIState()" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
                                 <option value="">No limit</option>
                                 <option value="10">10 seconds</option>
                                 <option value="15">15 seconds</option>
@@ -1357,6 +1411,71 @@
             updateDiarizationOptions();
             updateDiarizationPolicy();
         }
+        
+        // Unified UI state save with debounce
+        let uiStateSaveTimer = null;
+        function saveUIState() {
+            clearTimeout(uiStateSaveTimer);
+            uiStateSaveTimer = setTimeout(() => {
+                try {
+                    // Model and language
+                    const model = document.getElementById('model')?.value;
+                    const language = document.getElementById('language')?.value;
+                    if (model) saveToStorage(STORAGE_KEYS.lastModel, model);
+                    if (language) saveToStorage(STORAGE_KEYS.lastLanguage, language);
+                    
+                    // Diarization
+                    const diarizationEnabled = document.getElementById('diarizationEnabled')?.checked;
+                    saveToStorage(STORAGE_KEYS.diarizationEnabled, diarizationEnabled ? 'true' : 'false');
+                    
+                    const minSpeakers = document.getElementById('minSpeakers')?.value;
+                    const maxSpeakers = document.getElementById('maxSpeakers')?.value;
+                    const numSpeakers = document.getElementById('numSpeakers')?.value;
+                    if (minSpeakers) saveToStorage(STORAGE_KEYS.minSpeakers, minSpeakers);
+                    if (maxSpeakers) saveToStorage(STORAGE_KEYS.maxSpeakers, maxSpeakers);
+                    if (numSpeakers) saveToStorage(STORAGE_KEYS.numSpeakers, numSpeakers);
+                    
+                    const autoSplit = document.getElementById('diarizationAutoSplit')?.checked;
+                    saveToStorage(STORAGE_KEYS.diarizationAutoSplit, autoSplit ? 'true' : 'false');
+                    
+                    const maxDuration = document.getElementById('diarizationMaxDuration')?.value;
+                    if (maxDuration) saveToStorage(STORAGE_KEYS.diarizationMaxDuration, maxDuration);
+                    
+                    // Output options
+                    const includeSegments = document.getElementById('includeSegments')?.checked;
+                    const includeFull = document.getElementById('includeFull')?.checked;
+                    const includeTimestamps = document.getElementById('includeTimestamps')?.checked;
+                    const wordTimestamps = document.getElementById('wordTimestamps')?.checked;
+                    saveToStorage(STORAGE_KEYS.includeSegments, includeSegments ? 'true' : 'false');
+                    saveToStorage(STORAGE_KEYS.includeFull, includeFull ? 'true' : 'false');
+                    saveToStorage(STORAGE_KEYS.includeTimestamps, includeTimestamps ? 'true' : 'false');
+                    saveToStorage(STORAGE_KEYS.wordTimestamps, wordTimestamps ? 'true' : 'false');
+                    
+                    // Quality settings
+                    const qualityPreset = document.getElementById('qualityPreset')?.value;
+                    const silenceThreshold = document.getElementById('silenceThreshold')?.value;
+                    const maxSegmentDuration = document.getElementById('maxSegmentDuration')?.value;
+                    if (qualityPreset) saveToStorage(STORAGE_KEYS.qualityPreset, qualityPreset);
+                    if (silenceThreshold) saveToStorage(STORAGE_KEYS.silenceThreshold, silenceThreshold);
+                    if (maxSegmentDuration) saveToStorage(STORAGE_KEYS.maxSegmentDuration, maxSegmentDuration);
+                    
+                    showSettingsSaved();
+                } catch (e) {
+                    console.warn('Failed to save UI state:', e);
+                }
+            }, 300);
+        }
+        
+        function showSettingsSaved() {
+            const indicator = document.getElementById('settingsSavedIndicator');
+            if (!indicator) return;
+            indicator.classList.remove('opacity-0');
+            indicator.classList.add('opacity-100');
+            setTimeout(() => {
+                indicator.classList.remove('opacity-100');
+                indicator.classList.add('opacity-0');
+            }, 1500);
+        }
 
         // Toggle worker options based on processing mode
         function updateWorkerOptions() {
@@ -2021,6 +2140,16 @@
             btn.textContent = count === 0 ? 'Bulk Export (select)' : `Bulk Export (${count})`;
             btn.classList.toggle('text-gray-500', count === 0);
             btn.classList.toggle('text-primary-400', count > 0);
+            
+            // Update bulk selection toolbar
+            const toolbar = document.getElementById('bulkSelectionToolbar');
+            const countSpan = document.getElementById('bulkSelectedCount');
+            if (toolbar) {
+                toolbar.classList.toggle('hidden', count === 0);
+            }
+            if (countSpan) {
+                countSpan.textContent = count;
+            }
         }
         
         function clearJobSelection() {
