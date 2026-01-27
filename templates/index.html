@@ -666,6 +666,13 @@
                         <span id="saveStatusIcon" class="w-2 h-2 rounded-full bg-green-500"></span>
                         <span id="saveStatusText">Saved</span>
                     </div>
+                    <!-- Re-run Button -->
+                    <button onclick="rerunReviewJob()" id="reviewRerunBtn" class="px-3 py-1.5 bg-surface-700 hover:bg-surface-600 border border-gray-600/50 rounded-lg text-gray-300 text-sm flex items-center gap-2 transition-colors">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                        </svg>
+                        Re-run
+                    </button>
                     <!-- Export Button -->
                     <button onclick="exportReviewProject()" class="px-3 py-1.5 bg-surface-700 hover:bg-surface-600 border border-gray-600/50 rounded-lg text-gray-300 text-sm flex items-center gap-2 transition-colors">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -841,6 +848,7 @@
         let currentJobId = null;
         let jobPollInterval = null;
         let csrfToken = null;  // CSRF token for server mode POSTs
+        let selectedJobIds = new Set();  // For batch job actions
         
         // Runtime environment (from /api/runtime)
         let runtimeEnv = null;
@@ -1707,11 +1715,24 @@
                         </div>
                     </div>
                     <div class="flex items-center gap-2">
+                        ${!isRunning ? `
+                            <input type="checkbox" class="job-select-checkbox w-3.5 h-3.5 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 cursor-pointer"
+                                   data-job-id="${job.jobId}"
+                                   onclick="event.stopPropagation(); toggleJobSelection('${job.jobId}', this.checked)"
+                                   title="Select for batch actions">
+                        ` : ''}
                         ${isReviewable ? `
                             <button onclick="event.stopPropagation(); openReviewForJob('${job.jobId}')" 
                                     class="px-2 py-1 text-xs bg-primary-600/50 hover:bg-primary-600 text-primary-200 rounded transition-all"
                                     title="Review transcript">
                                 Review
+                            </button>
+                        ` : ''}
+                        ${!isRunning ? `
+                            <button onclick="event.stopPropagation(); rerunJob('${job.jobId}')" 
+                                    class="px-2 py-1 text-xs bg-surface-600/50 hover:bg-surface-600 text-gray-300 rounded transition-all"
+                                    title="Re-run this job with same settings">
+                                Re-run
                             </button>
                         ` : ''}
                         <span class="text-xs ${statusColor}">${job.status.replace('_', ' ')}</span>
@@ -1745,6 +1766,14 @@
                 clearDupesBtn.innerHTML = 'Clear duplicates (same filename)';
                 clearDupesBtn.onclick = () => clearDuplicateJobs();
                 btnContainer.appendChild(clearDupesBtn);
+                
+                const rerunSelectedBtn = document.createElement('button');
+                rerunSelectedBtn.id = 'rerunSelectedBtn';
+                rerunSelectedBtn.className = 'w-full py-2 text-xs text-gray-500 hover:text-gray-300 hover:bg-surface-700/50 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed';
+                rerunSelectedBtn.innerHTML = `Re-run selected jobs (${selectedJobIds.size})`;
+                rerunSelectedBtn.disabled = selectedJobIds.size === 0;
+                rerunSelectedBtn.onclick = () => rerunSelectedJobs();
+                btnContainer.appendChild(rerunSelectedBtn);
                 
                 list.appendChild(btnContainer);
             }
@@ -1780,6 +1809,98 @@
             } catch (e) {
                 showError(`Failed to delete job: ${e.message}`);
             }
+        }
+        
+        function toggleJobSelection(jobId, selected) {
+            if (selected) {
+                selectedJobIds.add(jobId);
+            } else {
+                selectedJobIds.delete(jobId);
+            }
+            updateRerunSelectedButton();
+        }
+        
+        function updateRerunSelectedButton() {
+            const btn = document.getElementById('rerunSelectedBtn');
+            if (btn) {
+                btn.innerHTML = `Re-run selected jobs (${selectedJobIds.size})`;
+                btn.disabled = selectedJobIds.size === 0;
+            }
+        }
+        
+        async function rerunJob(jobId, opts = { navigate: true }) {
+            if (!confirm('Re-run this job with the same settings?')) return;
+            
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch(`/api/jobs/${jobId}/rerun`, {
+                    method: 'POST',
+                    headers
+                });
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    showError(data.error || 'Failed to re-run job');
+                    return;
+                }
+                
+                if (opts.navigate) {
+                    currentJobId = data.jobId;
+                    saveSelectedJob(data.jobId);
+                    progressSection.classList.remove('hidden');
+                    resultsSection.classList.add('hidden');
+                    clearActivityLog();
+                    addActivityLogEntry('Re-running previous job', `New job: ${data.jobId}`);
+                    pollJobStatus();
+                }
+                
+                loadJobHistoryAndRestore();
+            } catch (e) {
+                showError(`Failed to re-run job: ${e.message}`);
+            }
+        }
+        
+        async function rerunSelectedJobs() {
+            const count = selectedJobIds.size;
+            if (count === 0) return;
+            
+            if (!confirm(`Re-run ${count} selected job(s) with the same settings?`)) return;
+            
+            const jobIds = Array.from(selectedJobIds);
+            let successCount = 0;
+            let firstError = null;
+            
+            for (const jobId of jobIds) {
+                try {
+                    const headers = { 'Content-Type': 'application/json' };
+                    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                    
+                    const response = await fetch(`/api/jobs/${jobId}/rerun`, {
+                        method: 'POST',
+                        headers
+                    });
+                    const data = await response.json();
+                    
+                    if (!response.ok) {
+                        if (!firstError) firstError = data.error || 'Failed to re-run job';
+                    } else {
+                        successCount++;
+                    }
+                } catch (e) {
+                    if (!firstError) firstError = e.message;
+                }
+            }
+            
+            selectedJobIds.clear();
+            loadJobHistoryAndRestore();
+            
+            if (firstError) {
+                showError(`Re-run completed with errors: ${firstError}`);
+            }
+            
+            console.log(`Re-run batch complete: ${successCount}/${count} jobs queued`);
         }
         
         async function clearOldJobs() {
@@ -3537,6 +3658,17 @@
             } catch (e) {
                 showError(`Failed to load job: ${e.message}`);
             }
+        }
+        
+        async function rerunReviewJob() {
+            if (!reviewJobData?.jobId) {
+                showError('No job loaded to re-run');
+                return;
+            }
+            
+            // Close review panel first, then re-run
+            closeReviewPanel();
+            await rerunJob(reviewJobData.jobId, { navigate: true });
         }
         
         async function onReviewJobSelectChange() {
