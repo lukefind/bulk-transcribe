@@ -217,6 +217,13 @@ class ReviewTimeline:
                 cand_norm = normalize_text(candidate.text)
                 cand_len = len(cand_norm)
                 
+                # Cross-speaker guard: don't collapse real overlaps when different speakers have long text
+                different_speakers = (chunk.speaker_id and candidate.speaker_id and chunk.speaker_id != candidate.speaker_id)
+                long_text = min(cur_len, cand_len) >= 40
+                
+                if different_speakers and long_text:
+                    continue
+                
                 # Calculate timing metrics
                 start_delta = abs(chunk.start - candidate.start)
                 overlap_ratio = calc_overlap_ratio(candidate.start, candidate.end, chunk.start, chunk.end)
