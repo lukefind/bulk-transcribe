@@ -3553,11 +3553,27 @@ def api_get_review_timeline(job_id):
             selected_outputs['transcript_md'] = output_info
             matched_outputs.append(output_info)
     
-    # Fallback: if no outputs matched by forUploadId but outputs exist, try without filter
+    # Fallback: if no outputs matched by forUploadId but outputs exist, try filename-based matching
     if not matched_outputs and outputs:
+        import re
+        
+        # Extract base filename from input (e.g., "Call_27-05-2025.m4a" -> "Call_27-05-2025")
+        input_basename = os.path.splitext(filename)[0] if filename else ''
+        
         log_event('warning', 'review_timeline_fallback',
                   jobId=job_id, inputId=input_id,
-                  reason='no_outputs_matched_inputId_trying_all')
+                  reason='no_outputs_matched_inputId_trying_filename_match',
+                  inputBasename=input_basename)
+        
+        def output_matches_input(output_filename: str, input_base: str) -> bool:
+            """Check if output filename matches input basename (legacy job matching)."""
+            if not output_filename or not input_base:
+                return False
+            # Output filenames are like "Call_27-05-2025_transcript.json" or "Call_27-05-2025_speaker.md"
+            # Extract base by removing known suffixes
+            output_base = re.sub(r'_(transcript|diarization|speaker)\.(json|md)$', '', output_filename)
+            output_base = re.sub(r'\.rttm$', '', output_base)
+            return output_base == input_base
         
         for output in outputs:
             if output.get('error'):
@@ -3565,6 +3581,11 @@ def api_get_review_timeline(job_id):
             
             output_type = output.get('type', '')
             output_path = output.get('path')
+            output_filename = output.get('filename', '')
+            
+            # For legacy jobs, match by filename pattern
+            if input_basename and not output_matches_input(output_filename, input_basename):
+                continue
             
             if not output_path or not os.path.exists(output_path):
                 continue
@@ -3578,7 +3599,7 @@ def api_get_review_timeline(job_id):
             output_info = {
                 'id': output.get('id'),
                 'type': output_type,
-                'filename': output.get('filename'),
+                'filename': output_filename,
                 'forUploadId': output.get('forUploadId')
             }
             
