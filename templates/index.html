@@ -5138,9 +5138,9 @@
             }
             
             // Load timeline from API (check if regen was requested)
-            const useRegen = window._useRegenOnLoad || false;
+            const shouldRegen = window._useRegenOnLoad || false;
             window._useRegenOnLoad = false;  // Clear after use
-            await loadReviewTimeline(useRegen);
+            await loadReviewTimeline(shouldRegen);
             
             // Load job switcher options
             await loadReviewJobOptions(job.jobId);
