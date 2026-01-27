@@ -1839,7 +1839,15 @@
                     method: 'POST',
                     headers
                 });
-                const data = await response.json();
+                
+                const contentType = response.headers.get('content-type') || '';
+                let data = null;
+                if (contentType.includes('application/json')) {
+                    data = await response.json();
+                } else {
+                    const text = await response.text();
+                    throw new Error(`Re-run failed (${response.status}). Non-JSON response: ${text.slice(0, 120)}`);
+                }
                 
                 if (!response.ok) {
                     showError(data.error || 'Failed to re-run job');

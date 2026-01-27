@@ -2738,6 +2738,10 @@ def api_rerun_job(job_id):
     env = compute_backend.get_cached_environment()
     requested_backend = options.get('backend', env['recommendedBackend'])
     
+    # Map UI concept "remote" to a real backend
+    if requested_backend == 'remote':
+        requested_backend = env['recommendedBackend']
+    
     is_valid, error = compute_backend.validate_backend(requested_backend)
     if not is_valid:
         return jsonify({'error': error}), 400
