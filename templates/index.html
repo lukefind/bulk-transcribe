@@ -1118,9 +1118,6 @@
                         <input type="checkbox" id="autoScrollCheckbox" checked class="rounded bg-surface-700 border-gray-600 text-primary-500">
                         Auto-scroll
                     </label>
-                    <button onclick="regenerateTimeline()" class="text-xs text-amber-400 hover:text-amber-300 transition-colors whitespace-nowrap" title="Regenerate timeline by matching output files to this input">
-                        ↻ Regen
-                    </button>
                     <button onclick="showReviewInfoModal()" class="text-gray-400 hover:text-white transition-colors" title="Help">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
@@ -2437,6 +2434,8 @@
                         const hasTranscriptJson = outs.some(o => o.type === 'json' && !o.error);
                         const status = hasTranscriptJson ? 'complete' : 'pending';
                         const statusClass = hasTranscriptJson ? 'text-green-400' : 'text-gray-400';
+                        // For legacy jobs, pass the baseName as filename hint for regeneration
+                        const filenameHint = encodeURIComponent(baseName);
                         return `
                             <div class="flex items-center justify-between py-2 border-b border-surface-700/40 last:border-b-0">
                                 <div class="min-w-0">
@@ -2445,8 +2444,8 @@
                                 </div>
                                 <div class="flex items-center gap-2">
                                     ${hasTranscriptJson ? `
-                                        <button class="px-2 py-1 text-xs bg-primary-600/60 hover:bg-primary-600 text-primary-100 rounded"
-                                                onclick="openReviewForJob('${job.jobId}', '')">Review</button>
+                                        <button class="px-2 py-1 text-xs bg-amber-600/60 hover:bg-amber-600 text-amber-100 rounded"
+                                                onclick="openReviewWithRegen('${job.jobId}', '', '${filenameHint}')">Review (Regen)</button>
                                     ` : `
                                         <span class="text-xs text-gray-500">Waiting…</span>
                                     `}
@@ -3068,6 +3067,33 @@
                 
                 // Open review panel directly
                 openReviewPanel(job, inputId);
+            } catch (e) {
+                showError(`Failed to load job for review: ${e.message}`);
+            }
+        }
+        
+        async function openReviewWithRegen(jobId, inputId, filenameHint) {
+            // Open review panel and immediately trigger regeneration with filename hint
+            try {
+                const response = await fetch(`/api/jobs/${jobId}`);
+                const job = await response.json();
+                
+                if (job.error) {
+                    showError(job.error);
+                    return;
+                }
+                
+                currentJobId = jobId;
+                saveSelectedJob(jobId);
+                
+                // Close the files modal
+                closeJobFilesModal();
+                
+                // Store the filename hint for regeneration
+                window._regenFilenameHint = decodeURIComponent(filenameHint);
+                
+                // Open review panel - it will use regenerate endpoint
+                openReviewPanel(job, inputId, true);  // true = useRegen
             } catch (e) {
                 showError(`Failed to load job for review: ${e.message}`);
             }
@@ -5066,8 +5092,11 @@
             }
         }
         
-        async function openReviewPanel(job, inputId = null) {
+        async function openReviewPanel(job, inputId = null, useRegen = false) {
             if (!job) return;
+            
+            // Store regen flag for timeline loading
+            window._useRegenOnLoad = useRegen;
             
             // Allow opening even if no outputs yet - timeline endpoint handles gracefully
             reviewJobData = job;
@@ -5108,8 +5137,10 @@
                 setupReviewAudio(job.jobId, targetInput);
             }
             
-            // Load timeline from API
-            await loadReviewTimeline();
+            // Load timeline from API (check if regen was requested)
+            const useRegen = window._useRegenOnLoad || false;
+            window._useRegenOnLoad = false;  // Clear after use
+            await loadReviewTimeline(useRegen);
             
             // Load job switcher options
             await loadReviewJobOptions(job.jobId);
@@ -5341,9 +5372,15 @@
                 
                 if (useRegenerate) {
                     // Use regenerate endpoint which matches by filename
+                    const bodyData = {};
+                    if (window._regenFilenameHint) {
+                        bodyData.filename = window._regenFilenameHint;
+                        window._regenFilenameHint = null;  // Clear after use
+                    }
                     response = await fetch(`/api/jobs/${reviewJobData.jobId}/review/regenerate?inputId=${inputId}`, {
                         method: 'POST',
-                        headers: {'Content-Type': 'application/json'}
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(bodyData)
                     });
                     if (!response.ok) {
                         const err = await response.json();
