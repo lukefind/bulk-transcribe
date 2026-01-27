@@ -2338,8 +2338,21 @@
         async function openReviewLatestForJob(jobId) {
             try {
                 const job = await fetchJobDetails(jobId);
-                const inputId = getLatestCompletedInputId(job) || job.inputs?.[0]?.uploadId || '';
-                openReviewForJob(jobId, inputId);
+                const latestInputId = getLatestCompletedInputId(job);
+                
+                if (!latestInputId) {
+                    // No completed files yet - show message for multi-file jobs, fallback for single-file
+                    if ((job.inputs?.length || 0) > 1) {
+                        showError('No files completed yet. Check the Files button to see progress.');
+                        return;
+                    }
+                    // Single-file job: try first input as fallback
+                    const fallbackInputId = job.inputs?.[0]?.uploadId || '';
+                    openReviewForJob(jobId, fallbackInputId);
+                    return;
+                }
+                
+                openReviewForJob(jobId, latestInputId);
             } catch (e) {
                 showError(`Failed to open review: ${e.message}`);
             }
