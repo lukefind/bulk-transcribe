@@ -815,7 +815,7 @@
     <script>
         // App mode from server
         const APP_MODE = '{{ app_mode }}';
-        const IS_SERVER_MODE = {{ 'true' if is_server_mode else 'false' }};
+        const IS_SERVER_MODE = ('{{ "true" if is_server_mode else "false" }}' === 'true');
         
         const form = document.getElementById('transcribeForm');
         const submitBtn = document.getElementById('submitBtn');
