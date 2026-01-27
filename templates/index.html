@@ -2207,11 +2207,18 @@
                         <div class="flex items-center gap-2 flex-shrink-0 ml-3">
                             <span class="text-xs ${statusColor} font-medium">${job.status.replace('_', ' ')}</span>
                             ${isReviewable ? `
-                                <button onclick="event.stopPropagation(); openReviewForJob('${job.jobId}')" 
+                                <button onclick="event.stopPropagation(); openReviewLatestForJob('${job.jobId}')" 
                                         class="px-2.5 py-1 text-xs bg-primary-600/60 hover:bg-primary-600 text-primary-100 rounded transition-all font-medium"
-                                        title="Review transcript">
+                                        title="Review latest completed file">
                                     Review
                                 </button>
+                                ${job.inputCount > 1 ? `
+                                    <button onclick="event.stopPropagation(); openJobFilesModal('${job.jobId}')" 
+                                            class="px-2.5 py-1 text-xs bg-surface-600/50 hover:bg-surface-600 text-gray-300 rounded transition-all"
+                                            title="View files in this batch">
+                                        Files
+                                    </button>
+                                ` : ''}
                             ` : ''}
                             ${!isRunning ? `
                                 <button onclick="event.stopPropagation(); rerunJob('${job.jobId}')" 
@@ -2299,6 +2306,115 @@
                 
                 list.appendChild(btnContainer);
             }
+        }
+
+        async function fetchJobDetails(jobId) {
+            const response = await fetch(`/api/jobs/${jobId}`);
+            const data = await response.json();
+            if (!response.ok || data.error) {
+                throw new Error(data.error || 'Failed to load job');
+            }
+            return data;
+        }
+
+        function getInputIdFromOutput(output) {
+            return output?.forUploadId || output?.inputId || null;
+        }
+
+        function getLatestCompletedInputId(job) {
+            const outputs = job.outputs || [];
+            let latestInputId = null;
+            for (const output of outputs) {
+                if (output?.type === 'json' && !output?.error) {
+                    const inputId = getInputIdFromOutput(output);
+                    if (inputId) {
+                        latestInputId = inputId;
+                    }
+                }
+            }
+            return latestInputId;
+        }
+
+        async function openReviewLatestForJob(jobId) {
+            try {
+                const job = await fetchJobDetails(jobId);
+                const inputId = getLatestCompletedInputId(job) || job.inputs?.[0]?.uploadId || '';
+                openReviewForJob(jobId, inputId);
+            } catch (e) {
+                showError(`Failed to open review: ${e.message}`);
+            }
+        }
+
+        async function openJobFilesModal(jobId) {
+            try {
+                const job = await fetchJobDetails(jobId);
+                const outputs = job.outputs || [];
+                const inputs = job.inputs || [];
+                const outputsByInput = new Map();
+                for (const o of outputs) {
+                    const inputId = getInputIdFromOutput(o);
+                    if (!inputId) continue;
+                    if (!outputsByInput.has(inputId)) outputsByInput.set(inputId, []);
+                    outputsByInput.get(inputId).push(o);
+                }
+
+                let modal = document.getElementById('jobFilesModal');
+                if (!modal) {
+                    modal = document.createElement('div');
+                    modal.id = 'jobFilesModal';
+                    modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+                    modal.onclick = (e) => { if (e.target === modal) closeJobFilesModal(); };
+                    document.body.appendChild(modal);
+                }
+
+                const rows = inputs.map((inp) => {
+                    const inputId = inp.uploadId;
+                    const filename = inp.originalFilename || inp.filename || 'File';
+                    const outs = outputsByInput.get(inputId) || [];
+                    const hasTranscriptJson = outs.some(o => o.type === 'json' && !o.error);
+                    const status = hasTranscriptJson ? 'complete' : 'pending';
+                    const statusClass = hasTranscriptJson ? 'text-green-400' : 'text-gray-400';
+                    return `
+                        <div class="flex items-center justify-between py-2 border-b border-surface-700/40 last:border-b-0">
+                            <div class="min-w-0">
+                                <div class="text-sm text-gray-200 truncate">${escapeHtml(filename)}</div>
+                                <div class="text-xs ${statusClass}">${status}</div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                ${hasTranscriptJson ? `
+                                    <button class="px-2 py-1 text-xs bg-primary-600/60 hover:bg-primary-600 text-primary-100 rounded"
+                                            onclick="openReviewForJob('${job.jobId}', '${inputId}')">Review</button>
+                                ` : `
+                                    <span class="text-xs text-gray-500">Waiting…</span>
+                                `}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                modal.innerHTML = `
+                    <div class="bg-surface-800 text-gray-200 rounded-xl shadow-xl w-full max-w-xl p-4 border border-surface-600">
+                        <div class="flex items-center justify-between mb-3">
+                            <div>
+                                <div class="text-sm font-semibold">Batch Files</div>
+                                <div class="text-xs text-gray-400">${escapeHtml(job.primaryFilename || job.name || job.jobId)}</div>
+                            </div>
+                            <button class="text-gray-400 hover:text-gray-200" onclick="closeJobFilesModal()">✕</button>
+                        </div>
+                        <div class="max-h-[50vh] overflow-auto">
+                            ${rows || '<div class="text-sm text-gray-400">No inputs found.</div>'}
+                        </div>
+                    </div>
+                `;
+                modal.classList.remove('hidden');
+            } catch (e) {
+                showError(`Failed to load batch files: ${e.message}`);
+            }
+        }
+
+        function closeJobFilesModal() {
+            const modal = document.getElementById('jobFilesModal');
+            if (modal) modal.classList.add('hidden');
         }
         
         async function toggleJobFinished(jobId, finished) {
