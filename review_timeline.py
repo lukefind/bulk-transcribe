@@ -252,14 +252,17 @@ class TimelineParser:
             if speaker_id:
                 timeline.add_speaker(speaker_id)
             
-            # Get text - prefer from diarization, fall back to transcript overlap
-            text = seg.get('text', '')
-            if not text and transcript_segments:
+            # Get text. When transcript segments are available, always derive
+            # text from the transcript and use diarization only for structure.
+            text = ''
+            if transcript_segments:
                 text = self._get_overlapping_text(
                     seg.get('start', 0), 
                     seg.get('end', 0),
                     transcript_segments
                 )
+            else:
+                text = seg.get('text', '')
             
             chunk = Chunk(
                 chunk_id=f't_{idx:06d}',
