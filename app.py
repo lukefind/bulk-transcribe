@@ -3902,7 +3902,7 @@ def api_worker_upload_output(job_id):
     manifest = None
     
     if session_store.is_server_mode():
-        sessions_root = session_store.data_root() / 'sessions'
+        sessions_root = Path(session_store.data_root()) / 'sessions'
         if sessions_root.exists():
             for session_dir in sessions_root.iterdir():
                 if session_dir.is_dir():
