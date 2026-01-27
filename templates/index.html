@@ -1118,6 +1118,9 @@
                         <input type="checkbox" id="autoScrollCheckbox" checked class="rounded bg-surface-700 border-gray-600 text-primary-500">
                         Auto-scroll
                     </label>
+                    <button onclick="regenerateTimeline()" class="text-xs text-amber-400 hover:text-amber-300 transition-colors whitespace-nowrap" title="Regenerate timeline by matching output files to this input">
+                        ↻ Regen
+                    </button>
                     <button onclick="showReviewInfoModal()" class="text-gray-400 hover:text-white transition-colors" title="Help">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
@@ -5325,7 +5328,7 @@
             return `${mins}:${secs.toString().padStart(2, '0')}`;
         }
         
-        async function loadReviewTimeline() {
+        async function loadReviewTimeline(useRegenerate = false) {
             if (!reviewJobData) return;
             
             const content = document.getElementById('reviewTimelineContent');
@@ -5333,14 +5336,33 @@
             
             try {
                 const inputId = reviewSelectedInputId || reviewJobData.inputs?.[0]?.uploadId || '';
-                const response = await fetch(`/api/jobs/${reviewJobData.jobId}/review/timeline?inputId=${inputId}`);
-                if (!response.ok) {
-                    const err = await response.json();
-                    content.innerHTML = `<p class="text-red-400 p-4">${err.error || 'Failed to load timeline'}</p>`;
-                    return;
-                }
+                let response;
+                let timelineData;
                 
-                reviewTimeline = await response.json();
+                if (useRegenerate) {
+                    // Use regenerate endpoint which matches by filename
+                    response = await fetch(`/api/jobs/${reviewJobData.jobId}/review/regenerate?inputId=${inputId}`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'}
+                    });
+                    if (!response.ok) {
+                        const err = await response.json();
+                        content.innerHTML = `<p class="text-red-400 p-4">${err.error || 'Failed to regenerate timeline'}</p>`;
+                        return;
+                    }
+                    const result = await response.json();
+                    reviewTimeline = result.timeline;
+                    console.log('Regenerated timeline:', result.matchedFiles);
+                } else {
+                    // Normal timeline endpoint
+                    response = await fetch(`/api/jobs/${reviewJobData.jobId}/review/timeline?inputId=${inputId}`);
+                    if (!response.ok) {
+                        const err = await response.json();
+                        content.innerHTML = `<p class="text-red-400 p-4">${err.error || 'Failed to load timeline'}</p>`;
+                        return;
+                    }
+                    reviewTimeline = await response.json();
+                }
                 
                 // Store raw and merged chunk versions for toggle (deep copy to avoid shared references)
                 reviewTimelineRaw = JSON.parse(JSON.stringify(reviewTimeline.chunks_raw || reviewTimeline.chunks));
@@ -5428,6 +5450,19 @@
             
             // Re-render
             renderTimeline();
+        }
+        
+        async function regenerateTimeline() {
+            if (!reviewJobData) return;
+            
+            const content = document.getElementById('reviewTimelineContent');
+            content.innerHTML = '<p class="text-amber-400 italic p-4">Regenerating timeline from output files...</p>';
+            
+            try {
+                await loadReviewTimeline(true);  // true = use regenerate endpoint
+            } catch (e) {
+                content.innerHTML = `<p class="text-red-400 p-4">Regeneration failed: ${e.message}</p>`;
+            }
         }
         
         function showReviewInfoModal() {

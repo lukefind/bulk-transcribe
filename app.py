@@ -3724,6 +3724,174 @@ def api_get_review_timeline(job_id):
     return jsonify(timeline.to_dict())
 
 
+@app.route('/api/jobs/<job_id>/review/regenerate', methods=['POST'])
+def api_regenerate_review_timeline(job_id):
+    """
+    Regenerate timeline by scanning output files on disk and matching by filename.
+    
+    This is useful for legacy jobs where forUploadId wasn't stored, or when
+    the manifest is out of sync with actual files.
+    
+    Query params:
+    - inputId: (optional) specific input to regenerate for
+    
+    Body (optional):
+    - filename: explicit filename to match outputs against
+    """
+    from review_timeline import TimelineParser, apply_review_state
+    from logger import log_event
+    import re
+    
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    input_id = request.args.get('inputId')
+    body = request.get_json(silent=True) or {}
+    explicit_filename = body.get('filename')
+    
+    inputs = manifest.get('inputs', [])
+    outputs = manifest.get('outputs', [])
+    
+    if not inputs:
+        return jsonify({'error': 'No inputs in job'}), 400
+    
+    # Find target input
+    target_input = None
+    if input_id:
+        for inp in inputs:
+            if inp.get('uploadId') == input_id:
+                target_input = inp
+                break
+        if not target_input:
+            return jsonify({'error': 'Input not found'}), 404
+    else:
+        target_input = inputs[0]
+        input_id = target_input.get('uploadId')
+    
+    # Get filename to match against
+    filename = explicit_filename or target_input.get('originalFilename') or target_input.get('filename') or 'unknown'
+    input_basename = os.path.splitext(filename)[0] if filename else ''
+    
+    log_event('info', 'regenerate_timeline_start',
+              jobId=job_id, inputId=input_id, filename=filename, inputBasename=input_basename)
+    
+    # Scan job directory for output files
+    job_dir = session_store.job_dir(session_id, job_id)
+    outputs_dir = os.path.join(job_dir, 'outputs')
+    
+    # Helper to match output filename to input
+    def output_matches_input(output_filename: str, input_base: str) -> bool:
+        if not output_filename or not input_base:
+            return False
+        output_base = re.sub(r'_(transcript|diarization|speaker)\.(json|md)$', '', output_filename)
+        output_base = re.sub(r'\.rttm$', '', output_base)
+        return output_base == input_base
+    
+    # Find matching files
+    transcript_json = None
+    diarization_json = None
+    speaker_md = None
+    transcript_md = None
+    matched_files = []
+    
+    # First try manifest outputs with path
+    for output in outputs:
+        output_filename = output.get('filename', '')
+        output_path = output.get('path')
+        output_type = output.get('type', '')
+        
+        if not output_matches_input(output_filename, input_basename):
+            continue
+        
+        if not output_path or not os.path.exists(output_path):
+            continue
+        
+        try:
+            with open(output_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except Exception:
+            continue
+        
+        matched_files.append({'filename': output_filename, 'type': output_type, 'source': 'manifest'})
+        
+        if output_type in {'json', 'transcript_json'} and not transcript_json:
+            transcript_json = content
+        elif output_type in {'diarization-json', 'diarization_json'} and not diarization_json:
+            diarization_json = content
+        elif output_type in {'speaker-markdown', 'speaker_markdown'} and not speaker_md:
+            speaker_md = content
+        elif output_type in {'markdown', 'transcript_markdown'} and not transcript_md:
+            transcript_md = content
+    
+    # If no matches from manifest, scan outputs directory directly
+    if not matched_files and os.path.isdir(outputs_dir):
+        for fname in os.listdir(outputs_dir):
+            if not output_matches_input(fname, input_basename):
+                continue
+            
+            fpath = os.path.join(outputs_dir, fname)
+            if not os.path.isfile(fpath):
+                continue
+            
+            try:
+                with open(fpath, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            except Exception:
+                continue
+            
+            matched_files.append({'filename': fname, 'source': 'disk_scan'})
+            
+            if fname.endswith('_transcript.json') and not transcript_json:
+                transcript_json = content
+            elif fname.endswith('_diarization.json') and not diarization_json:
+                diarization_json = content
+            elif fname.endswith('_speaker.md') and not speaker_md:
+                speaker_md = content
+            elif fname.endswith('_transcript.md') and not transcript_md:
+                transcript_md = content
+    
+    if not any([transcript_json, diarization_json, speaker_md, transcript_md]):
+        return jsonify({
+            'error': 'No matching output files found',
+            'inputBasename': input_basename,
+            'scannedOutputsDir': outputs_dir,
+            'hint': 'Check that output files exist and match the input filename pattern'
+        }), 404
+    
+    # Parse into timeline
+    parser = TimelineParser(job_id, input_id, filename)
+    timeline = parser.parse(
+        transcript_json=transcript_json,
+        diarization_json=diarization_json,
+        speaker_md=speaker_md,
+        transcript_md=transcript_md
+    )
+    
+    log_event('info', 'regenerate_timeline_complete',
+              jobId=job_id, inputId=input_id,
+              matchedFiles=matched_files,
+              numChunks=len(timeline.chunks),
+              numSpeakers=len(timeline.speakers))
+    
+    # Apply saved review state if exists
+    state_path = os.path.join(job_dir, 'review', 'review_state.json')
+    review_state = session_store.read_json(state_path)
+    
+    if review_state:
+        timeline = apply_review_state(timeline, review_state)
+    
+    return jsonify({
+        'success': True,
+        'timeline': timeline.to_dict(),
+        'matchedFiles': matched_files,
+        'inputBasename': input_basename
+    })
+
+
 @app.route('/api/jobs/<job_id>/review/export', methods=['GET'])
 def api_export_review_project(job_id):
     """
