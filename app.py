@@ -3895,7 +3895,7 @@ def _build_review_timeline(session_id: str, job_id: str, input_id: str, filename
 
 @app.route('/api/jobs/<job_id>/review/export-docx', methods=['GET'])
 def api_export_review_docx(job_id):
-    """Export review timeline as DOCX."""
+    """Export review timeline as DOCX. Supports ?style=clean|timestamped (default: clean)."""
     from docx import Document
     from docx.shared import Pt, Inches, RGBColor
     import io
@@ -3920,6 +3920,7 @@ def api_export_review_docx(job_id):
     
     try:
         session_id = g.session_id
+        style = request.args.get('style', 'clean')  # clean or timestamped
         manifest_path = session_store.job_manifest_path(session_id, job_id)
         manifest = session_store.read_json(manifest_path)
         
@@ -3958,31 +3959,70 @@ def api_export_review_docx(job_id):
             if sid:
                 speakers[sid] = s
         
-        for chunk in (timeline.chunks or []):
-            sid = val(chunk, 'speaker_id')
-            speaker = speakers.get(sid)
-            label = val(speaker, 'label', sid or 'Unknown') or sid or 'Unknown'
-            color = val(speaker, 'color', '#6b7280') or '#6b7280'
-            start = val(chunk, 'start', 0)
-            text = val(chunk, 'text', '') or ''
-            timestamp = fmt_time(start)
+        # Group chunks by speaker for clean mode
+        if style == 'clean':
+            # Clean mode: speaker heading then paragraph(s) without timestamps
+            current_speaker = None
+            current_texts = []
             
-            para = doc.add_paragraph()
-            run = para.add_run(f"[{timestamp}] {label}: ")
-            run.bold = True
-            r, g, b = hex_to_rgb(color)
-            run.font.color.rgb = RGBColor(r, g, b)
-            para.add_run(text)
+            def flush_speaker():
+                nonlocal current_speaker, current_texts
+                if current_speaker and current_texts:
+                    speaker = speakers.get(current_speaker)
+                    label = val(speaker, 'label', current_speaker or 'Unknown') or current_speaker or 'Unknown'
+                    color = val(speaker, 'color', '#6b7280') or '#6b7280'
+                    
+                    # Speaker heading
+                    heading = doc.add_paragraph()
+                    run = heading.add_run(f"{label}:")
+                    run.bold = True
+                    r, g, b = hex_to_rgb(color)
+                    run.font.color.rgb = RGBColor(r, g, b)
+                    
+                    # Combined text
+                    doc.add_paragraph(' '.join(current_texts))
+                current_texts = []
+            
+            for chunk in (timeline.chunks or []):
+                sid = val(chunk, 'speaker_id')
+                text = val(chunk, 'text', '') or ''
+                
+                if sid != current_speaker:
+                    flush_speaker()
+                    current_speaker = sid
+                
+                if text.strip():
+                    current_texts.append(text.strip())
+            
+            flush_speaker()
+        else:
+            # Timestamped mode: [mm:ss] Speaker: text for each chunk
+            for chunk in (timeline.chunks or []):
+                sid = val(chunk, 'speaker_id')
+                speaker = speakers.get(sid)
+                label = val(speaker, 'label', sid or 'Unknown') or sid or 'Unknown'
+                color = val(speaker, 'color', '#6b7280') or '#6b7280'
+                start = val(chunk, 'start', 0)
+                text = val(chunk, 'text', '') or ''
+                timestamp = fmt_time(start)
+                
+                para = doc.add_paragraph()
+                run = para.add_run(f"[{timestamp}] {label}: ")
+                run.bold = True
+                r, g, b = hex_to_rgb(color)
+                run.font.color.rgb = RGBColor(r, g, b)
+                para.add_run(text)
         
         # Write to buffer
         buffer = io.BytesIO()
         doc.save(buffer)
         buffer.seek(0)
         
+        suffix = '_clean' if style == 'clean' else '_timestamped'
         return Response(
             buffer.getvalue(),
             mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            headers={'Content-Disposition': f'attachment; filename="{safe_name}_review.docx"'}
+            headers={'Content-Disposition': f'attachment; filename="{safe_name}{suffix}.docx"'}
         )
     except Exception as e:
         log_event('error', 'review_export_failed', jobId=job_id, exportType='docx', error=str(e))
@@ -3991,7 +4031,7 @@ def api_export_review_docx(job_id):
 
 @app.route('/api/jobs/<job_id>/review/export-pdf', methods=['GET'])
 def api_export_review_pdf(job_id):
-    """Export review timeline as PDF."""
+    """Export review timeline as PDF. Supports ?style=clean|timestamped (default: clean)."""
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
@@ -4007,18 +4047,9 @@ def api_export_review_pdf(job_id):
             return obj.get(key, default)
         return getattr(obj, key, default)
     
-    # Safe hex color parser
-    def safe_hex_color(hex_color):
-        hex_color = (hex_color or '#6b7280').strip()
-        if not hex_color.startswith('#') or len(hex_color) != 7:
-            return HexColor('#6b7280')
-        try:
-            return HexColor(hex_color)
-        except:
-            return HexColor('#6b7280')
-    
     try:
         session_id = g.session_id
+        style = request.args.get('style', 'clean')  # clean or timestamped
         manifest_path = session_store.job_manifest_path(session_id, job_id)
         manifest = session_store.read_json(manifest_path)
         
@@ -4059,41 +4090,71 @@ def api_export_review_pdf(job_id):
         
         styles = getSampleStyleSheet()
         title_style = styles['Heading1']
+        body_style = ParagraphStyle('Body', parent=styles['Normal'], fontSize=10, leading=14, spaceAfter=8)
         
         story = []
         story.append(Paragraph(filename, title_style))
         story.append(Spacer(1, 0.25 * inch))
         
-        for chunk in (timeline.chunks or []):
-            sid = val(chunk, 'speaker_id')
-            speaker = speakers.get(sid)
-            label = val(speaker, 'label', sid or 'Unknown') or sid or 'Unknown'
-            color = val(speaker, 'color', '#6b7280') or '#6b7280'
-            start = val(chunk, 'start', 0)
-            text = val(chunk, 'text', '') or ''
-            text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            timestamp = fmt_time(start)
+        def escape_xml(text):
+            return (text or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        
+        if style == 'clean':
+            # Clean mode: speaker heading then paragraph(s) without timestamps
+            current_speaker = None
+            current_texts = []
             
-            # Create style with speaker color for heading
-            chunk_style = ParagraphStyle(
-                f'Chunk_{sid}',
-                parent=styles['Normal'],
-                fontSize=10,
-                leading=14,
-                spaceAfter=8
-            )
+            def flush_speaker():
+                nonlocal current_speaker, current_texts
+                if current_speaker and current_texts:
+                    speaker = speakers.get(current_speaker)
+                    label = val(speaker, 'label', current_speaker or 'Unknown') or current_speaker or 'Unknown'
+                    color = val(speaker, 'color', '#6b7280') or '#6b7280'
+                    
+                    # Speaker heading with color
+                    heading = f'<font color="{color}"><b>{escape_xml(label)}:</b></font>'
+                    story.append(Paragraph(heading, body_style))
+                    
+                    # Combined text
+                    combined = escape_xml(' '.join(current_texts))
+                    story.append(Paragraph(combined, body_style))
+                    story.append(Spacer(1, 0.1 * inch))
+                current_texts = []
             
-            # Use inline font color for the speaker heading portion
-            line = f'<font color="{color}"><b>[{timestamp}] {label}:</b></font> {text}'
-            story.append(Paragraph(line, chunk_style))
+            for chunk in (timeline.chunks or []):
+                sid = val(chunk, 'speaker_id')
+                text = val(chunk, 'text', '') or ''
+                
+                if sid != current_speaker:
+                    flush_speaker()
+                    current_speaker = sid
+                
+                if text.strip():
+                    current_texts.append(text.strip())
+            
+            flush_speaker()
+        else:
+            # Timestamped mode: [mm:ss] Speaker: text for each chunk
+            for chunk in (timeline.chunks or []):
+                sid = val(chunk, 'speaker_id')
+                speaker = speakers.get(sid)
+                label = val(speaker, 'label', sid or 'Unknown') or sid or 'Unknown'
+                color = val(speaker, 'color', '#6b7280') or '#6b7280'
+                start = val(chunk, 'start', 0)
+                text = escape_xml(val(chunk, 'text', '') or '')
+                timestamp = fmt_time(start)
+                
+                line = f'<font color="{color}"><b>[{timestamp}] {escape_xml(label)}:</b></font> {text}'
+                story.append(Paragraph(line, body_style))
         
         doc.build(story)
         buffer.seek(0)
         
+        suffix = '_clean' if style == 'clean' else '_timestamped'
         return Response(
             buffer.getvalue(),
             mimetype='application/pdf',
-            headers={'Content-Disposition': f'attachment; filename="{safe_name}_review.pdf"'}
+            headers={'Content-Disposition': f'attachment; filename="{safe_name}{suffix}.pdf"'}
         )
     except Exception as e:
         log_event('error', 'review_export_failed', jobId=job_id, exportType='pdf', error=str(e))

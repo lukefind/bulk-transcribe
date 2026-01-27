@@ -243,6 +243,7 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                         </svg>
                         Recent Jobs
+                        <span id="selectedJobsBadge" class="hidden ml-1 px-1.5 py-0.5 text-[10px] bg-primary-600/50 text-primary-200 rounded">0 selected</span>
                     </label>
                     <div class="flex items-center gap-2">
                         <button type="button" onclick="openImportModal()" class="text-xs text-primary-400 hover:text-primary-300 flex items-center gap-1">
@@ -273,6 +274,15 @@
                         <button onclick="rerunSelectedJobs()" class="px-3 py-1.5 text-xs bg-surface-600/70 hover:bg-surface-600 text-gray-200 rounded transition-all">Re-run Selected</button>
                         <button onclick="selectAllJobsForBulkActions()" class="px-3 py-1.5 text-xs bg-surface-700/70 hover:bg-surface-700 text-gray-300 rounded transition-all">Select All</button>
                         <button onclick="clearAllJobsForBulkActions()" class="px-3 py-1.5 text-xs text-gray-400 hover:text-white transition-all">Clear</button>
+                    </div>
+                </div>
+                <!-- Job Details Drawer -->
+                <div id="jobDetailsDrawer" class="hidden mt-3 p-3 bg-surface-700/30 rounded-lg border border-gray-700/30">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs font-medium text-gray-300">Job Details</span>
+                        <button onclick="closeJobDetailsDrawer()" class="text-gray-500 hover:text-gray-300 text-xs">✕</button>
+                    </div>
+                    <div id="jobDetailsContent" class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                     </div>
                 </div>
             </div>
@@ -854,8 +864,10 @@
                             <button onclick="exportReviewTxt(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Text (.txt)</button>
                             <button onclick="exportReviewJson(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Timeline (.json)</button>
                             <div class="export-menu-separator my-1"></div>
-                            <button onclick="exportReviewDocx(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Word (.docx)</button>
-                            <button onclick="exportReviewPdf(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export PDF (.pdf)</button>
+                            <button onclick="exportReviewDocxClean(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Word (Clean)</button>
+                            <button onclick="exportReviewDocxTimestamped(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Word (Timestamped)</button>
+                            <button onclick="exportReviewPdfClean(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export PDF (Clean)</button>
+                            <button onclick="exportReviewPdfTimestamped(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export PDF (Timestamped)</button>
                         </div>
                     </div>
                 </div>
@@ -2012,6 +2024,11 @@
                                     title="Re-run this job with same settings">
                                 Re-run
                             </button>
+                            <button onclick="event.stopPropagation(); showJobDetails('${job.jobId}')" 
+                                    class="px-2 py-1 text-xs bg-surface-700/50 hover:bg-surface-700 text-gray-400 rounded transition-all"
+                                    title="View job details">
+                                Details
+                            </button>
                         ` : ''}
                         <span class="text-xs ${statusColor}">${job.status.replace('_', ' ')}</span>
                         ${!isRunning ? `
@@ -2150,6 +2167,13 @@
             if (countSpan) {
                 countSpan.textContent = count;
             }
+            
+            // Update selected jobs badge near title
+            const badge = document.getElementById('selectedJobsBadge');
+            if (badge) {
+                badge.classList.toggle('hidden', count === 0);
+                badge.textContent = `${count} selected`;
+            }
         }
         
         function clearJobSelection() {
@@ -2175,6 +2199,44 @@
             });
             updateRerunSelectedButton();
             updateBulkExportHeaderButton();
+        }
+        
+        // Job details drawer
+        let currentJobDetailsId = null;
+        
+        function showJobDetails(jobId) {
+            const job = jobHistoryCache?.find(j => j.jobId === jobId);
+            if (!job) return;
+            
+            currentJobDetailsId = jobId;
+            const drawer = document.getElementById('jobDetailsDrawer');
+            const content = document.getElementById('jobDetailsContent');
+            if (!drawer || !content) return;
+            
+            const date = job.createdAt ? new Date(job.createdAt).toLocaleString() : 'Unknown';
+            const elapsed = formatDuration(job.elapsedSeconds);
+            const audioDuration = formatDuration(job.primaryDurationSec);
+            
+            content.innerHTML = `
+                <div class="text-gray-500">Job ID:</div><div class="text-gray-300 font-mono truncate" title="${escapeHtml(job.jobId)}">${escapeHtml(job.jobId.slice(0, 12))}...</div>
+                <div class="text-gray-500">Status:</div><div class="text-gray-300">${escapeHtml(job.status)}</div>
+                <div class="text-gray-500">Created:</div><div class="text-gray-300">${date}</div>
+                <div class="text-gray-500">Model:</div><div class="text-gray-300">${escapeHtml(job.model || 'Unknown')}</div>
+                <div class="text-gray-500">Backend:</div><div class="text-gray-300">${escapeHtml(job.backend || 'Unknown')}</div>
+                <div class="text-gray-500">Execution:</div><div class="text-gray-300">${job.executionMode === 'remote' ? 'Remote' : 'Local'}</div>
+                <div class="text-gray-500">Diarization:</div><div class="text-gray-300">${job.diarizationEnabled ? 'Yes' : 'No'}</div>
+                <div class="text-gray-500">Audio:</div><div class="text-gray-300">${audioDuration || 'Unknown'}</div>
+                <div class="text-gray-500">Time taken:</div><div class="text-gray-300">${elapsed || 'Unknown'}</div>
+                <div class="text-gray-500">Files:</div><div class="text-gray-300">${job.inputCount || 1} file(s)</div>
+            `;
+            
+            drawer.classList.remove('hidden');
+        }
+        
+        function closeJobDetailsDrawer() {
+            const drawer = document.getElementById('jobDetailsDrawer');
+            if (drawer) drawer.classList.add('hidden');
+            currentJobDetailsId = null;
         }
         
         async function bulkExportSelectedJobs() {
@@ -5043,16 +5105,28 @@
             window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-timeline-json?inputId=${inputId}`;
         }
         
-        function exportReviewDocx() {
+        function exportReviewDocxClean() {
             if (!reviewJobData?.jobId) return;
             const inputId = reviewSelectedInputId || '';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-docx?inputId=${inputId}`;
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-docx?inputId=${inputId}&style=clean`;
         }
         
-        function exportReviewPdf() {
+        function exportReviewDocxTimestamped() {
             if (!reviewJobData?.jobId) return;
             const inputId = reviewSelectedInputId || '';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-pdf?inputId=${inputId}`;
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-docx?inputId=${inputId}&style=timestamped`;
+        }
+        
+        function exportReviewPdfClean() {
+            if (!reviewJobData?.jobId) return;
+            const inputId = reviewSelectedInputId || '';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-pdf?inputId=${inputId}&style=clean`;
+        }
+        
+        function exportReviewPdfTimestamped() {
+            if (!reviewJobData?.jobId) return;
+            const inputId = reviewSelectedInputId || '';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-pdf?inputId=${inputId}&style=timestamped`;
         }
         
         // Keyboard shortcuts
