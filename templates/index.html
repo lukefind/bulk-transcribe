@@ -3720,13 +3720,34 @@
             const reviewLatestBtn = document.getElementById('reviewLatestBtn');
             if (!section || !list) return;
             
-            // Find completed outputs (transcripts with success status)
             const outputs = job.outputs || [];
-            const completedOutputs = outputs.filter(o => 
-                o.type === 'transcript' && !o.error
-            );
-            
-            if (completedOutputs.length === 0) {
+            const inputs = job.inputs || [];
+
+            // Group outputs by inputId (forUploadId)
+            const outputsByInput = new Map();
+            for (const o of outputs) {
+                const inputId = o.forUploadId;
+                if (!inputId) continue;
+                if (!outputsByInput.has(inputId)) outputsByInput.set(inputId, []);
+                outputsByInput.get(inputId).push(o);
+            }
+
+            // A file is "completed" for review if it has a transcript JSON output
+            const completedFiles = [];
+            for (const inp of inputs) {
+                const inputId = inp.uploadId;
+                if (!inputId) continue;
+                const outs = outputsByInput.get(inputId) || [];
+                const hasTranscriptJson = outs.some(o => o.type === 'json' && !o.error);
+                if (hasTranscriptJson) {
+                    completedFiles.push({
+                        inputId,
+                        filename: inp.filename || 'File',
+                    });
+                }
+            }
+
+            if (completedFiles.length === 0) {
                 section.classList.add('hidden');
                 if (reviewLatestBtn) reviewLatestBtn.classList.add('hidden');
                 latestCompletedFile = null;
@@ -3734,19 +3755,19 @@
             }
             
             // Store latest completed file info for Review Latest button
-            const latest = completedOutputs[completedOutputs.length - 1];
+            const latest = completedFiles[completedFiles.length - 1];
             latestCompletedFile = {
                 jobId: job.jobId,
-                inputId: latest.inputId || latest.id
+                inputId: latest.inputId
             };
             
             // Show Review Latest button
             if (reviewLatestBtn) reviewLatestBtn.classList.remove('hidden');
             
             section.classList.remove('hidden');
-            list.innerHTML = completedOutputs.map(output => {
-                const inputId = output.inputId || output.id;
-                const filename = output.filename || output.originalFilename || 'File';
+            list.innerHTML = completedFiles.map(file => {
+                const inputId = file.inputId;
+                const filename = file.filename || 'File';
                 return `
                     <div class="flex items-center justify-between py-1 px-2 bg-surface-700/30 rounded">
                         <span class="text-gray-300 truncate flex-1" title="${escapeHtml(filename)}">${escapeHtml(filename)}</span>
@@ -3887,6 +3908,7 @@
             }
             
             const outputs = job.outputs || [];
+            const inputs = job.inputs || [];
             const successOutputs = outputs.filter(o => !o.error);
             
             if (successOutputs.length > 0) {
@@ -3904,51 +3926,130 @@
                 `;
                 resultsList.appendChild(downloadAllDiv);
                 
-                // Add Review button if there are previewable outputs
+                // Group outputs by input file for multi-file jobs
                 const previewableTypes = ['speaker-markdown', 'markdown', 'diarization-json', 'json', 'rttm'];
-                const hasPreviewable = successOutputs.some(o => previewableTypes.includes(o.type));
                 
-                if (hasPreviewable) {
-                    const reviewDiv = document.createElement('div');
-                    reviewDiv.className = 'mb-4';
-                    reviewDiv.innerHTML = `
-                        <button onclick="openReviewPanel(window._lastCompletedJob)" 
-                                class="inline-flex items-center gap-2 px-4 py-2 bg-surface-700 hover:bg-surface-600 text-white rounded-xl transition-all border border-gray-600/50">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
-                            </svg>
-                            Review Transcript
-                        </button>
-                    `;
-                    resultsList.appendChild(reviewDiv);
-                }
-                
-                // Individual files
-                for (const output of successOutputs) {
-                    const div = document.createElement('div');
-                    div.className = 'flex items-center justify-between p-3 bg-surface-800/50 rounded-lg';
+                if (inputs.length > 1) {
+                    // Multi-file job: group by input
+                    const outputsByInput = new Map();
+                    const ungroupedOutputs = [];
                     
-                    const isPreviewable = previewableTypes.includes(output.type);
-                    const previewBtn = isPreviewable 
-                        ? `<button onclick="openReviewPanelWithOutput('${output.id}')" class="text-xs text-green-400 hover:text-green-300 mr-3">Preview</button>`
-                        : '';
+                    for (const output of successOutputs) {
+                        const inputId = output.forUploadId;
+                        if (inputId) {
+                            if (!outputsByInput.has(inputId)) outputsByInput.set(inputId, []);
+                            outputsByInput.get(inputId).push(output);
+                        } else {
+                            ungroupedOutputs.push(output);
+                        }
+                    }
                     
-                    div.innerHTML = `
-                        <div class="flex items-center gap-2">
-                            <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                            </svg>
-                            <span class="text-sm text-gray-300">${output.filename}</span>
-                            <span class="text-xs text-gray-500">(${getOutputTypeLabel(output.type)})</span>
-                        </div>
-                        <div>
-                            ${previewBtn}
+                    // Render each input group
+                    for (const input of inputs) {
+                        const inputId = input.uploadId;
+                        const inputOutputs = outputsByInput.get(inputId) || [];
+                        if (inputOutputs.length === 0) continue;
+                        
+                        const hasPreviewable = inputOutputs.some(o => previewableTypes.includes(o.type));
+                        const durationStr = input.durationSec ? ` (${formatDuration(input.durationSec)})` : '';
+                        
+                        const groupDiv = document.createElement('div');
+                        groupDiv.className = 'mb-4 p-3 bg-surface-800/30 rounded-xl border border-gray-700/30';
+                        
+                        // Group header with filename and Review button
+                        const headerHtml = `
+                            <div class="flex items-center justify-between mb-2">
+                                <div class="flex items-center gap-2">
+                                    <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
+                                    </svg>
+                                    <span class="text-sm font-medium text-gray-200">${escapeHtml(input.filename || 'File')}</span>
+                                    <span class="text-xs text-gray-500">${durationStr}</span>
+                                </div>
+                                ${hasPreviewable ? `
+                                    <button onclick="openReviewForJob('${job.jobId}', '${inputId}')" 
+                                            class="px-3 py-1 text-xs bg-primary-600/60 hover:bg-primary-600 text-primary-100 rounded transition-all">
+                                        Review
+                                    </button>
+                                ` : ''}
+                            </div>
+                        `;
+                        
+                        // Output list for this input
+                        const outputsHtml = inputOutputs.map(output => `
+                            <div class="flex items-center justify-between py-1.5 px-2 text-xs">
+                                <div class="flex items-center gap-2">
+                                    <svg class="w-3 h-3 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                    </svg>
+                                    <span class="text-gray-400">${escapeHtml(output.filename || 'output')}</span>
+                                    <span class="text-gray-600">(${getOutputTypeLabel(output.type)})</span>
+                                </div>
+                                <a href="/api/jobs/${job.jobId}/outputs/${output.id}" 
+                                   class="text-primary-400 hover:text-primary-300">Download</a>
+                            </div>
+                        `).join('');
+                        
+                        groupDiv.innerHTML = headerHtml + `<div class="space-y-0.5">${outputsHtml}</div>`;
+                        resultsList.appendChild(groupDiv);
+                    }
+                    
+                    // Render ungrouped outputs (if any)
+                    if (ungroupedOutputs.length > 0) {
+                        const ungroupedDiv = document.createElement('div');
+                        ungroupedDiv.className = 'mb-4 p-3 bg-surface-800/30 rounded-xl border border-gray-700/30';
+                        ungroupedDiv.innerHTML = `
+                            <div class="text-xs text-gray-500 mb-2">Other outputs</div>
+                            <div class="space-y-0.5">
+                                ${ungroupedOutputs.map(output => `
+                                    <div class="flex items-center justify-between py-1.5 px-2 text-xs">
+                                        <span class="text-gray-400">${escapeHtml(output.filename || 'output')}</span>
+                                        <a href="/api/jobs/${job.jobId}/outputs/${output.id}" 
+                                           class="text-primary-400 hover:text-primary-300">Download</a>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        `;
+                        resultsList.appendChild(ungroupedDiv);
+                    }
+                } else {
+                    // Single-file job: show flat list with one Review button
+                    const hasPreviewable = successOutputs.some(o => previewableTypes.includes(o.type));
+                    
+                    if (hasPreviewable) {
+                        const reviewDiv = document.createElement('div');
+                        reviewDiv.className = 'mb-4';
+                        reviewDiv.innerHTML = `
+                            <button onclick="openReviewPanel(window._lastCompletedJob)" 
+                                    class="inline-flex items-center gap-2 px-4 py-2 bg-surface-700 hover:bg-surface-600 text-white rounded-xl transition-all border border-gray-600/50">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                                </svg>
+                                Review Transcript
+                            </button>
+                        `;
+                        resultsList.appendChild(reviewDiv);
+                    }
+                    
+                    // Individual files (flat list for single-file jobs)
+                    for (const output of successOutputs) {
+                        const div = document.createElement('div');
+                        div.className = 'flex items-center justify-between p-3 bg-surface-800/50 rounded-lg';
+                        
+                        div.innerHTML = `
+                            <div class="flex items-center gap-2">
+                                <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                </svg>
+                                <span class="text-sm text-gray-300">${escapeHtml(output.filename || 'output')}</span>
+                                <span class="text-xs text-gray-500">(${getOutputTypeLabel(output.type)})</span>
+                            </div>
                             <a href="/api/jobs/${job.jobId}/outputs/${output.id}" 
                                class="text-xs text-primary-400 hover:text-primary-300">Download</a>
-                        </div>
-                    `;
-                    resultsList.appendChild(div);
+                        `;
+                        resultsList.appendChild(div);
+                    }
                 }
             }
             

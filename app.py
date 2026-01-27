@@ -5113,11 +5113,31 @@ def api_worker_complete(job_id):
                 'currentFileIndex': manifest.get('progress', {}).get('totalFiles', 0)
             }
     elif status == 'failed':
-        manifest['status'] = 'failed'
-        manifest['error'] = error or {'code': 'WORKER_FAILED', 'message': 'Worker job failed'}
+        if outputs_received > 0:
+            manifest['status'] = 'complete_with_errors'
+            manifest['error'] = error or {'code': 'WORKER_FAILED_PARTIAL', 'message': 'Worker job failed after producing some outputs'}
+            manifest['progress'] = {
+                'stage': 'complete',
+                'percent': 100,
+                'totalFiles': manifest.get('progress', {}).get('totalFiles', 0),
+                'currentFileIndex': manifest.get('progress', {}).get('totalFiles', 0)
+            }
+        else:
+            manifest['status'] = 'failed'
+            manifest['error'] = error or {'code': 'WORKER_FAILED', 'message': 'Worker job failed'}
     elif status == 'canceled':
-        manifest['status'] = 'canceled'
-        manifest['error'] = {'code': 'WORKER_CANCELED', 'message': 'Worker job was canceled'}
+        if outputs_received > 0:
+            manifest['status'] = 'complete_with_errors'
+            manifest['error'] = {'code': 'WORKER_CANCELED_PARTIAL', 'message': 'Worker job was canceled after producing some outputs'}
+            manifest['progress'] = {
+                'stage': 'complete',
+                'percent': 100,
+                'totalFiles': manifest.get('progress', {}).get('totalFiles', 0),
+                'currentFileIndex': manifest.get('progress', {}).get('totalFiles', 0)
+            }
+        else:
+            manifest['status'] = 'canceled'
+            manifest['error'] = {'code': 'WORKER_CANCELED', 'message': 'Worker job was canceled'}
     
     manifest['finishedAt'] = now
     manifest['updatedAt'] = now
