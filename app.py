@@ -3307,9 +3307,19 @@ def api_put_review_state(job_id):
             if sid and not re.match(r'^SPEAKER_\d+$', sid):
                 return jsonify({'error': f'Invalid speaker ID in edit: {sid}'}), 400
     
+    # Validate speaker colors (hex format)
+    speaker_colors = data.get('speakerColorMap', {})
+    HEX_COLOR = re.compile(r'^#[0-9a-fA-F]{6}$')
+    for speaker_id, color in speaker_colors.items():
+        if not re.match(r'^SPEAKER_\d+$', speaker_id):
+            return jsonify({'error': f'Invalid speaker ID in colorMap: {speaker_id}'}), 400
+        if color and not HEX_COLOR.match(color):
+            return jsonify({'error': f'Invalid color for {speaker_id}: {color}'}), 400
+    
     # Build state object
     state = {
         'speakerLabelMap': speaker_labels,
+        'speakerColorMap': speaker_colors,
         'chunkEdits': chunk_edits,
         'uiPrefs': data.get('uiPrefs', {}),
         'updatedAt': datetime.now(timezone.utc).isoformat()
@@ -3887,7 +3897,7 @@ def _build_review_timeline(session_id: str, job_id: str, input_id: str, filename
 def api_export_review_docx(job_id):
     """Export review timeline as DOCX."""
     from docx import Document
-    from docx.shared import Pt, Inches
+    from docx.shared import Pt, Inches, RGBColor
     import io
     
     # Safe access helper for dict or object
@@ -3897,6 +3907,16 @@ def api_export_review_docx(job_id):
         if isinstance(obj, dict):
             return obj.get(key, default)
         return getattr(obj, key, default)
+    
+    # Convert hex color to RGB tuple
+    def hex_to_rgb(hex_color):
+        hex_color = (hex_color or '').lstrip('#')
+        if len(hex_color) != 6:
+            return (107, 114, 128)  # fallback gray
+        try:
+            return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        except ValueError:
+            return (107, 114, 128)
     
     try:
         session_id = g.session_id
@@ -3942,6 +3962,7 @@ def api_export_review_docx(job_id):
             sid = val(chunk, 'speaker_id')
             speaker = speakers.get(sid)
             label = val(speaker, 'label', sid or 'Unknown') or sid or 'Unknown'
+            color = val(speaker, 'color', '#6b7280') or '#6b7280'
             start = val(chunk, 'start', 0)
             text = val(chunk, 'text', '') or ''
             timestamp = fmt_time(start)
@@ -3949,6 +3970,8 @@ def api_export_review_docx(job_id):
             para = doc.add_paragraph()
             run = para.add_run(f"[{timestamp}] {label}: ")
             run.bold = True
+            r, g, b = hex_to_rgb(color)
+            run.font.color.rgb = RGBColor(r, g, b)
             para.add_run(text)
         
         # Write to buffer
@@ -3973,6 +3996,7 @@ def api_export_review_pdf(job_id):
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
     from reportlab.lib.units import inch
+    from reportlab.lib.colors import HexColor
     import io
     
     # Safe access helper for dict or object
@@ -3982,6 +4006,16 @@ def api_export_review_pdf(job_id):
         if isinstance(obj, dict):
             return obj.get(key, default)
         return getattr(obj, key, default)
+    
+    # Safe hex color parser
+    def safe_hex_color(hex_color):
+        hex_color = (hex_color or '#6b7280').strip()
+        if not hex_color.startswith('#') or len(hex_color) != 7:
+            return HexColor('#6b7280')
+        try:
+            return HexColor(hex_color)
+        except:
+            return HexColor('#6b7280')
     
     try:
         session_id = g.session_id
@@ -4025,13 +4059,6 @@ def api_export_review_pdf(job_id):
         
         styles = getSampleStyleSheet()
         title_style = styles['Heading1']
-        chunk_style = ParagraphStyle(
-            'ChunkStyle',
-            parent=styles['Normal'],
-            fontSize=10,
-            leading=14,
-            spaceAfter=8
-        )
         
         story = []
         story.append(Paragraph(filename, title_style))
@@ -4041,12 +4068,23 @@ def api_export_review_pdf(job_id):
             sid = val(chunk, 'speaker_id')
             speaker = speakers.get(sid)
             label = val(speaker, 'label', sid or 'Unknown') or sid or 'Unknown'
+            color = val(speaker, 'color', '#6b7280') or '#6b7280'
             start = val(chunk, 'start', 0)
             text = val(chunk, 'text', '') or ''
             text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
             timestamp = fmt_time(start)
             
-            line = f"<b>[{timestamp}] {label}:</b> {text}"
+            # Create style with speaker color for heading
+            chunk_style = ParagraphStyle(
+                f'Chunk_{sid}',
+                parent=styles['Normal'],
+                fontSize=10,
+                leading=14,
+                spaceAfter=8
+            )
+            
+            # Use inline font color for the speaker heading portion
+            line = f'<font color="{color}"><b>[{timestamp}] {label}:</b></font> {text}'
             story.append(Paragraph(line, chunk_style))
         
         doc.build(story)

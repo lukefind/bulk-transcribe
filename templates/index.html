@@ -63,8 +63,16 @@
         :root.theme-light .border-gray-700\/50 { border-color: rgba(203, 213, 225, 0.7) !important; }
         :root.theme-light .border-gray-600\/50 { border-color: rgba(148, 163, 184, 0.5) !important; }
         :root.theme-light .border-primary-900\/30 { border-color: rgba(99, 102, 241, 0.2) !important; }
-        :root.theme-light header { background-color: rgba(255, 255, 255, 0.9); }
+        :root.theme-light header { 
+            background: linear-gradient(90deg, rgba(99, 102, 241, 0.08) 0%, rgba(139, 92, 246, 0.05) 50%, rgba(99, 102, 241, 0.08) 100%);
+            border-bottom-color: rgba(99, 102, 241, 0.15) !important;
+        }
         :root.theme-light .btn-primary { color: white !important; }
+        :root.theme-light h1.bg-gradient-to-r { 
+            background: linear-gradient(to right, #4f46e5, #6366f1) !important;
+            -webkit-background-clip: text !important;
+            background-clip: text !important;
+        }
         
         /* Export menu styling (theme-aware) */
         .export-menu { background-color: #1e293b; border: 1px solid #334155; }
@@ -210,6 +218,8 @@
                             <input type="file" accept=".zip" multiple class="hidden" onchange="bulkImportProjects(this.files); this.value='';">
                         </label>
                         <button type="button" id="bulkExportHeaderBtn" onclick="bulkExportSelectedJobs()" disabled class="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed">Bulk Export (select)</button>
+                        <button type="button" onclick="selectAllJobsForBulkActions()" class="text-xs text-gray-400 hover:text-gray-300">Select All</button>
+                        <button type="button" onclick="clearAllJobsForBulkActions()" class="text-xs text-gray-400 hover:text-gray-300">Clear All</button>
                         <button type="button" onclick="loadJobHistory()" class="text-xs text-gray-400 hover:text-gray-300">Refresh</button>
                     </div>
                 </div>
@@ -2017,6 +2027,25 @@
             selectedJobIds.clear();
             document.querySelectorAll('.job-select-checkbox').forEach(cb => cb.checked = false);
             updateRerunSelectedButton();
+        }
+        
+        function selectAllJobsForBulkActions() {
+            document.querySelectorAll('.job-select-checkbox').forEach(cb => {
+                cb.checked = true;
+                const jobId = cb.dataset.jobId;
+                if (jobId) selectedJobIds.add(jobId);
+            });
+            updateRerunSelectedButton();
+            updateBulkExportHeaderButton();
+        }
+        
+        function clearAllJobsForBulkActions() {
+            selectedJobIds.clear();
+            document.querySelectorAll('.job-select-checkbox').forEach(cb => {
+                cb.checked = false;
+            });
+            updateRerunSelectedButton();
+            updateBulkExportHeaderButton();
         }
         
         async function bulkExportSelectedJobs() {
