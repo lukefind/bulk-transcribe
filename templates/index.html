@@ -1182,6 +1182,8 @@
             const workersSelect = document.getElementById('workers');
             const modeDescription = document.getElementById('modeDescription');
             const wordTimestamps = document.getElementById('wordTimestamps')?.checked || false;
+            const remoteWorker = runtimeEnv?.remoteWorker;
+            const remoteConnected = Boolean(remoteWorker?.connected);
             
             // Reset description styling
             modeDescription.classList.remove('text-green-400');
@@ -1192,10 +1194,9 @@
                 workersSection.classList.add('opacity-50', 'pointer-events-none');
                 workersSelect.disabled = true;
                 workersSelect.value = '1';
-                const remoteWorker = runtimeEnv?.remoteWorker;
                 const gpuLabel = remoteWorker?.workerCapabilities?.gpu ? 'GPU' : 'CPU';
                 const latency = remoteWorker?.latencyMs ? ` (${remoteWorker.latencyMs}ms)` : '';
-                modeDescription.textContent = `Remote ${gpuLabel} worker${latency}. Fast cloud transcription.`;
+                modeDescription.textContent = `Remote ${gpuLabel} worker selected${latency}. Local backend setting is ignored for execution.`;
                 modeDescription.classList.remove('text-gray-500');
                 modeDescription.classList.add('text-green-400');
             } else if (mode === 'metal' && !wordTimestamps) {
@@ -1203,6 +1204,9 @@
                 workersSelect.disabled = true;
                 workersSelect.value = '1';
                 modeDescription.textContent = 'Metal GPU: ~5-6x realtime on Apple Silicon. Single worker only.';
+                if (remoteConnected) {
+                    modeDescription.textContent += ' Remote worker is also available.';
+                }
             } else if (mode === 'metal' && wordTimestamps) {
                 workersSection.classList.remove('opacity-50', 'pointer-events-none');
                 workersSelect.disabled = false;
@@ -1212,10 +1216,17 @@
                 workersSelect.disabled = true;
                 workersSelect.value = '1';
                 modeDescription.textContent = 'CUDA GPU: Fast NVIDIA GPU transcription.';
+                if (remoteConnected) {
+                    modeDescription.textContent += ' Remote worker is also available.';
+                }
             } else {
                 workersSection.classList.remove('opacity-50', 'pointer-events-none');
                 workersSelect.disabled = false;
-                modeDescription.textContent = 'CPU mode: Slower but compatible. Use 2 workers for parallel processing.';
+                if (remoteConnected) {
+                    modeDescription.textContent = 'Remote worker is connected. Selecting it runs on the worker; local options run on this server.';
+                } else {
+                    modeDescription.textContent = 'CPU mode: Slower but compatible. Use 2 workers for parallel processing.';
+                }
             }
         }
 
@@ -1287,7 +1298,6 @@
         
         function updateBackendUI() {
             const backendSelect = document.getElementById('processingMode');
-            const modeDescription = document.getElementById('modeDescription');
             if (!backendSelect) return;
             
             // Clear and rebuild options based on supported backends
@@ -1311,14 +1321,6 @@
                 const gpuLabel = remoteWorker.workerCapabilities?.gpu ? 'GPU' : 'CPU';
                 remoteOption.textContent = `Remote ${gpuLabel} Worker (Recommended)`;
                 backendSelect.appendChild(remoteOption);
-                
-                // Update description for remote
-                if (modeDescription) {
-                    const latency = remoteWorker.latencyMs ? `${remoteWorker.latencyMs}ms latency` : '';
-                    modeDescription.textContent = `Remote worker connected. ${latency}. Fast GPU transcription.`;
-                    modeDescription.classList.remove('text-gray-500');
-                    modeDescription.classList.add('text-green-400');
-                }
             }
             
             // Add local backends
