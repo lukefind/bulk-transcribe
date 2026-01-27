@@ -1546,14 +1546,19 @@
             savedBackendPreference = loadFromStorage(STORAGE_KEYS.lastBackend);
             
             if (savedInput) {
-                document.getElementById('inputFolder').value = savedInput;
-                previewFiles();
+                const inputEl = document.getElementById('inputFolder');
+                if (inputEl) {
+                    inputEl.value = savedInput;
+                    previewFiles();
+                }
             }
             if (savedOutput) {
-                document.getElementById('outputFolder').value = savedOutput;
+                const outputEl = document.getElementById('outputFolder');
+                if (outputEl) outputEl.value = savedOutput;
             }
             if (savedLanguage) {
-                document.getElementById('language').value = savedLanguage;
+                const langEl = document.getElementById('language');
+                if (langEl) langEl.value = savedLanguage;
             }
             if (savedModel) {
                 const modelSelect = document.getElementById('model');
@@ -2951,15 +2956,24 @@
             }
             
             // Save language when changed
-            document.getElementById('language').addEventListener('change', (e) => {
-                saveToStorage(STORAGE_KEYS.lastLanguage, e.target.value);
-            });
-            document.getElementById('model').addEventListener('change', (e) => {
-                saveToStorage(STORAGE_KEYS.lastModel, e.target.value);
-            });
-            document.getElementById('processingMode').addEventListener('change', (e) => {
-                saveToStorage(STORAGE_KEYS.lastBackend, e.target.value);
-            });
+            const languageEl = document.getElementById('language');
+            if (languageEl) {
+                languageEl.addEventListener('change', (e) => {
+                    saveToStorage(STORAGE_KEYS.lastLanguage, e.target.value);
+                });
+            }
+            const modelEl = document.getElementById('model');
+            if (modelEl) {
+                modelEl.addEventListener('change', (e) => {
+                    saveToStorage(STORAGE_KEYS.lastModel, e.target.value);
+                });
+            }
+            const processingModeEl = document.getElementById('processingMode');
+            if (processingModeEl) {
+                processingModeEl.addEventListener('change', (e) => {
+                    saveToStorage(STORAGE_KEYS.lastBackend, e.target.value);
+                });
+            }
 
             const persistCheckbox = (id, key) => {
                 const el = document.getElementById(id);
