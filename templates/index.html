@@ -369,6 +369,13 @@
                                 <input type="file" accept=".zip" multiple class="hidden" onchange="bulkImportProjects(this.files); this.value='';">
                             </label>
                             <button type="button" id="bulkExportHeaderBtn" onclick="bulkExportSelectedJobs()" disabled class="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed">Bulk Export (select)</button>
+                            <button type="button" onclick="exportSession()" class="text-xs text-gray-400 hover:text-gray-300">Export Session</button>
+                            <span class="text-gray-600">|</span>
+                            <select id="finishedFilterSelect" onchange="onFinishedFilterChange()" class="text-xs bg-surface-700 border border-gray-600/50 rounded px-1.5 py-0.5 text-gray-300">
+                                <option value="all">All</option>
+                                <option value="unfinished">Unfinished</option>
+                                <option value="finished">Finished</option>
+                            </select>
                             <span class="text-gray-600">|</span>
                             <button type="button" onclick="selectAllJobsForBulkActions()" class="text-xs text-gray-400 hover:text-gray-300">Select All</button>
                             <button type="button" onclick="clearAllJobsForBulkActions()" class="text-xs text-gray-400 hover:text-gray-300">Clear</button>
@@ -381,6 +388,7 @@
                         <div class="flex items-center gap-2">
                             <button onclick="bulkExportSelectedJobs()" class="px-3 py-1.5 text-xs bg-primary-600/70 hover:bg-primary-600 text-white rounded transition-all">Bulk Export</button>
                             <button onclick="rerunSelectedJobs()" class="px-3 py-1.5 text-xs bg-surface-600/70 hover:bg-surface-600 text-gray-200 rounded transition-all">Re-run Selected</button>
+                            <button onclick="bulkDeleteSelectedJobs()" class="px-3 py-1.5 text-xs bg-red-600/70 hover:bg-red-600 text-white rounded transition-all">Bulk Delete</button>
                             <button onclick="clearAllJobsForBulkActions()" class="px-3 py-1.5 text-xs text-gray-400 hover:text-white transition-all">Clear Selection</button>
                         </div>
                     </div>
@@ -958,6 +966,11 @@
                         <svg class="w-3.5 h-3.5 theme-icon-sun hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
                         <svg class="w-3.5 h-3.5 theme-icon-moon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
                     </button>
+                    <!-- Finished Toggle -->
+                    <label id="reviewFinishedToggle" class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+                        <input type="checkbox" id="reviewFinishedCheckbox" class="rounded bg-surface-700 border-gray-600 text-green-500" onchange="toggleReviewJobFinished()">
+                        <span>Finished</span>
+                    </label>
                     <!-- Save Status Indicator -->
                     <div id="reviewSaveStatus" class="flex items-center gap-1.5 text-xs text-gray-500">
                         <span id="saveStatusIcon" class="w-2 h-2 rounded-full bg-green-500"></span>
@@ -987,6 +1000,8 @@
                             <div class="export-menu-separator my-1"></div>
                             <button onclick="exportReviewDocx(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Word (.docx)</button>
                             <button onclick="exportReviewPdf(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export PDF (.pdf)</button>
+                            <div class="export-menu-separator my-1"></div>
+                            <button onclick="downloadAllFormatsFromReview(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm font-medium">Download All Formats</button>
                         </div>
                     </div>
                 </div>
@@ -2112,7 +2127,15 @@
                 }
             }
             
-            jobs.slice(0, 10).forEach(job => {
+            // Apply finished filter
+            const finishedFilter = getFinishedFilter();
+            const filteredJobs = jobs.filter(job => {
+                if (finishedFilter === 'all') return true;
+                if (finishedFilter === 'finished') return job.finished === true;
+                return !job.finished;
+            });
+            
+            filteredJobs.slice(0, 10).forEach(job => {
                 const div = document.createElement('div');
                 const isSelected = selectedJobIds.has(job.jobId);
                 div.className = `job-card-row group${isSelected ? ' selected' : ''}`;
@@ -2176,6 +2199,11 @@
                                         title="Re-run this job">
                                     Re-run
                                 </button>
+                                <button onclick="event.stopPropagation(); downloadAllFormats('${job.jobId}')" 
+                                        class="opacity-0 group-hover:opacity-100 px-2 py-1 text-xs bg-surface-600/50 hover:bg-surface-600 text-gray-300 rounded transition-all"
+                                        title="Download all formats (zip)">
+                                    All
+                                </button>
                                 <button onclick="event.stopPropagation(); deleteJob('${job.jobId}')" 
                                         class="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 transition-all"
                                         title="Delete job">
@@ -2192,6 +2220,12 @@
                         ${audioDuration ? `<span>• ${audioDuration} audio</span>` : ''}
                         ${elapsed ? `<span>• took ${elapsed}</span>` : ''}
                         <div class="flex items-center gap-1.5 ml-auto">
+                            ${job.finished ? '<span class="px-1.5 py-0.5 rounded bg-green-600/40 text-green-300 text-[10px] uppercase font-medium">Finished</span>' : ''}
+                            <button onclick="event.stopPropagation(); toggleJobFinished('${job.jobId}', ${!job.finished})" 
+                                    class="opacity-0 group-hover:opacity-100 px-1.5 py-0.5 rounded bg-surface-700/40 hover:bg-surface-600 text-gray-400 hover:text-gray-200 text-[10px] transition-all"
+                                    title="${job.finished ? 'Mark as unfinished' : 'Mark as finished'}">
+                                ${job.finished ? 'Unmark' : 'Mark Done'}
+                            </button>
                             ${modelLabel ? `<span class="px-1.5 py-0.5 rounded bg-surface-700/60 text-gray-400 text-[10px] uppercase">${escapeHtml(modelLabel)}</span>` : ''}
                             ${backendLabel ? `<span class="px-1.5 py-0.5 rounded bg-surface-700/60 text-gray-400 text-[10px] uppercase">${escapeHtml(backendLabel)}</span>` : ''}
                             <span class="px-1.5 py-0.5 rounded bg-surface-700/40 text-gray-400 text-[10px] uppercase">${execLabel}</span>
@@ -2244,6 +2278,70 @@
                 btnContainer.appendChild(clearSelectionBtn);
                 
                 list.appendChild(btnContainer);
+            }
+        }
+        
+        async function toggleJobFinished(jobId, finished) {
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch(`/api/jobs/${jobId}/mark-finished`, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ finished })
+                });
+                
+                if (!response.ok) {
+                    const data = await response.json();
+                    showError(data.error || 'Failed to update job');
+                    return;
+                }
+                
+                // Refresh job list
+                loadJobHistory();
+            } catch (e) {
+                showError(`Failed to update job: ${e.message}`);
+            }
+        }
+        
+        function downloadAllFormats(jobId) {
+            window.location.href = `/api/jobs/${jobId}/export-all`;
+        }
+        
+        function downloadAllFormatsFromReview() {
+            if (!reviewJobData?.jobId) return;
+            downloadAllFormats(reviewJobData.jobId);
+        }
+        
+        async function toggleReviewJobFinished() {
+            if (!reviewJobData?.jobId) return;
+            const checkbox = document.getElementById('reviewFinishedCheckbox');
+            const finished = checkbox?.checked || false;
+            
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch(`/api/jobs/${reviewJobData.jobId}/mark-finished`, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ finished })
+                });
+                
+                if (!response.ok) {
+                    const data = await response.json();
+                    showError(data.error || 'Failed to update job');
+                    // Revert checkbox
+                    if (checkbox) checkbox.checked = !finished;
+                    return;
+                }
+                
+                // Update local job data
+                reviewJobData.finished = finished;
+            } catch (e) {
+                showError(`Failed to update job: ${e.message}`);
+                if (checkbox) checkbox.checked = !finished;
             }
         }
         
@@ -2399,6 +2497,80 @@
             const drawer = document.getElementById('jobDetailsDrawer');
             if (drawer) drawer.classList.add('hidden');
             currentJobDetailsId = null;
+        }
+        
+        async function exportSession() {
+            if (!confirm('Export all jobs in this session as a single zip?')) return;
+            
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch('/api/session/export', {
+                    method: 'POST',
+                    headers
+                });
+                
+                if (!response.ok) {
+                    const data = await response.json();
+                    showError(data.error || 'Session export failed');
+                    return;
+                }
+                
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `session-export-${new Date().toISOString().slice(0,10)}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                showError(`Session export failed: ${e.message}`);
+            }
+        }
+        
+        async function bulkDeleteSelectedJobs() {
+            const count = selectedJobIds.size;
+            if (count === 0) return;
+            
+            if (!confirm(`Delete ${count} selected job(s)? This cannot be undone.`)) return;
+            
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch('/api/jobs/bulk-delete', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ jobIds: Array.from(selectedJobIds) })
+                });
+                
+                if (!response.ok) {
+                    const data = await response.json();
+                    showError(data.error || 'Bulk delete failed');
+                    return;
+                }
+                
+                const result = await response.json();
+                const deletedCount = result.deleted?.length || 0;
+                const skippedCount = result.skippedRunning?.length || 0;
+                const errorCount = result.errors?.length || 0;
+                
+                let msg = `Deleted ${deletedCount} job(s).`;
+                if (skippedCount > 0) msg += ` Skipped ${skippedCount} running.`;
+                if (errorCount > 0) msg += ` ${errorCount} error(s).`;
+                
+                console.log(msg, result);
+                
+                // Clear selection and refresh
+                selectedJobIds.clear();
+                updateBulkSelectionUI();
+                loadJobHistory();
+            } catch (e) {
+                showError(`Bulk delete failed: ${e.message}`);
+            }
         }
         
         async function bulkExportSelectedJobs() {
@@ -2701,6 +2873,32 @@
             }
         }
 
+        // Finished filter management
+        const FINISHED_FILTER_KEY = 'bulk_transcribe_finished_filter';
+        
+        function getFinishedFilter() {
+            return localStorage.getItem(FINISHED_FILTER_KEY) || 'all';
+        }
+        
+        function setFinishedFilter(value) {
+            localStorage.setItem(FINISHED_FILTER_KEY, value);
+        }
+        
+        function onFinishedFilterChange() {
+            const select = document.getElementById('finishedFilterSelect');
+            if (select) {
+                setFinishedFilter(select.value);
+                loadJobHistory();
+            }
+        }
+        
+        function restoreFinishedFilter() {
+            const select = document.getElementById('finishedFilterSelect');
+            if (select) {
+                select.value = getFinishedFilter();
+            }
+        }
+        
         // Theme management
         const THEME_STORAGE_KEY = 'bulk_transcribe_theme';
         
@@ -2742,6 +2940,9 @@
             loadModels().then(() => {
                 restoreSavedSettings();
             });
+            
+            // Restore finished filter from localStorage
+            restoreFinishedFilter();
             
             // Server mode initialization
             if (IS_SERVER_MODE) {
@@ -4452,6 +4653,10 @@
             // Reset save status
             updateSaveStatus('saved');
             
+            // Update finished checkbox
+            const finishedCheckbox = document.getElementById('reviewFinishedCheckbox');
+            if (finishedCheckbox) finishedCheckbox.checked = job.finished || false;
+            
             // Setup audio player
             if (targetInput) {
                 setupReviewAudio(job.jobId, targetInput);
@@ -4823,6 +5028,16 @@
         function hideReviewInfoModal() {
             const modal = document.getElementById('reviewInfoModal');
             if (modal) modal.classList.add('hidden');
+        }
+        
+        function syncChunkViewAfterEdit() {
+            // Keep the cached view arrays in sync with current edits
+            if (!reviewTimeline) return;
+            if (reviewChunkViewMode === 'raw') {
+                reviewTimelineRaw = reviewTimeline.chunks;
+            } else {
+                reviewTimelineMerged = reviewTimeline.chunks;
+            }
         }
         
         function renderTimeline() {
@@ -5313,6 +5528,9 @@
             markUnsaved();
             debounceSave();
             
+            // Sync view cache after edit
+            syncChunkViewAfterEdit();
+            
             // Re-render
             renderTimeline();
             selectChunk(chunkIndex);
@@ -5366,6 +5584,9 @@
             
             // Mark unsaved
             markUnsaved();
+            
+            // Sync view cache after edit
+            syncChunkViewAfterEdit();
             
             // Re-render the affected chunk
             renderTimeline();
@@ -5427,6 +5648,9 @@
             // Mark as changed
             markUnsaved();
             debounceSave();
+            
+            // Sync view cache after edit
+            syncChunkViewAfterEdit();
             
             // Re-render and select the second (new) chunk
             renderTimeline();
@@ -5515,6 +5739,9 @@
             // Mark as changed
             markUnsaved();
             debounceSave();
+            
+            // Sync view cache after edit
+            syncChunkViewAfterEdit();
             
             // Re-render and select the middle (interjection) chunk
             renderTimeline();

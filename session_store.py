@@ -309,6 +309,7 @@ def list_jobs(session_id: str, limit: int = 20) -> list:
                 'backend': options.get('backend'),
                 'executionMode': manifest.get('executionMode', 'local'),
                 'diarizationEnabled': bool(options.get('diarizationEnabled')),
+                'finished': manifest.get('finished', False),
             })
     
     # Sort by createdAt descending

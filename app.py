@@ -2536,6 +2536,76 @@ def api_delete_job(job_id):
         return jsonify({'error': f'Failed to delete job: {str(e)[:200]}'}), 500
 
 
+@app.route('/api/jobs/<job_id>/mark-finished', methods=['POST'])
+def api_mark_job_finished(job_id):
+    """Mark a job as finished or unfinished."""
+    session_id = g.session_id
+    data = request.get_json() or {}
+    finished = data.get('finished', True)
+    
+    job_dir = session_store.job_dir(session_id, job_id)
+    if not job_dir or not os.path.exists(job_dir):
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Load existing job.json
+    job_json_path = os.path.join(job_dir, 'job.json')
+    job_data = session_store.read_json(job_json_path) or {}
+    
+    # Update finished flag
+    job_data['finished'] = finished
+    
+    # Save back
+    session_store.atomic_write_json(job_json_path, job_data)
+    
+    return jsonify({'status': 'ok', 'finished': finished})
+
+_CSRF_PROTECTED_ENDPOINTS.add('api_mark_job_finished')
+
+
+@app.route('/api/jobs/bulk-delete', methods=['POST'])
+def api_bulk_delete_jobs():
+    """Bulk delete multiple jobs."""
+    session_id = g.session_id
+    data = request.get_json() or {}
+    job_ids = data.get('jobIds', [])
+    
+    if not job_ids:
+        return jsonify({'error': 'No job IDs provided'}), 400
+    
+    import shutil
+    deleted = []
+    skipped_running = []
+    errors = []
+    
+    for job_id in job_ids:
+        # Check if job is running
+        with _active_jobs_lock:
+            if (session_id, job_id) in _active_jobs:
+                job_info = _active_jobs[(session_id, job_id)]
+                if job_info.get('running'):
+                    skipped_running.append(job_id)
+                    continue
+        
+        # Get job directory
+        job_dir = session_store.job_dir(session_id, job_id)
+        if not job_dir or not os.path.exists(job_dir):
+            errors.append({'jobId': job_id, 'error': 'Job not found'})
+            continue
+        
+        # Delete job directory
+        try:
+            shutil.rmtree(job_dir)
+            deleted.append(job_id)
+        except Exception as e:
+            errors.append({'jobId': job_id, 'error': str(e)[:200]})
+    
+    return jsonify({
+        'deleted': deleted,
+        'skippedRunning': skipped_running,
+        'errors': errors
+    })
+
+
 @app.route('/api/jobs/clear', methods=['POST'])
 def api_clear_jobs():
     """Clear old jobs from the session."""
@@ -3992,6 +4062,122 @@ def api_export_review_docx(job_id):
         return jsonify({'error': 'Export failed', 'details': str(e)[:200]}), 500
 
 
+@app.route('/api/jobs/<job_id>/export-all', methods=['GET'])
+def api_export_all_formats(job_id):
+    """Export all formats (btproj, md, docx, pdf, timeline.json) as a single zip."""
+    session_id = g.session_id
+    
+    job_dir = session_store.job_dir(session_id, job_id)
+    if not job_dir or not os.path.exists(job_dir):
+        return jsonify({'error': 'Job not found'}), 404
+    
+    try:
+        # Get base files from btproj export helper
+        files, filename = _build_job_export_files(session_id, job_id)
+        safe_name = secure_filename(Path(filename).stem) or 'export'
+        
+        # Get timeline and review state for additional exports
+        timeline, review_state = _get_timeline_and_state_for_export(session_id, job_id)
+        
+        if timeline:
+            # Generate markdown
+            md_lines = []
+            speakers = {s.id: s for s in (timeline.speakers or [])}
+            for chunk in (timeline.chunks or []):
+                sid = chunk.speaker_id
+                speaker = speakers.get(sid)
+                label = speaker.label if speaker else (sid or 'Unknown')
+                start = chunk.start or 0
+                mins, secs = divmod(int(start), 60)
+                timestamp = f"{mins:02d}:{secs:02d}"
+                text = chunk.text or ''
+                md_lines.append(f"[{timestamp}] **{label}**: {text}")
+            files[f'{safe_name}.md'] = '\n\n'.join(md_lines).encode('utf-8')
+            
+            # Generate DOCX
+            try:
+                from docx import Document
+                from docx.shared import RGBColor
+                
+                def hex_to_rgb(hex_color):
+                    hex_color = hex_color.lstrip('#')
+                    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                
+                doc = Document()
+                doc.add_heading(safe_name, 0)
+                
+                for chunk in (timeline.chunks or []):
+                    sid = chunk.speaker_id
+                    speaker = speakers.get(sid)
+                    label = speaker.label if speaker else (sid or 'Unknown')
+                    color = speaker.color if speaker else '#6b7280'
+                    start = chunk.start or 0
+                    mins, secs = divmod(int(start), 60)
+                    timestamp = f"{mins:02d}:{secs:02d}"
+                    text = chunk.text or ''
+                    
+                    para = doc.add_paragraph()
+                    run = para.add_run(f"[{timestamp}] {label}: ")
+                    run.bold = True
+                    r, g, b = hex_to_rgb(color)
+                    run.font.color.rgb = RGBColor(r, g, b)
+                    para.add_run(text)
+                
+                docx_buffer = io.BytesIO()
+                doc.save(docx_buffer)
+                docx_buffer.seek(0)
+                files[f'{safe_name}.docx'] = docx_buffer.getvalue()
+            except ImportError:
+                pass  # python-docx not available
+            
+            # Generate PDF
+            try:
+                from reportlab.lib.pagesizes import letter
+                from reportlab.platypus import SimpleDocTemplate, Paragraph
+                from reportlab.lib.styles import getSampleStyleSheet
+                
+                pdf_buffer = io.BytesIO()
+                doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
+                styles = getSampleStyleSheet()
+                story = []
+                
+                for chunk in (timeline.chunks or []):
+                    sid = chunk.speaker_id
+                    speaker = speakers.get(sid)
+                    label = speaker.label if speaker else (sid or 'Unknown')
+                    start = chunk.start or 0
+                    mins, secs = divmod(int(start), 60)
+                    timestamp = f"{mins:02d}:{secs:02d}"
+                    text = chunk.text or ''
+                    
+                    story.append(Paragraph(f"[{timestamp}] <b>{label}</b>: {text}", styles['Normal']))
+                
+                if story:
+                    doc.build(story)
+                    pdf_buffer.seek(0)
+                    files[f'{safe_name}.pdf'] = pdf_buffer.getvalue()
+            except ImportError:
+                pass  # reportlab not available
+        
+        # Create zip
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for file_path, content in files.items():
+                zf.writestr(f'{safe_name}_all/{file_path}', content)
+        
+        zip_buffer.seek(0)
+        
+        return send_file(
+            zip_buffer,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f'{safe_name}_all_formats.zip'
+        )
+    except Exception as e:
+        log_event('error', 'export_all_failed', jobId=job_id, error=str(e))
+        return jsonify({'error': 'Export failed', 'details': str(e)[:200]}), 500
+
+
 @app.route('/api/jobs/<job_id>/review/export-pdf', methods=['GET'])
 def api_export_review_pdf(job_id):
     """Export review timeline as PDF with timestamps."""
@@ -4190,6 +4376,49 @@ def _build_job_export_files(session_id: str, job_id: str, input_id: str = None) 
     files['timeline.json'] = timeline.to_json().encode('utf-8')
     
     return files, filename
+
+
+@app.route('/api/session/export', methods=['POST'])
+def api_export_session():
+    """Export all jobs in the current session as a single zip."""
+    session_id = g.session_id
+    
+    # Get all jobs for this session
+    jobs_dir = os.path.join(session_store.session_dir(session_id), 'jobs')
+    if not jobs_dir or not os.path.exists(jobs_dir):
+        return jsonify({'error': 'No jobs found'}), 404
+    
+    job_ids = [d for d in os.listdir(jobs_dir) if os.path.isdir(os.path.join(jobs_dir, d))]
+    if not job_ids:
+        return jsonify({'error': 'No jobs found'}), 404
+    
+    zip_buffer = io.BytesIO()
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for job_id in job_ids:
+            try:
+                files, filename = _build_job_export_files(session_id, job_id)
+                safe_name = secure_filename(Path(filename).stem) or 'project'
+                folder_name = f'{job_id}__{safe_name}'
+                
+                for file_path, content in files.items():
+                    zf.writestr(f'session_export_{timestamp}/{folder_name}/{file_path}', content)
+                    
+            except Exception as e:
+                error_content = f'Export failed: {str(e)[:200]}'
+                zf.writestr(f'session_export_{timestamp}/{job_id}__error/error.txt', error_content.encode('utf-8'))
+    
+    zip_buffer.seek(0)
+    
+    return send_file(
+        zip_buffer,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=f'session-export-{timestamp}.zip'
+    )
+
+_CSRF_PROTECTED_ENDPOINTS.add('api_export_session')
 
 
 @app.route('/api/jobs/bulk-export', methods=['POST'])
