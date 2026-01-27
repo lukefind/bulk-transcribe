@@ -150,15 +150,23 @@ class TimelineParser:
             data = json.loads(diarization_json)
         except json.JSONDecodeError:
             return
-        
-        segments = data.get('segments', [])
+
+        if isinstance(data, list):
+            segments = data
+        elif isinstance(data, dict):
+            segments = data.get('segments', [])
+        else:
+            segments = []
         
         # Also parse transcript JSON for better text if available
         transcript_segments = []
         if transcript_json:
             try:
                 t_data = json.loads(transcript_json)
-                transcript_segments = t_data.get('segments', [])
+                if isinstance(t_data, list):
+                    transcript_segments = t_data
+                elif isinstance(t_data, dict):
+                    transcript_segments = t_data.get('segments', [])
             except json.JSONDecodeError:
                 pass
         
