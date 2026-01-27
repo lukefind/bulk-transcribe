@@ -100,6 +100,34 @@ class ReviewTimeline:
         self.speakers.append(speaker)
         return speaker
 
+    def reorder_speakers_by_first_appearance(self) -> None:
+        """
+        Reorder speakers to match first appearance in the timeline.
+        This avoids confusing speaker lists like "Speaker 10" appearing first.
+        Colors are reassigned deterministically based on the new order.
+        """
+        first_seen: Dict[str, int] = {}
+        for idx, chunk in enumerate(self.chunks):
+            if chunk.speaker_id and chunk.speaker_id not in first_seen:
+                first_seen[chunk.speaker_id] = idx
+
+        def speaker_sort_key(s: Speaker) -> tuple[int, str]:
+            if s.id in first_seen:
+                return (0, f"{first_seen[s.id]:09d}")
+            # Fallback: sort by numeric speaker suffix if present
+            if s.id.startswith('SPEAKER_'):
+                try:
+                    return (1, f"{int(s.id.split('_')[1]):09d}")
+                except ValueError:
+                    pass
+            return (2, s.label.lower())
+
+        self.speakers.sort(key=speaker_sort_key)
+
+        # Reassign colors based on new order for deterministic UI display.
+        for idx, speaker in enumerate(self.speakers):
+            speaker.color = SPEAKER_COLORS[idx % len(SPEAKER_COLORS)]
+
 
 class TimelineParser:
     """Parses various transcript formats into a ReviewTimeline."""
@@ -139,7 +167,9 @@ class TimelineParser:
             self._parse_speaker_md(timeline, speaker_md)
         elif transcript_md:
             self._parse_transcript_md(timeline, transcript_md)
-        
+
+        # Normalize speaker ordering for a more intuitive review experience.
+        timeline.reorder_speakers_by_first_appearance()
         return timeline
     
     def _parse_diarization_json(self, timeline: ReviewTimeline, 
