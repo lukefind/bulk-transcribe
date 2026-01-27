@@ -880,16 +880,22 @@ def dispatch_to_remote_worker(
                 consecutive_errors = 0  # Reset on success
                 
                 # Update manifest with progress
+                worker_progress = status.get('progress', {})
+                progress_update = {
+                    'stage': status.get('stage', 'unknown'),
+                    'currentFileIndex': worker_progress.get('currentFileIndex', 0),
+                    'totalFiles': worker_progress.get('totalFiles', len(inputs)),
+                    'chunkIndex': worker_progress.get('chunkIndex', 0),
+                    'totalChunks': worker_progress.get('totalChunks', 0),
+                    'percent': worker_progress.get('percent', 0),
+                    'remoteStatus': status.get('status')
+                }
+                current_file = worker_progress.get('currentFile')
+                if current_file:
+                    progress_update['currentFile'] = current_file
+
                 update_manifest_callback(
-                    progress={
-                        'stage': status.get('stage', 'unknown'),
-                        'currentFileIndex': status.get('progress', {}).get('currentFileIndex', 0),
-                        'totalFiles': status.get('progress', {}).get('totalFiles', len(inputs)),
-                        'chunkIndex': status.get('progress', {}).get('chunkIndex', 0),
-                        'totalChunks': status.get('progress', {}).get('totalChunks', 0),
-                        'percent': status.get('progress', {}).get('percent', 0),
-                        'remoteStatus': status.get('status')
-                    },
+                    progress=progress_update,
                     worker={
                         'workerJobId': worker_job_id,
                         'url': config['url'],

@@ -557,7 +557,8 @@ def process_job(worker_job_id: str):
             update_job(worker_job_id, progress={
                 'currentFileIndex': i,
                 'totalFiles': len(inputs),
-                'percent': int((i / len(inputs)) * 10)  # Download is 10% of total
+                'percent': int((i / len(inputs)) * 10),  # Download is 10% of total
+                'currentFile': inp['filename']
             })
             
             local_path = download_input(job_tmp_dir, inp)
@@ -582,7 +583,8 @@ def process_job(worker_job_id: str):
             update_job(worker_job_id, stage='transcribing', progress={
                 'currentFileIndex': i,
                 'totalFiles': len(downloaded_files),
-                'percent': 10 + int((i / len(downloaded_files)) * 70)  # Transcription is 70%
+                'percent': 10 + int((i / len(downloaded_files)) * 70),  # Transcription is 70%
+                'currentFile': file_info['filename']
             })
             add_log(worker_job_id, 'info', 'transcribing_file', f'Transcribing {file_info["filename"]}')
             
