@@ -3890,63 +3890,80 @@ def api_export_review_docx(job_id):
     from docx.shared import Pt, Inches
     import io
     
-    session_id = g.session_id
-    manifest_path = session_store.job_manifest_path(session_id, job_id)
-    manifest = session_store.read_json(manifest_path)
+    # Safe access helper for dict or object
+    def val(obj, key, default=None):
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
     
-    if not manifest:
-        return jsonify({'error': 'Job not found'}), 404
-    
-    input_id = request.args.get('inputId')
-    inputs = manifest.get('inputs', [])
-    if not inputs:
-        return jsonify({'error': 'No inputs in job'}), 400
-    
-    target_input = inputs[0] if not input_id else next((i for i in inputs if i.get('uploadId') == input_id), inputs[0])
-    input_id = target_input.get('uploadId')
-    filename = target_input.get('originalFilename', target_input.get('filename', 'unknown'))
-    safe_name = secure_filename(Path(filename).stem) or 'transcript'
-    
-    # Build timeline with review state
-    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest)
-    
-    # Create DOCX document
-    doc = Document()
-    doc.add_heading(filename, 0)
-    
-    # Format time helper
-    def fmt_time(seconds):
-        m, s = divmod(int(seconds), 60)
-        h, m = divmod(m, 60)
-        if h > 0:
-            return f"{h}:{m:02d}:{s:02d}"
-        return f"{m}:{s:02d}"
-    
-    # Build speaker lookup
-    speakers = {s.get('id'): s for s in (timeline.speakers or [])}
-    
-    for chunk in (timeline.chunks or []):
-        speaker_id = chunk.get('speaker_id')
-        speaker = speakers.get(speaker_id, {})
-        speaker_label = speaker.get('label', speaker_id or 'Unknown')
-        timestamp = fmt_time(chunk.get('start', 0))
-        text = chunk.get('text', '')
+    try:
+        session_id = g.session_id
+        manifest_path = session_store.job_manifest_path(session_id, job_id)
+        manifest = session_store.read_json(manifest_path)
         
-        para = doc.add_paragraph()
-        run = para.add_run(f"[{timestamp}] {speaker_label}: ")
-        run.bold = True
-        para.add_run(text)
-    
-    # Write to buffer
-    buffer = io.BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    
-    return Response(
-        buffer.getvalue(),
-        mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        headers={'Content-Disposition': f'attachment; filename="{safe_name}_review.docx"'}
-    )
+        if not manifest:
+            return jsonify({'error': 'Job not found'}), 404
+        
+        input_id = request.args.get('inputId')
+        inputs = manifest.get('inputs', [])
+        if not inputs:
+            return jsonify({'error': 'No inputs in job'}), 400
+        
+        target_input = inputs[0] if not input_id else next((i for i in inputs if i.get('uploadId') == input_id), inputs[0])
+        input_id = target_input.get('uploadId')
+        filename = target_input.get('originalFilename', target_input.get('filename', 'unknown'))
+        safe_name = secure_filename(Path(filename).stem) or 'transcript'
+        
+        # Build timeline with review state
+        timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest)
+        
+        # Create DOCX document
+        doc = Document()
+        doc.add_heading(filename, 0)
+        
+        # Format time helper
+        def fmt_time(seconds):
+            m, s = divmod(int(seconds), 60)
+            h, m = divmod(m, 60)
+            if h > 0:
+                return f"{h}:{m:02d}:{s:02d}"
+            return f"{m}:{s:02d}"
+        
+        # Build speaker lookup (handles both dict and object)
+        speakers = {}
+        for s in (timeline.speakers or []):
+            sid = val(s, 'id')
+            if sid:
+                speakers[sid] = s
+        
+        for chunk in (timeline.chunks or []):
+            sid = val(chunk, 'speaker_id')
+            speaker = speakers.get(sid)
+            label = val(speaker, 'label', sid or 'Unknown') or sid or 'Unknown'
+            start = val(chunk, 'start', 0)
+            text = val(chunk, 'text', '') or ''
+            timestamp = fmt_time(start)
+            
+            para = doc.add_paragraph()
+            run = para.add_run(f"[{timestamp}] {label}: ")
+            run.bold = True
+            para.add_run(text)
+        
+        # Write to buffer
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        
+        return Response(
+            buffer.getvalue(),
+            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            headers={'Content-Disposition': f'attachment; filename="{safe_name}_review.docx"'}
+        )
+    except Exception as e:
+        log_event('error', 'review_export_failed', jobId=job_id, exportType='docx', error=str(e))
+        return jsonify({'error': 'Export failed', 'details': str(e)[:200]}), 500
 
 
 @app.route('/api/jobs/<job_id>/review/export-pdf', methods=['GET'])
@@ -3958,73 +3975,91 @@ def api_export_review_pdf(job_id):
     from reportlab.lib.units import inch
     import io
     
-    session_id = g.session_id
-    manifest_path = session_store.job_manifest_path(session_id, job_id)
-    manifest = session_store.read_json(manifest_path)
+    # Safe access helper for dict or object
+    def val(obj, key, default=None):
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
     
-    if not manifest:
-        return jsonify({'error': 'Job not found'}), 404
-    
-    input_id = request.args.get('inputId')
-    inputs = manifest.get('inputs', [])
-    if not inputs:
-        return jsonify({'error': 'No inputs in job'}), 400
-    
-    target_input = inputs[0] if not input_id else next((i for i in inputs if i.get('uploadId') == input_id), inputs[0])
-    input_id = target_input.get('uploadId')
-    filename = target_input.get('originalFilename', target_input.get('filename', 'unknown'))
-    safe_name = secure_filename(Path(filename).stem) or 'transcript'
-    
-    # Build timeline with review state
-    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest)
-    
-    # Format time helper
-    def fmt_time(seconds):
-        m, s = divmod(int(seconds), 60)
-        h, m = divmod(m, 60)
-        if h > 0:
-            return f"{h}:{m:02d}:{s:02d}"
-        return f"{m}:{s:02d}"
-    
-    # Build speaker lookup
-    speakers = {s.get('id'): s for s in (timeline.speakers or [])}
-    
-    # Create PDF
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)
-    
-    styles = getSampleStyleSheet()
-    title_style = styles['Heading1']
-    chunk_style = ParagraphStyle(
-        'ChunkStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=14,
-        spaceAfter=8
-    )
-    
-    story = []
-    story.append(Paragraph(filename, title_style))
-    story.append(Spacer(1, 0.25 * inch))
-    
-    for chunk in (timeline.chunks or []):
-        speaker_id = chunk.get('speaker_id')
-        speaker = speakers.get(speaker_id, {})
-        speaker_label = speaker.get('label', speaker_id or 'Unknown')
-        timestamp = fmt_time(chunk.get('start', 0))
-        text = chunk.get('text', '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    try:
+        session_id = g.session_id
+        manifest_path = session_store.job_manifest_path(session_id, job_id)
+        manifest = session_store.read_json(manifest_path)
         
-        line = f"<b>[{timestamp}] {speaker_label}:</b> {text}"
-        story.append(Paragraph(line, chunk_style))
-    
-    doc.build(story)
-    buffer.seek(0)
-    
-    return Response(
-        buffer.getvalue(),
-        mimetype='application/pdf',
-        headers={'Content-Disposition': f'attachment; filename="{safe_name}_review.pdf"'}
-    )
+        if not manifest:
+            return jsonify({'error': 'Job not found'}), 404
+        
+        input_id = request.args.get('inputId')
+        inputs = manifest.get('inputs', [])
+        if not inputs:
+            return jsonify({'error': 'No inputs in job'}), 400
+        
+        target_input = inputs[0] if not input_id else next((i for i in inputs if i.get('uploadId') == input_id), inputs[0])
+        input_id = target_input.get('uploadId')
+        filename = target_input.get('originalFilename', target_input.get('filename', 'unknown'))
+        safe_name = secure_filename(Path(filename).stem) or 'transcript'
+        
+        # Build timeline with review state
+        timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest)
+        
+        # Format time helper
+        def fmt_time(seconds):
+            m, s = divmod(int(seconds), 60)
+            h, m = divmod(m, 60)
+            if h > 0:
+                return f"{h}:{m:02d}:{s:02d}"
+            return f"{m}:{s:02d}"
+        
+        # Build speaker lookup (handles both dict and object)
+        speakers = {}
+        for s in (timeline.speakers or []):
+            sid = val(s, 'id')
+            if sid:
+                speakers[sid] = s
+        
+        # Create PDF
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)
+        
+        styles = getSampleStyleSheet()
+        title_style = styles['Heading1']
+        chunk_style = ParagraphStyle(
+            'ChunkStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            leading=14,
+            spaceAfter=8
+        )
+        
+        story = []
+        story.append(Paragraph(filename, title_style))
+        story.append(Spacer(1, 0.25 * inch))
+        
+        for chunk in (timeline.chunks or []):
+            sid = val(chunk, 'speaker_id')
+            speaker = speakers.get(sid)
+            label = val(speaker, 'label', sid or 'Unknown') or sid or 'Unknown'
+            start = val(chunk, 'start', 0)
+            text = val(chunk, 'text', '') or ''
+            text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            timestamp = fmt_time(start)
+            
+            line = f"<b>[{timestamp}] {label}:</b> {text}"
+            story.append(Paragraph(line, chunk_style))
+        
+        doc.build(story)
+        buffer.seek(0)
+        
+        return Response(
+            buffer.getvalue(),
+            mimetype='application/pdf',
+            headers={'Content-Disposition': f'attachment; filename="{safe_name}_review.pdf"'}
+        )
+    except Exception as e:
+        log_event('error', 'review_export_failed', jobId=job_id, exportType='pdf', error=str(e))
+        return jsonify({'error': 'Export failed', 'details': str(e)[:200]}), 500
 
 
 def _build_job_export_files(session_id: str, job_id: str, input_id: str = None) -> dict:
