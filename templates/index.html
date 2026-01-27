@@ -318,6 +318,87 @@
                     </div>
                     <p id="modeDescription" class="text-xs text-gray-500 mt-2">Metal GPU: ~5-6x realtime on Apple Silicon. Single worker only.</p>
                 </div>
+            </div>
+            
+            <!-- Speaker Diarization (top-level section) -->
+            <div class="glass rounded-2xl p-5 card">
+                <div class="flex items-center justify-between mb-4">
+                    <label class="flex items-center gap-2 text-sm font-semibold text-white">
+                        <svg class="w-4 h-4 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                        </svg>
+                        Speaker Diarization
+                    </label>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="diarizationEnabled" onchange="updateDiarizationOptions()" class="sr-only peer">
+                        <div class="w-9 h-5 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary-500"></div>
+                    </label>
+                </div>
+                <p class="text-xs text-gray-500 mb-3">Identifies who spoke when. Requires HuggingFace token (HF_TOKEN).</p>
+                <p id="diarizationReason" class="hidden text-xs text-amber-400 mb-3"></p>
+                
+                <div id="diarizationOptions" class="hidden space-y-4">
+                    <div class="grid grid-cols-3 gap-3">
+                        <div>
+                            <label class="text-xs text-gray-400 mb-1 block">Min speakers</label>
+                            <select id="minSpeakers" class="w-full px-2 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                                <option value="">Auto</option>
+                                <option value="1">1</option>
+                                <option value="2">2</option>
+                                <option value="3">3</option>
+                                <option value="4">4</option>
+                                <option value="5">5</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-400 mb-1 block">Max speakers</label>
+                            <select id="maxSpeakers" class="w-full px-2 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                                <option value="">Auto</option>
+                                <option value="2">2</option>
+                                <option value="3">3</option>
+                                <option value="4">4</option>
+                                <option value="5">5</option>
+                                <option value="6">6</option>
+                                <option value="8">8</option>
+                                <option value="10">10</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-400 mb-1 block">Fixed count</label>
+                            <select id="numSpeakers" class="w-full px-2 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                                <option value="">Auto</option>
+                                <option value="1">1</option>
+                                <option value="2">2</option>
+                                <option value="3">3</option>
+                                <option value="4">4</option>
+                                <option value="5">5</option>
+                                <option value="6">6</option>
+                            </select>
+                        </div>
+                    </div>
+                    <p class="text-xs text-gray-500">Tip: Set "Fixed count" if you know the exact number of speakers.</p>
+                    
+                    <div class="border-t border-gray-700/50 pt-3">
+                        <div class="flex items-center justify-between mb-2">
+                            <label class="text-xs text-gray-400">Max duration per segment</label>
+                            <select id="diarizationMaxDuration" class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs">
+                                <option value="180" selected>3 min</option>
+                                <option value="300">5 min</option>
+                                <option value="600">10 min</option>
+                                <option value="900">15 min</option>
+                                <option value="1200">20 min</option>
+                                <option value="1800">30 min</option>
+                            </select>
+                        </div>
+                        <div class="flex items-center gap-3 mt-2">
+                            <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                                <input type="checkbox" id="diarizationAutoSplit" class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500">
+                                Auto-split long audio
+                            </label>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-1" id="autoSplitHelp">Splits files longer than max duration into overlapping chunks.</p>
+                    </div>
+                </div>
                 
                 <!-- Advanced Options (collapsible) -->
                 <div class="mt-4 pt-4 border-t border-gray-700/30">
@@ -356,98 +437,6 @@
                             </select>
                         </div>
                         <p class="text-xs text-gray-500">Max segment length only applies when word timestamps are enabled.</p>
-                        
-                        <!-- Speaker Diarization -->
-                        <div class="mt-4 pt-4 border-t border-gray-700/30">
-                            <label class="flex items-center gap-3 cursor-pointer group mb-3">
-                                <input type="checkbox" id="diarizationEnabled" onchange="updateDiarizationOptions()"
-                                       class="w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0">
-                                <span class="text-sm text-gray-300 group-hover:text-white transition-colors">Enable speaker diarization</span>
-                            </label>
-                            <p class="text-xs text-gray-500 mb-3">Identifies who spoke when. Requires HuggingFace token (HF_TOKEN env var).</p>
-                            <p id="diarizationReason" class="hidden text-xs text-amber-400 mb-3"></p>
-                            
-                            <div id="diarizationOptions" class="hidden space-y-3 ml-7">
-                                <div class="flex items-center justify-between">
-                                    <label class="text-sm text-gray-300">Min speakers</label>
-                                    <select id="minSpeakers" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
-                                        <option value="">Auto-detect</option>
-                                        <option value="1">1</option>
-                                        <option value="2">2</option>
-                                        <option value="3">3</option>
-                                        <option value="4">4</option>
-                                        <option value="5">5</option>
-                                    </select>
-                                </div>
-                                <div class="flex items-center justify-between">
-                                    <label class="text-sm text-gray-300">Max speakers</label>
-                                    <select id="maxSpeakers" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
-                                        <option value="">Auto-detect</option>
-                                        <option value="2">2</option>
-                                        <option value="3">3</option>
-                                        <option value="4">4</option>
-                                        <option value="5">5</option>
-                                        <option value="6">6</option>
-                                        <option value="8">8</option>
-                                        <option value="10">10</option>
-                                    </select>
-                                </div>
-                                <div class="flex items-center justify-between">
-                                    <label class="text-sm text-gray-300">Fixed speakers</label>
-                                    <select id="numSpeakers" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
-                                        <option value="">Auto-detect</option>
-                                        <option value="1">1</option>
-                                        <option value="2">2</option>
-                                        <option value="3">3</option>
-                                        <option value="4">4</option>
-                                        <option value="5">5</option>
-                                        <option value="6">6</option>
-                                    </select>
-                                </div>
-                                <p class="text-xs text-gray-500">If you know the exact number of speakers, set "Fixed speakers" for best results.</p>
-                                
-                                <!-- Max diarization length -->
-                                <div class="border-t border-gray-700/50 pt-3 mt-3">
-                                    <div class="flex items-center justify-between mb-2">
-                                        <label class="text-xs text-gray-400">Max diarization length</label>
-                                        <select id="diarizationMaxDuration" class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs">
-                                            <option value="180" selected>3 min</option>
-                                            <option value="300">5 min</option>
-                                            <option value="600">10 min</option>
-                                            <option value="900">15 min</option>
-                                            <option value="1200">20 min</option>
-                                            <option value="1800">30 min</option>
-                                        </select>
-                                    </div>
-                                    <p class="text-xs text-gray-500 mb-3">Files longer than this require auto-split.</p>
-                                    
-                                    <div class="flex items-center justify-between mb-2">
-                                        <label class="text-sm text-gray-300 flex items-center gap-2">
-                                            <input type="checkbox" id="diarizationAutoSplit" class="rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500">
-                                            Auto-split long audio
-                                        </label>
-                                    </div>
-                                    <p class="text-xs text-gray-500 mb-2" id="autoSplitHelp">Process long files by splitting into chunks. Recommended for CPU.</p>
-                                    
-                                    <!-- Policy preview (auto-computed) -->
-                                    <div id="policyPreview" class="mt-3 p-2 bg-surface-800/50 rounded text-xs text-gray-400 hidden">
-                                        <div class="flex items-center justify-between mb-1">
-                                            <span>Chunk size:</span>
-                                            <span id="policyChunkSeconds" class="text-gray-300">150s</span>
-                                        </div>
-                                        <div class="flex items-center justify-between mb-1">
-                                            <span>Overlap:</span>
-                                            <span id="policyOverlapSeconds" class="text-gray-300">5s</span>
-                                        </div>
-                                        <div id="policyEstimatedChunks" class="flex items-center justify-between hidden">
-                                            <span>Est. chunks:</span>
-                                            <span id="policyChunkCount" class="text-gray-300">-</span>
-                                        </div>
-                                        <div id="policyWarnings" class="mt-2 hidden"></div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -1192,9 +1181,24 @@
             const workersSection = document.getElementById('workersSection');
             const workersSelect = document.getElementById('workers');
             const modeDescription = document.getElementById('modeDescription');
-            const wordTimestamps = document.getElementById('wordTimestamps').checked;
+            const wordTimestamps = document.getElementById('wordTimestamps')?.checked || false;
             
-            if (mode === 'metal' && !wordTimestamps) {
+            // Reset description styling
+            modeDescription.classList.remove('text-green-400');
+            modeDescription.classList.add('text-gray-500');
+            
+            if (mode === 'remote') {
+                // Remote worker mode - hide parallel workers section
+                workersSection.classList.add('opacity-50', 'pointer-events-none');
+                workersSelect.disabled = true;
+                workersSelect.value = '1';
+                const remoteWorker = runtimeEnv?.remoteWorker;
+                const gpuLabel = remoteWorker?.workerCapabilities?.gpu ? 'GPU' : 'CPU';
+                const latency = remoteWorker?.latencyMs ? ` (${remoteWorker.latencyMs}ms)` : '';
+                modeDescription.textContent = `Remote ${gpuLabel} worker${latency}. Fast cloud transcription.`;
+                modeDescription.classList.remove('text-gray-500');
+                modeDescription.classList.add('text-green-400');
+            } else if (mode === 'metal' && !wordTimestamps) {
                 workersSection.classList.add('opacity-50', 'pointer-events-none');
                 workersSelect.disabled = true;
                 workersSelect.value = '1';
@@ -1203,6 +1207,11 @@
                 workersSection.classList.remove('opacity-50', 'pointer-events-none');
                 workersSelect.disabled = false;
                 modeDescription.textContent = 'Word timestamps force CPU mode. Use 2 workers for parallel processing.';
+            } else if (mode === 'cuda') {
+                workersSection.classList.add('opacity-50', 'pointer-events-none');
+                workersSelect.disabled = true;
+                workersSelect.value = '1';
+                modeDescription.textContent = 'CUDA GPU: Fast NVIDIA GPU transcription.';
             } else {
                 workersSection.classList.remove('opacity-50', 'pointer-events-none');
                 workersSelect.disabled = false;
@@ -1278,29 +1287,60 @@
         
         function updateBackendUI() {
             const backendSelect = document.getElementById('processingMode');
+            const modeDescription = document.getElementById('modeDescription');
             if (!backendSelect) return;
             
             // Clear and rebuild options based on supported backends
             backendSelect.innerHTML = '';
             
             const backendLabels = {
-                'cpu': 'CPU',
-                'metal': 'Metal (Apple GPU)',
-                'cuda': 'CUDA (NVIDIA GPU)'
+                'cpu': 'CPU (Local)',
+                'metal': 'Metal GPU (Local)',
+                'cuda': 'CUDA GPU (Local)'
             };
             
+            // Check if remote worker is connected
+            const remoteWorker = runtimeEnv?.remoteWorker;
+            const remoteConnected = remoteWorker?.connected;
+            const remoteMode = remoteWorker?.mode;
+            
+            // If remote worker is connected and mode is required/optional, show it prominently
+            if (remoteConnected && (remoteMode === 'required' || remoteMode === 'optional')) {
+                const remoteOption = document.createElement('option');
+                remoteOption.value = 'remote';
+                const gpuLabel = remoteWorker.workerCapabilities?.gpu ? 'GPU' : 'CPU';
+                remoteOption.textContent = `Remote ${gpuLabel} Worker (Recommended)`;
+                backendSelect.appendChild(remoteOption);
+                
+                // Update description for remote
+                if (modeDescription) {
+                    const latency = remoteWorker.latencyMs ? `${remoteWorker.latencyMs}ms latency` : '';
+                    modeDescription.textContent = `Remote worker connected. ${latency}. Fast GPU transcription.`;
+                    modeDescription.classList.remove('text-gray-500');
+                    modeDescription.classList.add('text-green-400');
+                }
+            }
+            
+            // Add local backends
             supportedBackends.forEach(backend => {
                 const option = document.createElement('option');
                 option.value = backend;
                 option.textContent = backendLabels[backend] || backend;
-                if (backend === recommendedBackend) {
+                // Only mark as recommended if no remote worker
+                if (backend === recommendedBackend && !remoteConnected) {
                     option.textContent += ' (Recommended)';
                 }
                 backendSelect.appendChild(option);
             });
             
-            // Select recommended backend
-            backendSelect.value = recommendedBackend;
+            // Select remote if connected and mode is required, otherwise recommended local
+            if (remoteConnected && remoteMode === 'required') {
+                backendSelect.value = 'remote';
+            } else if (remoteConnected && remoteMode === 'optional') {
+                backendSelect.value = 'remote';  // Default to remote when available
+            } else {
+                backendSelect.value = recommendedBackend;
+            }
             
             // Update platform info display
             const platformInfo = document.getElementById('platformInfo');
