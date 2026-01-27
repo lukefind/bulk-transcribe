@@ -176,6 +176,10 @@ class ReviewTimeline:
         # Sort by (start, end) for deterministic processing
         self.chunks.sort(key=lambda c: (c.start, c.end))
         
+        # Rolling window parameters
+        WINDOW_TIME_SECONDS = 30.0
+        WINDOW_MAX_CHUNKS = 12
+        
         kept = []
         removed = 0
         
@@ -191,36 +195,55 @@ class ReviewTimeline:
                 kept.append(chunk)
                 continue
             
-            prev = kept[-1]
-            prev_norm = normalize_text(prev.text)
+            # Build rolling window of recent candidates
+            # Look at last N chunks where candidate.start >= chunk.start - WINDOW_TIME_SECONDS
+            window_start_time = chunk.start - WINDOW_TIME_SECONDS
+            recent_candidates = []
+            for i in range(len(kept) - 1, max(-1, len(kept) - 1 - WINDOW_MAX_CHUNKS), -1):
+                candidate = kept[i]
+                if candidate.start >= window_start_time:
+                    recent_candidates.append((i, candidate))
+                else:
+                    break  # Since kept is sorted by start, earlier chunks won't qualify
             
-            # Calculate timing metrics
-            start_delta = abs(chunk.start - prev.start)
-            overlap_ratio = calc_overlap_ratio(prev.start, prev.end, chunk.start, chunk.end)
+            # Check against each candidate in window (most recent first)
+            found_duplicate = False
+            duplicate_idx = -1
             
-            # Check for subset relationship (either direction)
-            subset_relation = is_subset_text(cur_norm, prev_norm) or is_subset_text(prev_norm, cur_norm)
-            
-            # Exact match is always a duplicate if timing overlaps
-            exact_match = cur_norm == prev_norm
-            
-            # Determine if likely duplicate
-            likely_duplicate = False
-            if exact_match and (start_delta <= 1.0 or overlap_ratio >= 0.5):
-                likely_duplicate = True
-            elif subset_relation and (start_delta <= 1.0 or overlap_ratio >= 0.6):
-                likely_duplicate = True
-            
-            if likely_duplicate:
-                # Keep the better chunk
-                prev_score = chunk_score(prev)
-                cur_score = chunk_score(chunk)
+            for idx, candidate in recent_candidates:
+                cand_norm = normalize_text(candidate.text)
                 
-                if cur_score > prev_score:
-                    kept[-1] = chunk
+                # Calculate timing metrics
+                start_delta = abs(chunk.start - candidate.start)
+                overlap_ratio = calc_overlap_ratio(candidate.start, candidate.end, chunk.start, chunk.end)
                 
-                removed += 1
-            else:
+                # Check for subset relationship (either direction)
+                subset_relation = is_subset_text(cur_norm, cand_norm) or is_subset_text(cand_norm, cur_norm)
+                
+                # Exact match is always a duplicate if timing overlaps
+                exact_match = cur_norm == cand_norm
+                
+                # Determine if likely duplicate
+                likely_duplicate = False
+                if exact_match and (start_delta <= 1.0 or overlap_ratio >= 0.5):
+                    likely_duplicate = True
+                elif subset_relation and (start_delta <= 1.0 or overlap_ratio >= 0.6):
+                    likely_duplicate = True
+                
+                if likely_duplicate:
+                    found_duplicate = True
+                    duplicate_idx = idx
+                    # Keep the better chunk
+                    cand_score = chunk_score(candidate)
+                    cur_score = chunk_score(chunk)
+                    
+                    if cur_score > cand_score:
+                        kept[idx] = chunk
+                    
+                    removed += 1
+                    break  # Stop scanning after first duplicate found
+            
+            if not found_duplicate:
                 kept.append(chunk)
         
         self.chunks = kept
