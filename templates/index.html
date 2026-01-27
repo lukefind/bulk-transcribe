@@ -5342,9 +5342,9 @@
                 
                 reviewTimeline = await response.json();
                 
-                // Store raw and merged chunk versions for toggle
-                reviewTimelineRaw = reviewTimeline.chunks_raw || reviewTimeline.chunks;
-                reviewTimelineMerged = reviewTimeline.chunks_merged || reviewTimeline.chunks;
+                // Store raw and merged chunk versions for toggle (deep copy to avoid shared references)
+                reviewTimelineRaw = JSON.parse(JSON.stringify(reviewTimeline.chunks_raw || reviewTimeline.chunks));
+                reviewTimelineMerged = JSON.parse(JSON.stringify(reviewTimeline.chunks_merged || reviewTimeline.chunks));
                 
                 // Also load review state
                 const stateResp = await fetch(`/api/jobs/${reviewJobData.jobId}/review/state`);
@@ -5395,12 +5395,27 @@
             const source = reviewChunkViewMode === 'raw' 
                 ? (reviewTimelineRaw || reviewTimeline.chunks)
                 : (reviewTimelineMerged || reviewTimeline.chunks);
-            reviewTimeline.chunks = source;
+            // Deep copy to avoid mutation issues between views
+            reviewTimeline.chunks = JSON.parse(JSON.stringify(source));
         }
         
         function toggleChunkViewMode() {
             const checkbox = document.getElementById('mergedViewCheckbox');
             reviewChunkViewMode = checkbox?.checked ? 'merged' : 'raw';
+            
+            // Check if raw and merged are actually different
+            const rawCount = reviewTimelineRaw?.length || 0;
+            const mergedCount = reviewTimelineMerged?.length || 0;
+            console.log(`Toggle to ${reviewChunkViewMode}: raw=${rawCount} chunks, merged=${mergedCount} chunks`);
+            
+            if (rawCount === mergedCount && rawCount > 0) {
+                // Check if content is actually different
+                const rawFirst = reviewTimelineRaw[0]?.text?.substring(0, 50);
+                const mergedFirst = reviewTimelineMerged[0]?.text?.substring(0, 50);
+                if (rawFirst === mergedFirst) {
+                    console.log('Note: Raw and merged views appear identical for this transcript');
+                }
+            }
             
             // Apply the view mode
             applyChunkViewMode();
