@@ -39,38 +39,22 @@ SUPPORTED_WORKER_MODELS = [
     'medium', 'medium.en', 'large', 'large-v1', 'large-v2', 'large-v3'
 ]
 
-# Map UI/API model names to actual Whisper model names
-# "turbo" is an OpenAI API label, not a local Whisper model
-MODEL_MAPPING = {
-    'turbo': 'medium',      # turbo doesn't exist locally, use medium as fast alternative
-    'large': 'large-v3',    # "large" should use latest large variant
-}
-
-
-def map_model_for_worker(model: str) -> str:
+def validate_model_for_worker(model: str) -> None:
     """
-    Map UI/API model name to actual Whisper model name for worker.
+    Validate that model is supported by the worker.
+    No aliasing or mapping - model must be exact.
     
     Args:
-        model: Model name from UI/API (e.g., 'turbo', 'large')
-    
-    Returns:
-        Actual Whisper model name (e.g., 'medium', 'large-v3')
+        model: Model name (must be exact, e.g., 'large-v3', not 'turbo')
     
     Raises:
         ValueError: If model is not supported
     """
-    # Apply mapping if exists
-    mapped = MODEL_MAPPING.get(model, model)
-    
-    # Validate the mapped model is supported
-    if mapped not in SUPPORTED_WORKER_MODELS:
+    if model not in SUPPORTED_WORKER_MODELS:
         raise ValueError(
-            f"Model '{model}' (mapped to '{mapped}') is not supported by worker. "
+            f"Model '{model}' is not supported by worker. "
             f"Supported models: {', '.join(SUPPORTED_WORKER_MODELS)}"
         )
-    
-    return mapped
 
 
 def _classify_poll_http_error(status_code: int) -> Optional[Dict[str, str]]:
@@ -723,14 +707,13 @@ def dispatch_to_remote_worker(
     callback_url = f"{controller_base_url}/api/jobs/{job_id}/worker/complete"
     outputs_upload_url = f"{controller_base_url}/api/jobs/{job_id}/worker/outputs"
     
-    # Map model name for worker (turbo -> medium, large -> large-v3, etc.)
-    # This is critical: UI may show "turbo" but worker doesn't support it
-    original_model = options.get('model', 'large-v3')
+    # Validate model is supported (no aliasing - controller should have validated)
+    model = options.get('model', 'large-v3')
     try:
-        mapped_model = map_model_for_worker(original_model)
+        validate_model_for_worker(model)
     except ValueError as e:
         log_event('error', 'remote_model_unsupported',
-                  jobId=job_id, model=original_model, error=str(e))
+                  jobId=job_id, model=model, error=str(e))
         update_manifest_callback(
             status='failed',
             finishedAt=datetime.now(timezone.utc).isoformat(),
@@ -738,11 +721,9 @@ def dispatch_to_remote_worker(
         )
         return False
     
-    # Create worker options with mapped model
+    # Create worker options (exact model, no mapping)
     worker_options = dict(options)
-    worker_options['model'] = mapped_model
-    if original_model != mapped_model:
-        worker_options['originalModel'] = original_model  # For debugging
+    worker_options['model'] = model
     
     # Optimize diarization chunking for GPU (larger chunks = less overhead)
     # GPU workers can handle larger chunks efficiently
@@ -770,7 +751,7 @@ def dispatch_to_remote_worker(
     log_event('info', 'remote_dispatch_started',
               jobId=job_id, sessionHash=session_hash,
               workerUrl=config['url'][:50],
-              model=mapped_model, originalModel=original_model if original_model != mapped_model else None)
+              model=model)
     
     try:
         # Create job on worker
@@ -817,8 +798,7 @@ def dispatch_to_remote_worker(
         log_event('info', 'remote_job_created',
                   jobId=job_id, 
                   workerJobId=worker_job_id,
-                  mappedModel=mapped_model,
-                  originalModel=original_model if original_model != mapped_model else None,
+                  model=model,
                   uploadMode=config['uploadMode'],
                   outputsUploadUrl=outputs_upload_url,
                   completeUrl=callback_url,

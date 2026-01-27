@@ -163,7 +163,7 @@ class AudioTranscriber:
 
 def get_available_models():
     """Get list of available Whisper models."""
-    return ['tiny', 'base', 'small', 'medium', 'large', 'turbo']
+    return ['tiny', 'base', 'small', 'medium', 'large', 'large-v3']
 
 
 def main():

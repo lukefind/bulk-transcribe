@@ -161,21 +161,20 @@ Expected:
 }
 ```
 
-## Model Mapping Verification
+## Model Validation
 
-### 8. Verify "turbo" Maps to "medium"
+### 8. Verify Model is Sent Exactly
 
-Start a job with model "turbo" and check controller logs:
+Start a job with model "large-v3" and check controller logs:
 
 ```json
 {
   "event": "remote_job_created",
-  "mappedModel": "medium",
-  "originalModel": "turbo"
+  "model": "large-v3"
 }
 ```
 
-The worker should never receive "turbo" - it should receive "medium".
+The exact model name should be sent to the worker with no aliasing or mapping.
 
 ## Troubleshooting
 

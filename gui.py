@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 SUPPORTED_FORMATS = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.webm', '.mp4', '.mov', '.avi']
-MODELS = ['tiny', 'base', 'small', 'medium', 'large', 'turbo']
+MODELS = ['tiny', 'base', 'small', 'medium', 'large', 'large-v3']
 LANGUAGES = [
     ('', 'Auto-detect'),
     ('en', 'English'),

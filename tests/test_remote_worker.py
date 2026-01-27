@@ -386,3 +386,31 @@ class TestRemoteWorkerPollingErrors:
 
         err = _classify_poll_http_error(500)
         assert err is None
+
+
+class TestModelValidation:
+    """Tests for model validation - no turbo, no aliasing."""
+
+    def test_turbo_rejected_by_worker_validation(self):
+        from remote_worker import validate_model_for_worker
+        import pytest
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_model_for_worker('turbo')
+        assert 'turbo' in str(exc_info.value)
+        assert 'not supported' in str(exc_info.value).lower()
+
+    def test_valid_models_accepted(self):
+        from remote_worker import validate_model_for_worker
+
+        valid_models = ['tiny', 'base', 'small', 'medium', 'large-v3']
+        for model in valid_models:
+            validate_model_for_worker(model)  # Should not raise
+
+    def test_unknown_model_rejected(self):
+        from remote_worker import validate_model_for_worker
+        import pytest
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_model_for_worker('nonexistent-model')
+        assert 'nonexistent-model' in str(exc_info.value)

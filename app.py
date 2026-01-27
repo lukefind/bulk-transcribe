@@ -77,14 +77,14 @@ def request_entity_too_large(error):
     }), 413
 
 SUPPORTED_FORMATS = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.webm', '.mp4', '.mov', '.avi']
-AVAILABLE_MODELS = ['tiny', 'base', 'small', 'medium', 'large', 'turbo']
+AVAILABLE_MODELS = ['tiny', 'base', 'small', 'medium', 'large', 'large-v3']
 MODEL_INFO = {
     'tiny': {'size': '~75 MB', 'ram': '~1 GB', 'speed': 'Fastest', 'accuracy': 'Basic'},
     'base': {'size': '~145 MB', 'ram': '~1 GB', 'speed': 'Fast', 'accuracy': 'Good'},
     'small': {'size': '~465 MB', 'ram': '~2 GB', 'speed': 'Medium', 'accuracy': 'Better'},
     'medium': {'size': '~1.5 GB', 'ram': '~5 GB', 'speed': 'Slow', 'accuracy': 'High'},
     'large': {'size': '~3 GB', 'ram': '~10 GB', 'speed': 'Slowest', 'accuracy': 'Best'},
-    'turbo': {'size': '~800 MB', 'ram': '~6 GB', 'speed': 'Fast', 'accuracy': 'Good'},
+    'large-v3': {'size': '~3 GB', 'ram': '~10 GB', 'speed': 'Slowest', 'accuracy': 'Best'},
 }
 COMMON_LANGUAGES = [
     ('', 'Auto-detect'),
@@ -294,7 +294,7 @@ MODEL_FILENAMES = {
     'small': 'small.pt',
     'medium': 'medium.pt',
     'large': 'large-v3.pt',
-    'turbo': 'large-v3-turbo.pt',
+    'large-v3': 'large-v3.pt',
 }
 
 
@@ -394,7 +394,7 @@ def transcribe_file(audio_file: Path, model: str, language: str, output_folder: 
                 elapsed_str = f"{int(elapsed // 60)}m {int(elapsed % 60)}s" if elapsed >= 60 else f"{int(elapsed)}s"
                 
                 # Estimate progress based on audio duration
-                # CPU on Apple Silicon with turbo: ~0.5-1x realtime
+                # CPU on Apple Silicon: ~0.5-1x realtime
                 # With parallel workers, each file is slower due to CPU contention
                 if audio_duration > 0:
                     estimated_total_time = audio_duration * 1.5  # Assume 0.67x realtime on CPU
@@ -1000,18 +1000,18 @@ def get_recommended_model():
         if check_model_available(prefs['default_model']):
             return prefs['default_model']
     
-    # Otherwise, prefer turbo if downloaded (best speed/quality balance)
-    if check_model_available('turbo'):
-        return 'turbo'
+    # Otherwise, prefer large-v3 if downloaded (best quality)
+    if check_model_available('large-v3'):
+        return 'large-v3'
     
     # Fallback to any downloaded model
-    priority_order = ['turbo', 'base', 'small', 'medium', 'large', 'tiny']
+    priority_order = ['large-v3', 'large', 'medium', 'small', 'base', 'tiny']
     for model in priority_order:
         if check_model_available(model):
             return model
     
-    # Fallback to turbo if nothing downloaded (will download on first use)
-    return 'turbo'
+    # Fallback to large-v3 if nothing downloaded (will download on first use)
+    return 'large-v3'
 
 
 @app.route('/models')
@@ -1102,7 +1102,7 @@ def download_model():
             'small': '465 MB',
             'medium': '1.5 GB',
             'large': '3 GB',
-            'turbo': '800 MB'
+            'large-v3': '3 GB'
         }
         size_str = model_sizes.get(model_name, 'Unknown size')
         
@@ -1414,6 +1414,15 @@ def api_create_job():
     
     if not upload_ids:
         return jsonify({'error': 'No upload IDs provided'}), 400
+    
+    # Validate model is in allowed list (no aliasing, no "turbo")
+    ALLOWED_MODELS = {'tiny', 'base', 'small', 'medium', 'large', 'large-v3'}
+    requested_model = options.get('model', 'large-v3')
+    if requested_model not in ALLOWED_MODELS:
+        return jsonify({
+            'error': f"Unsupported model '{requested_model}'. Allowed models: {', '.join(sorted(ALLOWED_MODELS))}",
+            'code': 'UNSUPPORTED_MODEL'
+        }), 400
     
     # Validate and determine backend
     env = compute_backend.get_cached_environment()

@@ -14,7 +14,7 @@ A native macOS app for batch transcribing audio files to markdown using OpenAI W
 - **Skip Existing Files** - Resume interrupted jobs without re-transcribing
 - **Multiple Formats** - MP3, WAV, M4A, FLAC, OGG, WebM, MP4, MOV, AVI
 - **Model Management** - Download, delete, and switch between Whisper models
-- **Smart Defaults** - Turbo model with Metal GPU for best speed/quality
+- **Smart Defaults** - Large-v3 model with Metal GPU for best quality
 - **Language Support** - Auto-detect or specify from 12+ languages
 - **Flexible Output** - Segmented, full text, or both with optional timestamps
 - **Real-time Progress** - Per-file progress bar, ETA, and elapsed time
@@ -89,7 +89,7 @@ By default, files that already have a `_transcription.md` output are skipped. Th
 | small | Balanced | Better | ~2 GB | General use |
 | medium | Slow | High | ~5 GB | Better quality |
 | large | Slowest | Best | ~10 GB | Best quality |
-| **turbo** | **Fast** | **Good** | **~6 GB** | **Recommended** |
+| **large-v3** | **Slowest** | **Best** | **~10 GB** | **Recommended** |
 
 ## Output Options
 
@@ -124,8 +124,8 @@ Each transcription produces a JSON file with segment-level data. Segments includ
 
 - **macOS** 10.15 (Catalina) or later
 - **Apple Silicon** (M1/M2/M3) recommended for Metal GPU acceleration
-- **RAM** 8GB minimum, 16GB+ recommended for turbo model
-- **Storage** ~500MB for app, plus model cache (~6GB for turbo model)
+- **RAM** 8GB minimum, 16GB+ recommended for large-v3 model
+- **Storage** ~500MB for app, plus model cache (~3GB for large-v3 model)
 
 ## Server Deployment
 

@@ -37,9 +37,9 @@ Select where to save the transcription markdown files. Each audio file will gene
 | **small** | Balanced | Better | ~2 GB | General use |
 | **medium** | Slow | High | ~5 GB | Better quality |
 | **large** | Slowest | Best | ~10 GB | Best quality |
-| **turbo** | Fast | Good | ~6 GB | **Recommended** |
+| **large-v3** | Slowest | Best | ~10 GB | **Recommended** |
 
-**Recommendation:** The `turbo` model offers the best balance of speed and quality for most use cases. It's selected by default and marked as "recommended" in the UI.
+**Recommendation:** The `large-v3` model offers the best accuracy for most use cases. It's selected by default and marked as "recommended" in the UI.
 
 ### Model Management
 
@@ -128,7 +128,7 @@ Each transcription is saved as a markdown file with the following structure:
 # Transcription: audio_file.mp3
 
 **Source File:** `audio_file.mp3`
-**Model Used:** `turbo`
+**Model Used:** `large-v3`
 **Detected Language:** `en`
 
 ---
@@ -152,7 +152,7 @@ Each transcription is saved as a markdown file with the following structure:
 - Mono or stereo both work well
 
 ### Model Selection
-- **For most use cases**: `turbo` (recommended - best speed/quality balance)
+- **For most use cases**: `large-v3` (recommended - best accuracy)
 - For quick drafts: `tiny` or `base`
 - For important content: `small` or `medium`
 - For critical accuracy: `large`
@@ -199,5 +199,5 @@ Each transcription is saved as a markdown file with the following structure:
 
 - **macOS**: 10.15 (Catalina) or later
 - **Processor**: Apple Silicon (M1/M2/M3) recommended for Metal GPU acceleration
-- **RAM**: 8GB minimum, 16GB+ recommended for turbo model
-- **Storage**: ~500MB for app, plus model cache (~6GB for turbo model)
+- **RAM**: 8GB minimum, 16GB+ recommended for large-v3 model
+- **Storage**: ~500MB for app, plus model cache (~3GB for large-v3 model)

@@ -869,7 +869,7 @@
                 option.value = model.name;
                 let label = model.name;
                 if (model.name === userDefaultModel) label += ' (your default)';
-                else if (model.name === 'turbo') label += ' (recommended - fast + good)';
+                else if (model.name === 'large-v3') label += ' (recommended - best quality)';
                 else if (model.name === 'tiny') label += ' (fastest)';
                 else if (model.name === 'base') label += ' (fast)';
                 else if (model.name === 'small') label += ' (balanced)';
@@ -907,7 +907,7 @@
                 info.innerHTML = `
                     <div class="flex items-center gap-2 mb-1">
                         <span class="font-semibold text-white">${model.name}</span>
-                        ${model.name === 'turbo' ? '<span class="text-xs bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-500/30">Recommended</span>' : ''}
+                        ${model.name === 'large-v3' ? '<span class="text-xs bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-500/30">Recommended</span>' : ''}
                         ${model.downloaded 
                             ? '<span class="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full border border-green-500/30">Downloaded</span>' 
                             : '<span class="text-xs bg-gray-600/30 text-gray-400 px-2 py-0.5 rounded-full border border-gray-600/30">Not Downloaded</span>'}

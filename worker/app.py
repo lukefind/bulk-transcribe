@@ -542,8 +542,7 @@ def process_job(worker_job_id: str):
         if requested_model not in supported_models:
             raise ValueError(
                 f"Unsupported model '{requested_model}'. "
-                f"Supported: {', '.join(supported_models)}. "
-                f"Note: 'turbo' is not a local Whisper model."
+                f"Supported: {', '.join(supported_models)}."
             )
         
         # Step 1: Download input files

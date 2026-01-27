@@ -372,7 +372,7 @@ Whisper models are downloaded on first use. For large models:
 docker compose restart
 
 # Or pre-download inside container
-docker compose exec app python -c "import whisper; whisper.load_model('turbo')"
+docker compose exec app python -c "import whisper; whisper.load_model('large-v3')"
 ```
 
 ## Resource Requirements
@@ -384,7 +384,7 @@ docker compose exec app python -c "import whisper; whisper.load_model('turbo')"
 | small | ~2 GB | ~465 MB | ~4x realtime | ~15x realtime |
 | medium | ~5 GB | ~1.5 GB | ~2x realtime | ~8x realtime |
 | large | ~10 GB | ~3 GB | ~1x realtime | ~5x realtime |
-| turbo | ~6 GB | ~800 MB | ~5x realtime | ~20x realtime |
+| large-v3 | ~10 GB | ~3 GB | ~1x realtime | ~5x realtime |
 
 *Speed estimates vary by hardware. GPU speeds assume NVIDIA RTX 3080 or similar.*
 
