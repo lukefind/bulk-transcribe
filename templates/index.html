@@ -1080,10 +1080,19 @@
                     <input type="text" id="reviewSearchInput" placeholder="Search transcript..." 
                            class="flex-1 px-3 py-2 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm"
                            oninput="debounceSearch()">
+                    <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer whitespace-nowrap" title="Merged view reduces noise by combining adjacent same-speaker chunks">
+                        <input type="checkbox" id="mergedViewCheckbox" checked class="rounded bg-surface-700 border-gray-600 text-primary-500" onchange="toggleChunkViewMode()">
+                        Merged
+                    </label>
                     <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer whitespace-nowrap">
                         <input type="checkbox" id="autoScrollCheckbox" checked class="rounded bg-surface-700 border-gray-600 text-primary-500">
                         Auto-scroll
                     </label>
+                    <button onclick="showReviewInfoModal()" class="text-gray-400 hover:text-white transition-colors" title="Help">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                    </button>
                 </div>
                 
                 <!-- Timeline Content -->
@@ -4216,6 +4225,9 @@
         let reviewAudioElement = null;
         let reviewJobData = null;
         let reviewTimeline = null;  // { speakers: [], chunks: [] }
+        let reviewTimelineRaw = null;  // Original raw chunks (pre-merge)
+        let reviewTimelineMerged = null;  // Merged chunks (post-merge)
+        let reviewChunkViewMode = 'merged';  // 'merged' or 'raw'
         let reviewState = { speakerLabelMap: {}, speakerColorMap: {}, chunkEdits: {}, uiPrefs: {} };
         let reviewSelectedInputId = null;
         let reviewSelectedChunkIndex = -1;
@@ -4682,6 +4694,10 @@
                 
                 reviewTimeline = await response.json();
                 
+                // Store raw and merged chunk versions for toggle
+                reviewTimelineRaw = reviewTimeline.chunks_raw || reviewTimeline.chunks;
+                reviewTimelineMerged = reviewTimeline.chunks_merged || reviewTimeline.chunks;
+                
                 // Also load review state
                 const stateResp = await fetch(`/api/jobs/${reviewJobData.jobId}/review/state`);
                 if (stateResp.ok) {
@@ -4693,6 +4709,11 @@
                         uiPrefs: loaded.uiPrefs || {},
                         manualSpeakers: loaded.manualSpeakers || []
                     };
+                    
+                    // Restore chunk view mode preference
+                    if (reviewState.uiPrefs?.chunkView) {
+                        reviewChunkViewMode = reviewState.uiPrefs.chunkView;
+                    }
                     
                     // Merge manual speakers into timeline if missing
                     if (reviewState.manualSpeakers?.length > 0 && reviewTimeline) {
@@ -4706,12 +4727,102 @@
                     }
                 }
                 
+                // Apply view mode to chunks
+                applyChunkViewMode();
+                
+                // Update toggle checkbox to match restored state
+                const mergedCheckbox = document.getElementById('mergedViewCheckbox');
+                if (mergedCheckbox) mergedCheckbox.checked = (reviewChunkViewMode === 'merged');
+                
                 renderTimeline();
                 renderSpeakerLegend();
                 
             } catch (e) {
                 content.innerHTML = `<p class="text-red-400 p-4">Error: ${e.message}</p>`;
             }
+        }
+        
+        function applyChunkViewMode() {
+            if (!reviewTimeline) return;
+            const source = reviewChunkViewMode === 'raw' 
+                ? (reviewTimelineRaw || reviewTimeline.chunks)
+                : (reviewTimelineMerged || reviewTimeline.chunks);
+            reviewTimeline.chunks = source;
+        }
+        
+        function toggleChunkViewMode() {
+            const checkbox = document.getElementById('mergedViewCheckbox');
+            reviewChunkViewMode = checkbox?.checked ? 'merged' : 'raw';
+            
+            // Apply the view mode
+            applyChunkViewMode();
+            
+            // Save preference
+            if (!reviewState.uiPrefs) reviewState.uiPrefs = {};
+            reviewState.uiPrefs.chunkView = reviewChunkViewMode;
+            markUnsaved();
+            debounceSave();
+            
+            // Re-render
+            renderTimeline();
+        }
+        
+        function showReviewInfoModal() {
+            // Create modal if it doesn't exist
+            let modal = document.getElementById('reviewInfoModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'reviewInfoModal';
+                modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+                modal.innerHTML = `
+                    <div class="bg-surface-800 rounded-xl p-6 max-w-md mx-4 shadow-xl border border-gray-700">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-lg font-semibold text-white">Review Help</h3>
+                            <button onclick="hideReviewInfoModal()" class="text-gray-400 hover:text-white">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="space-y-3 text-sm text-gray-300">
+                            <div>
+                                <span class="font-medium text-white">Merged view:</span>
+                                Combines adjacent same-speaker chunks for readability.
+                            </div>
+                            <div>
+                                <span class="font-medium text-white">Raw view:</span>
+                                Shows diarization-aligned chunks with more speaker switches.
+                            </div>
+                            <div>
+                                <span class="font-medium text-white">Fast Switching:</span>
+                                Uses shorter segments + higher overlap for rapid turn-taking (slower processing).
+                            </div>
+                            <div>
+                                <span class="font-medium text-white">Exports:</span>
+                                All exports are timestamped speaker transcripts.
+                            </div>
+                            <div class="pt-2 border-t border-gray-700">
+                                <span class="font-medium text-white">Keyboard shortcuts:</span>
+                                <div class="mt-1 text-xs text-gray-400 space-y-1">
+                                    <div><kbd class="px-1 bg-surface-700 rounded">E</kbd> Edit chunk</div>
+                                    <div><kbd class="px-1 bg-surface-700 rounded">⌘/Ctrl+S</kbd> Split at cursor</div>
+                                    <div><kbd class="px-1 bg-surface-700 rounded">⌘/Ctrl+⇧+S</kbd> 3-way split (interjection)</div>
+                                    <div><kbd class="px-1 bg-surface-700 rounded">Enter</kbd> Save edit</div>
+                                    <div><kbd class="px-1 bg-surface-700 rounded">Esc</kbd> Cancel edit</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                modal.onclick = (e) => { if (e.target === modal) hideReviewInfoModal(); };
+                document.body.appendChild(modal);
+            }
+            modal.classList.remove('hidden');
+        }
+        
+        function hideReviewInfoModal() {
+            const modal = document.getElementById('reviewInfoModal');
+            if (modal) modal.classList.add('hidden');
         }
         
         function renderTimeline() {
@@ -4723,7 +4834,8 @@
             const searchTerm = document.getElementById('reviewSearchInput').value.toLowerCase();
             const chunks = reviewTimeline.chunks || [];
             
-            document.getElementById('reviewChunkCount').textContent = `${chunks.length} chunks`;
+            const viewLabel = reviewChunkViewMode === 'raw' ? 'raw' : 'merged';
+            document.getElementById('reviewChunkCount').textContent = `${chunks.length} chunks (${viewLabel})`;
             
             if (chunks.length === 0) {
                 const source = reviewTimeline.source || {};

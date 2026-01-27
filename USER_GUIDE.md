@@ -84,7 +84,24 @@ Enable diarization to assign speakers.
 
 ## Review Workspace
 
-The Review UI is designed for fast correction:
+The Review UI is designed for fast correction.
+
+### Merged vs Raw Timeline Toggle
+
+The review toolbar includes a **Merged** checkbox:
+
+- **Merged view (default)**: Combines adjacent same-speaker chunks for readability. Best for most review tasks.
+- **Raw view**: Shows diarization-aligned chunks with more speaker switches. Useful when you need to see the original segmentation or debug speaker assignment issues.
+
+Toggle between views at any time — your preference is saved per session.
+
+### Info Modal
+
+Click the **ⓘ** button in the review toolbar to see a quick reference for:
+- View modes (Merged/Raw)
+- Fast Switching explanation
+- Export formats
+- Keyboard shortcuts
 
 ### Speaker relabeling
 - Click a speaker label in the sidebar to rename

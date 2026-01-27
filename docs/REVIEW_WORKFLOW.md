@@ -33,6 +33,19 @@ This lets you insert short interjections as their own chunk and assign a new spe
 - Hover a chunk to reveal speaker buttons
 - Press keys **1–9** to assign quickly
 
+### Merged/Raw View Toggle
+
+The review toolbar includes a **Merged** checkbox:
+
+- **Merged (default)**: Combines adjacent same-speaker chunks for readability.
+- **Raw**: Shows diarization-aligned chunks with more speaker switches.
+
+Use Raw view when debugging speaker assignment or when you need to see the original segmentation.
+
+### Info Modal
+
+Click the **ⓘ** button in the toolbar for a quick reference on view modes, Fast Switching, exports, and keyboard shortcuts.
+
 ---
 
 ## Exports

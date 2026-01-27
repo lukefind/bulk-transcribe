@@ -62,14 +62,22 @@ class ReviewTimeline:
     source: Dict[str, str] = field(default_factory=dict)
     speakers: List[Speaker] = field(default_factory=list)
     chunks: List[Chunk] = field(default_factory=list)
+    chunks_raw: List[dict] = field(default_factory=list)  # Pre-merge chunks
+    chunks_merged: List[dict] = field(default_factory=list)  # Post-merge chunks
     
     def to_dict(self) -> dict:
-        return {
+        result = {
             'version': self.version,
             'source': self.source,
             'speakers': [s.to_dict() for s in self.speakers],
             'chunks': [c.to_dict() for c in self.chunks],
         }
+        # Include raw/merged if available
+        if self.chunks_raw:
+            result['chunks_raw'] = self.chunks_raw
+        if self.chunks_merged:
+            result['chunks_merged'] = self.chunks_merged
+        return result
     
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2)
@@ -548,8 +556,18 @@ class TimelineParser:
         dedupe_removed = timeline.dedupe_chunks_strict()
         after_dedupe = len(timeline.chunks)
         
+        # Capture raw chunks BEFORE merge (after dedupe + containment drop)
+        chunks_raw = [c.to_dict() for c in timeline.chunks]
+        
         # Post-processing pass: drop contained fragments, merge same-speaker chunks
         postprocess_stats = timeline.postprocess_chunks()
+        
+        # Capture merged chunks AFTER merge
+        chunks_merged = [c.to_dict() for c in timeline.chunks]
+        
+        # Store both versions for UI toggle
+        timeline.chunks_raw = chunks_raw
+        timeline.chunks_merged = chunks_merged
         
         timeline.dedupe_stats = {
             'before': before_dedupe,
