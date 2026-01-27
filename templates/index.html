@@ -773,6 +773,10 @@
                         <span id="jobIdBadge" class="text-xs font-mono text-gray-400 bg-surface-700/50 px-2 py-0.5 rounded"></span>
                     </div>
                     <div class="flex items-center gap-2">
+                        <button id="reviewLatestBtn" onclick="reviewLatestCompleted()" 
+                                class="hidden text-xs px-2 py-1 bg-primary-600/60 hover:bg-primary-600 text-primary-100 rounded transition-all">
+                            Review Latest
+                        </button>
                         <span id="jobStatusBadge" class="text-xs font-semibold px-2.5 py-1 rounded-full bg-primary-500/20 text-primary-300">RUNNING</span>
                         <span id="jobExecModeBadge" class="text-xs font-semibold px-2.5 py-1 rounded-full bg-gray-500/20 text-gray-300 hidden">Local CPU</span>
                     </div>
@@ -3707,9 +3711,13 @@
             updateCompletedFilesSection(job);
         }
         
+        // Track latest completed file for "Review Latest" button
+        let latestCompletedFile = null;
+        
         function updateCompletedFilesSection(job) {
             const section = document.getElementById('completedFilesSection');
             const list = document.getElementById('completedFilesList');
+            const reviewLatestBtn = document.getElementById('reviewLatestBtn');
             if (!section || !list) return;
             
             // Find completed outputs (transcripts with success status)
@@ -3720,8 +3728,20 @@
             
             if (completedOutputs.length === 0) {
                 section.classList.add('hidden');
+                if (reviewLatestBtn) reviewLatestBtn.classList.add('hidden');
+                latestCompletedFile = null;
                 return;
             }
+            
+            // Store latest completed file info for Review Latest button
+            const latest = completedOutputs[completedOutputs.length - 1];
+            latestCompletedFile = {
+                jobId: job.jobId,
+                inputId: latest.inputId || latest.id
+            };
+            
+            // Show Review Latest button
+            if (reviewLatestBtn) reviewLatestBtn.classList.remove('hidden');
             
             section.classList.remove('hidden');
             list.innerHTML = completedOutputs.map(output => {
@@ -3737,6 +3757,11 @@
                     </div>
                 `;
             }).join('');
+        }
+        
+        function reviewLatestCompleted() {
+            if (!latestCompletedFile) return;
+            openReviewForJob(latestCompletedFile.jobId, latestCompletedFile.inputId);
         }
         
         function addActivityLogEntry(stage, file) {
