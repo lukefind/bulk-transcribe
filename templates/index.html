@@ -72,6 +72,39 @@
         :root.theme-light .hover\:bg-surface-700\/30:hover { background-color: rgba(226, 232, 240, 0.5) !important; }
         :root.theme-light #speakerSidebar { background-color: #f8fafc; }
         :root.theme-light #reviewTimelineContent { background-color: #ffffff; }
+        
+        /* Speaker color picker */
+        .speaker-color-grid { 
+            display: grid; 
+            grid-template-columns: repeat(4, 1fr); 
+            gap: 4px; 
+            background-color: #1e293b; 
+            border: 1px solid #334155; 
+        }
+        .speaker-color-cell { 
+            cursor: pointer; 
+            transition: transform 0.1s; 
+        }
+        .speaker-color-cell:hover { 
+            transform: scale(1.15); 
+        }
+        :root.theme-light .speaker-color-grid { 
+            background-color: #ffffff; 
+            border-color: #cbd5e1; 
+        }
+        :root.theme-light .speaker-color-swatch:hover { 
+            border-color: rgba(0,0,0,0.3) !important; 
+        }
+        
+        /* Speaker-tinted text with color-mix (with fallback) */
+        .speaker-tinted-text {
+            color: #d1d5db; /* fallback gray-300 */
+            color: color-mix(in srgb, var(--speaker-color) 50%, #d1d5db);
+        }
+        :root.theme-light .speaker-tinted-text {
+            color: #374151; /* fallback gray-700 */
+            color: color-mix(in srgb, var(--speaker-color) 40%, #374151);
+        }
     </style>
 </head>
 <body class="text-gray-100 min-h-screen">
@@ -1208,7 +1241,8 @@
             wordTimestamps: 'bulk_transcribe_word_timestamps',
             qualityPreset: 'bulk_transcribe_quality_preset',
             silenceThreshold: 'bulk_transcribe_silence_threshold',
-            maxSegmentDuration: 'bulk_transcribe_max_segment_duration'
+            maxSegmentDuration: 'bulk_transcribe_max_segment_duration',
+            speakerColorsByLabel: 'bulk_transcribe_speaker_colors_by_label'
         };
 
         function saveToStorage(key, value) {
@@ -1217,6 +1251,27 @@
 
         function loadFromStorage(key) {
             try { return localStorage.getItem(key); } catch(e) { return null; }
+        }
+
+        // Speaker color persistence by label (cross-document consistency)
+        function getSpeakerColorsByLabel() {
+            try {
+                const stored = localStorage.getItem(STORAGE_KEYS.speakerColorsByLabel);
+                return stored ? JSON.parse(stored) : {};
+            } catch (e) { return {}; }
+        }
+        
+        function saveSpeakerColorByLabel(label, color) {
+            try {
+                const map = getSpeakerColorsByLabel();
+                map[label.toLowerCase().trim()] = color;
+                localStorage.setItem(STORAGE_KEYS.speakerColorsByLabel, JSON.stringify(map));
+            } catch (e) {}
+        }
+        
+        function getSpeakerColorByLabel(label) {
+            const map = getSpeakerColorsByLabel();
+            return map[label.toLowerCase().trim()] || null;
         }
 
         let savedBackendPreference = null;
@@ -3747,7 +3802,7 @@
         let reviewAudioElement = null;
         let reviewJobData = null;
         let reviewTimeline = null;  // { speakers: [], chunks: [] }
-        let reviewState = { speakerLabelMap: {}, chunkEdits: {}, uiPrefs: {} };
+        let reviewState = { speakerLabelMap: {}, speakerColorMap: {}, chunkEdits: {}, uiPrefs: {} };
         let reviewSelectedInputId = null;
         let reviewSelectedChunkIndex = -1;
         let reviewCurrentChunkIndex = -1;
@@ -4210,7 +4265,13 @@
                 // Also load review state
                 const stateResp = await fetch(`/api/jobs/${reviewJobData.jobId}/review/state`);
                 if (stateResp.ok) {
-                    reviewState = await stateResp.json();
+                    const loaded = await stateResp.json();
+                    reviewState = {
+                        speakerLabelMap: loaded.speakerLabelMap || {},
+                        speakerColorMap: loaded.speakerColorMap || {},
+                        chunkEdits: loaded.chunkEdits || {},
+                        uiPrefs: loaded.uiPrefs || {}
+                    };
                 }
                 
                 renderTimeline();
@@ -4268,9 +4329,10 @@
                 div.dataset.chunkId = chunk.chunk_id;
                 div.dataset.start = chunk.start;
                 
-                // Speaker color border
-                const borderColor = speaker?.color || '#6b7280';
-                div.style.borderLeft = `3px solid ${borderColor}`;
+                // Speaker color - use centralized helper
+                const speakerColor = speaker ? getSpeakerDisplayColor(speaker) : '#6b7280';
+                div.style.borderLeft = `3px solid ${speakerColor}`;
+                div.style.setProperty('--speaker-color', speakerColor);
                 
                 // Get edited text if exists
                 const editedText = reviewState.chunkEdits?.[chunk.chunk_id]?.text;
@@ -4284,9 +4346,9 @@
                     </div>
                     <div class="flex-shrink-0">
                         <span class="inline-block px-2 py-0.5 rounded text-xs font-medium" 
-                              style="background-color: ${borderColor}20; color: ${borderColor}">${speaker?.label || 'Unknown'}</span>
+                              style="background-color: ${speakerColor}20; color: ${speakerColor}">${speaker?.label || 'Unknown'}</span>
                     </div>
-                    <div class="chunk-text flex-1 text-gray-300 text-sm ${isEdited ? 'italic' : ''}" data-chunk-id="${chunk.chunk_id}" data-original="${escapeHtml(chunk.text)}">${escapeHtml(displayText)}</div>
+                    <div class="chunk-text flex-1 text-sm speaker-tinted-text ${isEdited ? 'italic' : ''}" data-chunk-id="${chunk.chunk_id}" data-original="${escapeHtml(chunk.text)}">${escapeHtml(displayText)}</div>
                     <div class="flex-shrink-0 flex items-center gap-1">
                         <button onclick="event.stopPropagation(); editChunkText(${idx})" 
                                 class="edit-btn p-1 text-gray-500 hover:text-primary-400 transition-colors" title="Edit text">
@@ -4348,6 +4410,26 @@
             return reviewState?.speakerLabelMap?.[speaker.id] || speaker.label || speaker.id;
         }
         
+        // Curated color palette for speakers (works in both light and dark themes)
+        const SPEAKER_COLOR_PALETTE = [
+            '#60a5fa', // blue
+            '#22d3ee', // cyan
+            '#34d399', // emerald
+            '#a3e635', // lime
+            '#fbbf24', // amber
+            '#fb7185', // rose
+            '#f472b6', // pink
+            '#c084fc', // purple
+            '#818cf8', // indigo
+            '#f97316', // orange
+            '#ef4444', // red
+            '#14b8a6', // teal
+        ];
+        
+        function getSpeakerDisplayColor(speaker) {
+            return reviewState?.speakerColorMap?.[speaker.id] || speaker.color || '#6b7280';
+        }
+        
         function renderSpeakerLegend() {
             const list = document.getElementById('speakerLegendList');
             const noSpeakersMsg = document.getElementById('noSpeakersMessage');
@@ -4374,16 +4456,68 @@
             
             reviewTimeline.speakers.forEach((speaker, idx) => {
                 const label = getSpeakerDisplayLabel(speaker);
+                const color = getSpeakerDisplayColor(speaker);
                 const div = document.createElement('div');
-                div.className = 'flex items-center gap-2 p-2 rounded-lg bg-surface-700/30 hover:bg-surface-700/50 cursor-pointer transition-colors';
+                div.className = 'speaker-row flex items-center gap-2 p-2 rounded-lg bg-surface-700/30 hover:bg-surface-700/50 transition-colors relative';
                 div.dataset.speakerId = speaker.id;
                 div.innerHTML = `
-                    <span class="w-3 h-3 rounded-full flex-shrink-0" style="background-color: ${speaker.color}"></span>
-                    <span class="speaker-label-text text-sm text-gray-300 flex-1 truncate" onclick="beginInlineSpeakerRename('${speaker.id}', event)" title="Click to rename">${escapeHtml(label)}</span>
+                    <button class="speaker-color-swatch w-4 h-4 rounded-full flex-shrink-0 border-2 border-transparent hover:border-white/50 transition-colors" 
+                            style="background-color: ${color}" 
+                            onclick="toggleSpeakerColorPicker('${speaker.id}', event)" 
+                            title="Change color"></button>
+                    <span class="speaker-label-text text-sm text-gray-300 flex-1 truncate cursor-pointer" onclick="beginInlineSpeakerRename('${speaker.id}', event)" title="Click to rename">${escapeHtml(label)}</span>
                     <kbd class="px-1.5 py-0.5 bg-surface-600 rounded text-xs text-gray-400">${idx + 1}</kbd>
+                    <div class="speaker-color-picker hidden absolute left-0 top-full mt-1 z-50 speaker-color-grid p-2 rounded-lg shadow-lg" data-speaker-id="${speaker.id}">
+                        ${SPEAKER_COLOR_PALETTE.map(c => `
+                            <button class="speaker-color-cell w-5 h-5 rounded ${c === color ? 'ring-2 ring-white ring-offset-1 ring-offset-surface-800' : ''}" 
+                                    style="background-color: ${c}" 
+                                    onclick="setSpeakerColor('${speaker.id}', '${c}', event)"></button>
+                        `).join('')}
+                    </div>
                 `;
                 list.appendChild(div);
             });
+        }
+        
+        function toggleSpeakerColorPicker(speakerId, event) {
+            event.stopPropagation();
+            closeSpeakerColorPickers();
+            const picker = document.querySelector(`.speaker-color-picker[data-speaker-id="${speakerId}"]`);
+            if (picker) {
+                picker.classList.toggle('hidden');
+            }
+        }
+        
+        function closeSpeakerColorPickers() {
+            document.querySelectorAll('.speaker-color-picker').forEach(p => p.classList.add('hidden'));
+        }
+        
+        // Close color pickers when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.speaker-color-picker') && !e.target.closest('.speaker-color-swatch')) {
+                closeSpeakerColorPickers();
+            }
+        });
+        
+        function setSpeakerColor(speakerId, color, event) {
+            event.stopPropagation();
+            
+            // Update review state
+            if (!reviewState.speakerColorMap) reviewState.speakerColorMap = {};
+            reviewState.speakerColorMap[speakerId] = color;
+            
+            // Also persist by label for cross-document consistency
+            const speaker = reviewTimeline?.speakers?.find(s => s.id === speakerId);
+            if (speaker) {
+                const label = getSpeakerDisplayLabel(speaker).toLowerCase().trim();
+                saveSpeakerColorByLabel(label, color);
+            }
+            
+            markUnsaved();
+            closeSpeakerColorPickers();
+            renderSpeakerLegend();
+            renderTimeline();
+            saveReviewState();
         }
         
         // Alias for compatibility
@@ -4418,6 +4552,13 @@
                 // Only persist non-empty labels that differ from original
                 if (newLabel && newLabel !== originalLabel) {
                     reviewState.speakerLabelMap[speakerId] = newLabel;
+                    
+                    // Check if we have a saved color for this label
+                    const savedColor = getSpeakerColorByLabel(newLabel);
+                    if (savedColor && !reviewState.speakerColorMap?.[speakerId]) {
+                        if (!reviewState.speakerColorMap) reviewState.speakerColorMap = {};
+                        reviewState.speakerColorMap[speakerId] = savedColor;
+                    }
                 } else {
                     // Empty or same as original - remove override
                     delete reviewState.speakerLabelMap[speakerId];
