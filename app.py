@@ -31,7 +31,7 @@ os.environ['NUMEXPR_NUM_THREADS'] = '1'
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 # Suppress noisy third-party warnings early (before any imports that trigger them)
-from logger import configure_runtime_noise
+from logger import configure_runtime_noise, log_event
 configure_runtime_noise()
 
 # Prevent multiprocessing from creating new app instances
