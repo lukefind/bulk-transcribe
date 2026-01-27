@@ -211,8 +211,11 @@ class ReviewTimeline:
             best_dup_score = None
             best_dup_candidate = None
             
+            cur_len = len(cur_norm)
+            
             for idx, candidate in recent_candidates:
                 cand_norm = normalize_text(candidate.text)
+                cand_len = len(cand_norm)
                 
                 # Calculate timing metrics
                 start_delta = abs(chunk.start - candidate.start)
@@ -225,10 +228,11 @@ class ReviewTimeline:
                 exact_match = cur_norm == cand_norm
                 
                 # Determine if likely duplicate
+                # For subset-based dedupe, require minimum text length to avoid false positives on short phrases
                 likely_duplicate = False
                 if exact_match and (start_delta <= 1.0 or overlap_ratio >= 0.5):
                     likely_duplicate = True
-                elif subset_relation and (start_delta <= 1.0 or overlap_ratio >= 0.6):
+                elif subset_relation and min(cur_len, cand_len) >= 20 and (start_delta <= 1.0 or overlap_ratio >= 0.6):
                     likely_duplicate = True
                 
                 if likely_duplicate:
