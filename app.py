@@ -2366,8 +2366,8 @@ def _run_remote_session_job(session_id: str, job_id: str, inputs: list, options:
             # Try to construct from common patterns
             controller_base_url = os.environ.get('BASE_URL', 'http://localhost:8476')
         
-        # Dispatch to remote worker
-        success = dispatch_to_remote_worker(
+        # Dispatch to remote worker (may return 'retry' for auto-retry on 404)
+        result = dispatch_to_remote_worker(
             session_id=session_id,
             job_id=job_id,
             inputs=inputs,
@@ -2377,7 +2377,33 @@ def _run_remote_session_job(session_id: str, job_id: str, inputs: list, options:
             is_cancelled_callback=is_cancelled
         )
         
-        if success:
+        # Handle auto-retry on worker 404 (job lost)
+        if result == 'retry':
+            # Check current retry count from manifest
+            manifest = session_store.read_json(manifest_path)
+            remote_info = manifest.get('remote', {}) if manifest else {}
+            retry_count = remote_info.get('retryCount', 0)
+            
+            if retry_count < 1:
+                log_event('info', 'remote_job_auto_retry', jobId=job_id, retryCount=retry_count + 1)
+                # Update retry count and reset status for retry
+                update_manifest(
+                    status='running',
+                    remote={'retryCount': retry_count + 1},
+                    error=None  # Clear error for retry
+                )
+                # Retry dispatch
+                result = dispatch_to_remote_worker(
+                    session_id=session_id,
+                    job_id=job_id,
+                    inputs=inputs,
+                    options=options,
+                    controller_base_url=controller_base_url,
+                    update_manifest_callback=update_manifest,
+                    is_cancelled_callback=is_cancelled
+                )
+        
+        if result is True:
             log_event('info', 'remote_job_complete', jobId=job_id)
             # Final status is set by worker callback or polling
         else:

@@ -863,6 +863,17 @@
                     </button>
                 </div>
                 
+                <!-- Completed files (reviewable during batch) -->
+                <div id="completedFilesSection" class="mt-4 border-t border-gray-700/50 pt-4 hidden">
+                    <div class="text-xs text-gray-400 mb-2 flex items-center gap-1">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                        </svg>
+                        Completed Files
+                    </div>
+                    <div id="completedFilesList" class="text-xs space-y-1 max-h-32 overflow-y-auto"></div>
+                </div>
+                
                 <!-- Activity timeline -->
                 <div id="activityTimeline" class="mt-4 border-t border-gray-700/50 pt-4">
                     <div class="text-xs text-gray-400 mb-2 flex items-center gap-1">
@@ -3691,6 +3702,41 @@
                     cancelAfterBtn.innerHTML = `<span class="text-amber-400">Canceling after current file...</span>`;
                 }
             }
+            
+            // Update completed files section (allow review during batch)
+            updateCompletedFilesSection(job);
+        }
+        
+        function updateCompletedFilesSection(job) {
+            const section = document.getElementById('completedFilesSection');
+            const list = document.getElementById('completedFilesList');
+            if (!section || !list) return;
+            
+            // Find completed outputs (transcripts with success status)
+            const outputs = job.outputs || [];
+            const completedOutputs = outputs.filter(o => 
+                o.type === 'transcript' && !o.error
+            );
+            
+            if (completedOutputs.length === 0) {
+                section.classList.add('hidden');
+                return;
+            }
+            
+            section.classList.remove('hidden');
+            list.innerHTML = completedOutputs.map(output => {
+                const inputId = output.inputId || output.id;
+                const filename = output.filename || output.originalFilename || 'File';
+                return `
+                    <div class="flex items-center justify-between py-1 px-2 bg-surface-700/30 rounded">
+                        <span class="text-gray-300 truncate flex-1" title="${escapeHtml(filename)}">${escapeHtml(filename)}</span>
+                        <button onclick="openReviewForJob('${job.jobId}', '${inputId}')" 
+                                class="ml-2 px-2 py-0.5 text-xs bg-primary-600/60 hover:bg-primary-600 text-primary-100 rounded transition-all">
+                            Review
+                        </button>
+                    </div>
+                `;
+            }).join('');
         }
         
         function addActivityLogEntry(stage, file) {
@@ -3736,6 +3782,14 @@
                 const remoteLastError = job.remote?.lastError;
                 const remoteLastErrorCode = remoteLastError?.code;
                 const remoteLastErrorMessage = remoteLastError?.message;
+                
+                // Special user-friendly message for worker 404 (job lost)
+                let displayMsg = errorMsg;
+                let showRetryHint = false;
+                if (errorCode === 'REMOTE_JOB_NOT_FOUND') {
+                    displayMsg = 'Remote worker restarted or lost the job. Please retry.';
+                    showRetryHint = true;
+                }
 
                 const errorDiv = document.createElement('div');
                 errorDiv.className = 'mb-4 p-4 bg-red-900/30 border border-red-500/50 rounded-xl';
@@ -3746,9 +3800,10 @@
                         </svg>
                         <div>
                             <div class="text-red-400 font-medium">Job ${job.status === 'canceled' ? 'Canceled' : 'Failed'}</div>
-                            <div class="text-red-300 text-sm mt-1">${errorMsg}</div>
+                            <div class="text-red-300 text-sm mt-1">${displayMsg}</div>
                             <div class="text-red-400/60 text-xs mt-1">Error code: ${errorCode}</div>
                             ${remoteLastErrorCode ? `<div class="text-red-400/60 text-xs mt-1">Remote: <span class="font-mono">${remoteLastErrorCode}</span>${remoteLastErrorMessage ? ` — ${remoteLastErrorMessage}` : ''}</div>` : ''}
+                            ${showRetryHint ? `<button onclick="rerunJob('${job.jobId}')" class="mt-2 px-3 py-1 text-xs bg-primary-600/70 hover:bg-primary-600 text-white rounded transition-all">Retry Job</button>` : ''}
                         </div>
                     </div>
                 `;

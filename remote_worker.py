@@ -62,7 +62,7 @@ def _classify_poll_http_error(status_code: int) -> Optional[Dict[str, str]]:
     if status_code == 404:
         return {
             'code': 'REMOTE_JOB_NOT_FOUND',
-            'message': 'Remote worker restarted or job expired; please retry.'
+            'message': 'Remote worker restarted or lost the job. Please retry.'
         }
     if status_code in (401, 403):
         return {
@@ -70,6 +70,13 @@ def _classify_poll_http_error(status_code: int) -> Optional[Dict[str, str]]:
             'message': 'Remote worker authentication failed; check WORKER_TOKEN/REMOTE_WORKER_TOKEN.'
         }
     return None
+
+
+def _should_auto_retry_on_404(manifest: dict) -> bool:
+    """Check if job should be auto-retried after 404 (worker lost job)."""
+    remote = manifest.get('remote', {})
+    retry_count = remote.get('retryCount', 0)
+    return retry_count < 1
 
 
 # =============================================================================
@@ -849,7 +856,36 @@ def dispatch_to_remote_worker(
                     now_iso = datetime.now(timezone.utc).isoformat()
 
                     if classified is not None:
-                        # Fail fast (worker lost job, or auth misconfigured)
+                        # Special handling for 404 - job lost, may auto-retry
+                        if response.status_code == 404:
+                            log_event('error', 'remote_job_lost',
+                                      jobId=job_id,
+                                      workerJobId=worker_job_id,
+                                      message='Worker restarted or lost the job')
+                            
+                            # Check if we should auto-retry
+                            current_retry_count = 0
+                            # Signal auto-retry by returning special value
+                            # The caller will check manifest and re-dispatch
+                            update_manifest_callback(
+                                status='failed',
+                                finishedAt=now_iso,
+                                error={'code': classified['code'], 'message': classified['message']},
+                                remote={
+                                    'workerJobId': worker_job_id,
+                                    'retryCount': current_retry_count,
+                                    'lastError': {
+                                        'code': classified['code'],
+                                        'message': classified['message'],
+                                        'statusCode': response.status_code,
+                                        'at': now_iso,
+                                    },
+                                    'shouldAutoRetry': True,
+                                }
+                            )
+                            return 'retry'  # Signal to caller to retry
+                        
+                        # Other fatal errors (auth, etc)
                         log_event('error', 'remote_poll_fatal_http',
                                   jobId=job_id,
                                   workerJobId=worker_job_id,
