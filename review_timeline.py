@@ -105,6 +105,7 @@ class ReviewTimeline:
         Reorder speakers to match first appearance in the timeline.
         This avoids confusing speaker lists like "Speaker 10" appearing first.
         Colors are reassigned deterministically based on the new order.
+        If labels are generic (e.g. "Speaker N"), relabel them sequentially.
         """
         first_seen: Dict[str, int] = {}
         for idx, chunk in enumerate(self.chunks):
@@ -124,9 +125,16 @@ class ReviewTimeline:
 
         self.speakers.sort(key=speaker_sort_key)
 
-        # Reassign colors based on new order for deterministic UI display.
+        # Check if all labels are generic defaults (e.g. "Speaker 1", "Speaker 2", etc.)
+        generic_pattern = re.compile(r'^Speaker\s+\d+$', re.IGNORECASE)
+        all_generic = all(generic_pattern.match(s.label) for s in self.speakers)
+
+        # Reassign colors and optionally relabel based on new order
         for idx, speaker in enumerate(self.speakers):
             speaker.color = SPEAKER_COLORS[idx % len(SPEAKER_COLORS)]
+            # If labels are generic, relabel in sorted order for intuitive numbering
+            if all_generic:
+                speaker.label = f"Speaker {idx + 1}"
 
     def dedupe_chunks_strict(self) -> int:
         """

@@ -164,6 +164,47 @@
             background: linear-gradient(to top, rgba(248, 250, 252, 0.95), rgba(248, 250, 252, 0.9));
             border-top-color: rgba(99, 102, 241, 0.2);
         }
+        
+        /* Light mode: error banner readability */
+        :root.theme-light #errorSection > div {
+            background-color: #fef2f2 !important;
+            border-color: #fecaca !important;
+        }
+        :root.theme-light #errorMessage {
+            color: #b91c1c !important;
+        }
+        
+        /* Light mode: review search bar */
+        :root.theme-light #reviewSearchBar {
+            background-color: #ffffff !important;
+            border-color: #cbd5e1 !important;
+        }
+        :root.theme-light #reviewSearchInput {
+            background-color: #ffffff !important;
+            color: #1e293b !important;
+            border-color: #cbd5e1 !important;
+        }
+        :root.theme-light #reviewSearchInput::placeholder {
+            color: #94a3b8 !important;
+        }
+        
+        /* Light mode: edit mode textarea and buttons */
+        :root.theme-light #reviewTimelineContent textarea {
+            background-color: #ffffff !important;
+            color: #1e293b !important;
+            border-color: #cbd5e1 !important;
+        }
+        :root.theme-light #reviewTimelineContent textarea:focus {
+            border-color: #6366f1 !important;
+            outline-color: #6366f1 !important;
+        }
+        :root.theme-light #reviewTimelineContent .edit-actions button:not(.bg-primary-600) {
+            background-color: #f1f5f9 !important;
+            color: #374151 !important;
+        }
+        :root.theme-light #reviewTimelineContent .edit-actions button:not(.bg-primary-600):hover {
+            background-color: #e2e8f0 !important;
+        }
     </style>
 </head>
 <body class="text-gray-100 min-h-screen">
@@ -864,10 +905,8 @@
                             <button onclick="exportReviewTxt(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Text (.txt)</button>
                             <button onclick="exportReviewJson(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Timeline (.json)</button>
                             <div class="export-menu-separator my-1"></div>
-                            <button onclick="exportReviewDocxClean(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Word (Clean)</button>
-                            <button onclick="exportReviewDocxTimestamped(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Word (Timestamped)</button>
-                            <button onclick="exportReviewPdfClean(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export PDF (Clean)</button>
-                            <button onclick="exportReviewPdfTimestamped(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export PDF (Timestamped)</button>
+                            <button onclick="exportReviewDocx(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Word (.docx)</button>
+                            <button onclick="exportReviewPdf(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export PDF (.pdf)</button>
                         </div>
                     </div>
                 </div>
@@ -948,7 +987,7 @@
             <!-- Main Timeline Area -->
             <main class="flex-1 flex flex-col overflow-hidden">
                 <!-- Search Bar -->
-                <div class="p-4 border-b border-gray-700/50 bg-surface-800/20 flex items-center gap-3">
+                <div id="reviewSearchBar" class="p-4 border-b border-gray-700/50 bg-surface-800/20 flex items-center gap-3">
                     <input type="text" id="reviewSearchInput" placeholder="Search transcript..." 
                            class="flex-1 px-3 py-2 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm"
                            oninput="debounceSearch()">
@@ -5105,28 +5144,16 @@
             window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-timeline-json?inputId=${inputId}`;
         }
         
-        function exportReviewDocxClean() {
+        function exportReviewDocx() {
             if (!reviewJobData?.jobId) return;
             const inputId = reviewSelectedInputId || '';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-docx?inputId=${inputId}&style=clean`;
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-docx?inputId=${inputId}`;
         }
         
-        function exportReviewDocxTimestamped() {
+        function exportReviewPdf() {
             if (!reviewJobData?.jobId) return;
             const inputId = reviewSelectedInputId || '';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-docx?inputId=${inputId}&style=timestamped`;
-        }
-        
-        function exportReviewPdfClean() {
-            if (!reviewJobData?.jobId) return;
-            const inputId = reviewSelectedInputId || '';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-pdf?inputId=${inputId}&style=clean`;
-        }
-        
-        function exportReviewPdfTimestamped() {
-            if (!reviewJobData?.jobId) return;
-            const inputId = reviewSelectedInputId || '';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-pdf?inputId=${inputId}&style=timestamped`;
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-pdf?inputId=${inputId}`;
         }
         
         // Keyboard shortcuts
