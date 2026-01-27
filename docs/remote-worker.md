@@ -189,6 +189,22 @@ Similar to RunPod - provision a GPU instance, install dependencies, and run the 
 2. Verify `CONTROLLER_BASE_URL` is accessible from worker
 3. Check `SECRET_KEY` is set for signed URLs
 
+### Pod destroyed / worker restarted mid-job
+
+Remote worker jobs are stored in worker memory by default. If you destroy the pod (or the worker restarts) while a job is running, the worker may lose the job.
+
+Controller behavior:
+
+- If the controller polls `/v1/jobs/<workerJobId>` and receives `404`, it will mark the controller job as failed with:
+  - `error.code = REMOTE_JOB_NOT_FOUND`
+  - `error.message = "Remote worker restarted or job expired; please retry."`
+  - `remote.lastError` populated for debugging
+
+UI behavior:
+
+- The UI will show a human-readable error.
+- For `REMOTE_JOB_NOT_FOUND`, the UI will show a **Retry Job** button (server mode).
+
 ### Diarization not working on worker
 
 1. Verify `HF_TOKEN` is set on worker

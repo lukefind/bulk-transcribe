@@ -73,6 +73,21 @@ def map_model_for_worker(model: str) -> str:
     return mapped
 
 
+def _classify_poll_http_error(status_code: int) -> Optional[Dict[str, str]]:
+    """Classify worker poll HTTP errors into actionable controller failure codes."""
+    if status_code == 404:
+        return {
+            'code': 'REMOTE_JOB_NOT_FOUND',
+            'message': 'Remote worker restarted or job expired; please retry.'
+        }
+    if status_code in (401, 403):
+        return {
+            'code': 'REMOTE_AUTH_FAILED',
+            'message': 'Remote worker authentication failed; check WORKER_TOKEN/REMOTE_WORKER_TOKEN.'
+        }
+    return None
+
+
 # =============================================================================
 # HTTP Request Helpers (must be defined before use)
 # =============================================================================
@@ -563,11 +578,9 @@ class RemoteWorkerClient:
         response.raise_for_status()
         return response.json()
     
-    def get_job_status(self, worker_job_id: str) -> Dict[str, Any]:
-        """Get job status from worker."""
-        response = self._request('GET', f'/v1/jobs/{worker_job_id}')
-        response.raise_for_status()
-        return response.json()
+    def get_job_status(self, worker_job_id: str) -> requests.Response:
+        """Get job status from worker (response is inspected by caller)."""
+        return self._request('GET', f'/v1/jobs/{worker_job_id}')
     
     def cancel_job(self, worker_job_id: str) -> Dict[str, Any]:
         """Request job cancellation on worker."""
@@ -848,7 +861,42 @@ def dispatch_to_remote_worker(
             
             # Poll worker status
             try:
-                status = client.get_job_status(worker_job_id)
+                response = client.get_job_status(worker_job_id)
+
+                if response.status_code != 200:
+                    body_preview = (response.text or '')[:300]
+                    classified = _classify_poll_http_error(response.status_code)
+                    now_iso = datetime.now(timezone.utc).isoformat()
+
+                    if classified is not None:
+                        # Fail fast (worker lost job, or auth misconfigured)
+                        log_event('error', 'remote_poll_fatal_http',
+                                  jobId=job_id,
+                                  workerJobId=worker_job_id,
+                                  statusCode=response.status_code,
+                                  bodyPreview=body_preview)
+
+                        update_manifest_callback(
+                            status='failed',
+                            finishedAt=now_iso,
+                            error={'code': classified['code'], 'message': classified['message']},
+                            remote={
+                                'workerJobId': worker_job_id,
+                                'lastError': {
+                                    'code': classified['code'],
+                                    'message': classified['message'],
+                                    'statusCode': response.status_code,
+                                    'bodyPreview': body_preview,
+                                    'at': now_iso,
+                                },
+                            }
+                        )
+                        return False
+
+                    # Non-fatal HTTP (5xx/other): treat like transient network error
+                    response.raise_for_status()
+
+                status = response.json()
                 consecutive_errors = 0  # Reset on success
                 
                 # Update manifest with progress
@@ -924,10 +972,19 @@ def dispatch_to_remote_worker(
                           consecutiveErrors=consecutive_errors, backoffSeconds=backoff)
                 
                 # Update manifest with error info
+                now_iso = datetime.now(timezone.utc).isoformat()
                 update_manifest_callback(
                     lastErrorCode='REMOTE_WORKER_UNREACHABLE',
                     lastErrorMessage=str(e)[:200],
-                    lastErrorAt=datetime.now(timezone.utc).isoformat()
+                    lastErrorAt=now_iso,
+                    remote={
+                        'workerJobId': worker_job_id,
+                        'lastError': {
+                            'code': 'REMOTE_WORKER_UNREACHABLE',
+                            'message': str(e)[:200],
+                            'at': now_iso,
+                        },
+                    }
                 )
                 
                 # Backoff on errors

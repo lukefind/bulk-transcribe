@@ -2240,10 +2240,19 @@
             // Show last error info for operator visibility (transient errors during execution)
             const lastErrorInfo = document.getElementById('jobLastError');
             if (lastErrorInfo) {
+                const remoteLastError = job.remote?.lastError;
+                const remoteLastErrorCode = remoteLastError?.code;
+                const remoteLastErrorMessage = remoteLastError?.message;
+                const remoteLastErrorAt = remoteLastError?.at;
+
                 if (job.lastErrorCode && job.status !== 'failed') {
                     lastErrorInfo.classList.remove('hidden');
                     const errorTime = job.lastErrorAt ? new Date(job.lastErrorAt).toLocaleTimeString() : '';
                     lastErrorInfo.innerHTML = `<span class="font-mono text-xs">${job.lastErrorCode}</span>: ${job.lastErrorMessage || 'Unknown error'} <span class="text-gray-500">(${errorTime})</span>`;
+                } else if (remoteLastErrorCode && job.status !== 'failed') {
+                    lastErrorInfo.classList.remove('hidden');
+                    const errorTime = remoteLastErrorAt ? new Date(remoteLastErrorAt).toLocaleTimeString() : '';
+                    lastErrorInfo.innerHTML = `<span class="font-mono text-xs">${remoteLastErrorCode}</span>: ${remoteLastErrorMessage || 'Unknown error'} <span class="text-gray-500">(${errorTime})</span>`;
                 } else {
                     lastErrorInfo.classList.add('hidden');
                 }
@@ -2454,7 +2463,10 @@
             if (job.status === 'failed' || job.status === 'canceled') {
                 const errorMsg = job.error?.message || job.error || (job.status === 'canceled' ? 'Job was canceled by user' : 'Job failed');
                 const errorCode = job.error?.code || 'UNKNOWN';
-                
+                const remoteLastError = job.remote?.lastError;
+                const remoteLastErrorCode = remoteLastError?.code;
+                const remoteLastErrorMessage = remoteLastError?.message;
+
                 const errorDiv = document.createElement('div');
                 errorDiv.className = 'mb-4 p-4 bg-red-900/30 border border-red-500/50 rounded-xl';
                 errorDiv.innerHTML = `
@@ -2466,6 +2478,7 @@
                             <div class="text-red-400 font-medium">Job ${job.status === 'canceled' ? 'Canceled' : 'Failed'}</div>
                             <div class="text-red-300 text-sm mt-1">${errorMsg}</div>
                             <div class="text-red-400/60 text-xs mt-1">Error code: ${errorCode}</div>
+                            ${remoteLastErrorCode ? `<div class="text-red-400/60 text-xs mt-1">Remote: <span class="font-mono">${remoteLastErrorCode}</span>${remoteLastErrorMessage ? ` — ${remoteLastErrorMessage}` : ''}</div>` : ''}
                         </div>
                     </div>
                 `;
@@ -2489,7 +2502,7 @@
                 }
                 
                 // Add Retry button
-                if (IS_SERVER_MODE && currentJobId) {
+                if (IS_SERVER_MODE && currentJobId && errorCode === 'REMOTE_JOB_NOT_FOUND') {
                     const retryDiv = document.createElement('div');
                     retryDiv.className = 'mb-4';
                     retryDiv.innerHTML = `

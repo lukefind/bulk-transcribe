@@ -354,3 +354,35 @@ class TestQueueStateTransitions:
         for code in standard_codes:
             assert code == code.upper()
             assert ' ' not in code
+
+
+class TestRemoteWorkerPollingErrors:
+    """Tests for remote worker polling error classification."""
+
+    def test_poll_404_maps_to_job_not_found(self):
+        from remote_worker import _classify_poll_http_error
+
+        err = _classify_poll_http_error(404)
+        assert err is not None
+        assert err['code'] == 'REMOTE_JOB_NOT_FOUND'
+        assert 'restarted' in err['message'].lower() or 'expired' in err['message'].lower()
+
+    def test_poll_401_maps_to_auth_failed(self):
+        from remote_worker import _classify_poll_http_error
+
+        err = _classify_poll_http_error(401)
+        assert err is not None
+        assert err['code'] == 'REMOTE_AUTH_FAILED'
+
+    def test_poll_403_maps_to_auth_failed(self):
+        from remote_worker import _classify_poll_http_error
+
+        err = _classify_poll_http_error(403)
+        assert err is not None
+        assert err['code'] == 'REMOTE_AUTH_FAILED'
+
+    def test_poll_500_is_not_fatal(self):
+        from remote_worker import _classify_poll_http_error
+
+        err = _classify_poll_http_error(500)
+        assert err is None
