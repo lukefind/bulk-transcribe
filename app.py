@@ -3479,7 +3479,13 @@ def api_get_review_timeline(job_id):
         target_input = inputs[0]
         input_id = target_input.get('uploadId')
     
-    filename = target_input.get('originalFilename', 'unknown')
+    filename = target_input.get('originalFilename') or target_input.get('filename') or 'unknown'
+    
+    log_event('debug', 'review_timeline_input_lookup',
+              jobId=job_id, inputId=input_id,
+              targetInputKeys=list(target_input.keys()),
+              filename=filename,
+              inputsCount=len(inputs))
     
     # Find outputs for this input
     outputs = manifest.get('outputs', [])
@@ -3511,9 +3517,14 @@ def api_get_review_timeline(job_id):
         }
         available_outputs.append(output_info)
         
-        # Check forUploadId match - be lenient if forUploadId is missing
+        # Check forUploadId match - STRICT: require forUploadId to match
+        # If forUploadId is missing, skip to fallback (filename-based matching)
         output_for_id = output.get('forUploadId')
-        if output_for_id and output_for_id != input_id:
+        if not output_for_id:
+            # No forUploadId - will be handled by filename-based fallback
+            skipped_outputs.append({'reason': 'no_forUploadId', **output_info})
+            continue
+        if output_for_id != input_id:
             skipped_outputs.append({'reason': 'forUploadId_mismatch', **output_info})
             continue
         
@@ -3573,7 +3584,11 @@ def api_get_review_timeline(job_id):
             # Extract base by removing known suffixes
             output_base = re.sub(r'_(transcript|diarization|speaker)\.(json|md)$', '', output_filename)
             output_base = re.sub(r'\.rttm$', '', output_base)
-            return output_base == input_base
+            matches = output_base == input_base
+            log_event('debug', 'review_timeline_filename_match',
+                      outputFilename=output_filename, outputBase=output_base,
+                      inputBase=input_base, matches=matches)
+            return matches
         
         for output in outputs:
             if output.get('error'):
