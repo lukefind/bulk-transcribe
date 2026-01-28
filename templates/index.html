@@ -7045,7 +7045,7 @@
         // Export/Import
         function exportReviewProject() {
             if (!reviewJobData) return;
-            const inputId = reviewJobData.inputs?.[0]?.uploadId || '';
+            const inputId = reviewSelectedInputId || '';
             window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export?inputId=${inputId}`;
         }
         
