@@ -298,6 +298,7 @@ class ReviewTimeline:
         2) Merge adjacent same-speaker chunks with small gaps
         
         Returns stats dict and stores on self.postprocess_stats.
+        Also stores self.chunks_before_merge for raw view toggle.
         """
         import re
         
@@ -400,6 +401,9 @@ class ReviewTimeline:
                 kept_after_drop.append(chunk)
         
         after_containment = len(kept_after_drop)
+        
+        # Capture chunks BEFORE merge for raw view toggle
+        self.chunks_before_merge = [c.to_dict() for c in kept_after_drop]
         
         # ========== PASS 2: Merge adjacent same-speaker chunks ==========
         if len(kept_after_drop) <= 1:
@@ -556,18 +560,14 @@ class TimelineParser:
         dedupe_removed = timeline.dedupe_chunks_strict()
         after_dedupe = len(timeline.chunks)
         
-        # Capture raw chunks BEFORE merge (after dedupe + containment drop)
-        chunks_raw = [c.to_dict() for c in timeline.chunks]
-        
         # Post-processing pass: drop contained fragments, merge same-speaker chunks
+        # This also captures chunks_before_merge for raw view
         postprocess_stats = timeline.postprocess_chunks()
         
-        # Capture merged chunks AFTER merge
-        chunks_merged = [c.to_dict() for c in timeline.chunks]
-        
-        # Store both versions for UI toggle
-        timeline.chunks_raw = chunks_raw
-        timeline.chunks_merged = chunks_merged
+        # chunks_raw = after containment drop, BEFORE merge (captured in postprocess_chunks)
+        # chunks_merged = after merge (current state)
+        timeline.chunks_raw = getattr(timeline, 'chunks_before_merge', [c.to_dict() for c in timeline.chunks])
+        timeline.chunks_merged = [c.to_dict() for c in timeline.chunks]
         
         timeline.dedupe_stats = {
             'before': before_dedupe,
