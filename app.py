@@ -3390,7 +3390,11 @@ def api_get_review_state(job_id):
     """
     Get the current review state for a job.
     
+    Query params:
+    - inputId: (optional) specific input to get state for
+    
     Returns speaker label map, chunk edits, and UI preferences.
+    New format uses perInput[inputId] scoping.
     """
     session_id = g.session_id
     manifest_path = session_store.job_manifest_path(session_id, job_id)
@@ -3399,12 +3403,30 @@ def api_get_review_state(job_id):
     if not manifest:
         return jsonify({'error': 'Job not found'}), 404
     
+    input_id = request.args.get('inputId')
+    
     # Review state is stored in {job}/review/review_state.json
     job_dir = session_store.job_dir(session_id, job_id)
     review_dir = os.path.join(job_dir, 'review')
     state_path = os.path.join(review_dir, 'review_state.json')
     
     state = session_store.read_json(state_path)
+    
+    # Handle new perInput format
+    if state and 'perInput' in state:
+        # New format - return input-specific state merged with uiPrefs
+        input_state = state.get('perInput', {}).get(input_id, {}) if input_id else {}
+        return jsonify({
+            'speakerLabelMap': input_state.get('speakerLabelMap', {}),
+            'speakerColorMap': input_state.get('speakerColorMap', {}),
+            'speakerNumberMap': input_state.get('speakerNumberMap', {}),
+            'chunkEdits': input_state.get('chunkEdits', {}),
+            'manualSpeakers': input_state.get('manualSpeakers', []),
+            'uiPrefs': state.get('uiPrefs', {}),
+            '_format': 'perInput'
+        })
+    
+    # Legacy format - return as-is for backward compatibility
     if not state:
         state = {
             'speakerLabelMap': {},
@@ -3420,12 +3442,17 @@ def api_put_review_state(job_id):
     """
     Update the review state for a job.
     
+    Query params:
+    - inputId: (required for perInput format) specific input to save state for
+    
     Accepts:
     {
         "speakerLabelMap": {"SPEAKER_00": "Matt", ...},
         "chunkEdits": {"t_000001": {"speakerId": "SPEAKER_02"}, ...},
         "uiPrefs": {...}
     }
+    
+    New perInput format stores edits scoped per input file.
     """
     session_id = g.session_id
     manifest_path = session_store.job_manifest_path(session_id, job_id)
@@ -3437,6 +3464,8 @@ def api_put_review_state(job_id):
     data = request.get_json()
     if not data:
         return jsonify({'error': 'No data provided'}), 400
+    
+    input_id = request.args.get('inputId')
     
     # Validate speaker labels
     ALLOWED_CHARS = re.compile(r'^[\w\s\-\'\.]+$', re.UNICODE)
@@ -3451,10 +3480,11 @@ def api_put_review_state(job_id):
         if not ALLOWED_CHARS.match(label):
             return jsonify({'error': f'Label for {speaker_id} contains invalid characters'}), 400
     
-    # Validate chunk edits
+    # Validate chunk edits - allow split suffixes like t_000001_a, t_000001_b, etc.
     chunk_edits = data.get('chunkEdits', {})
+    CHUNK_ID_PATTERN = re.compile(r'^[tr]_\d+(_[a-z])*$')
     for chunk_id, edit in chunk_edits.items():
-        if not re.match(r'^t_\d+$', chunk_id):
+        if not CHUNK_ID_PATTERN.match(chunk_id):
             return jsonify({'error': f'Invalid chunk ID: {chunk_id}'}), 400
         if 'speakerId' in edit:
             sid = edit['speakerId']
@@ -3470,27 +3500,59 @@ def api_put_review_state(job_id):
         if color and not HEX_COLOR.match(color):
             return jsonify({'error': f'Invalid color for {speaker_id}: {color}'}), 400
     
-    # Build state object
-    state = {
-        'speakerLabelMap': speaker_labels,
-        'speakerColorMap': speaker_colors,
-        'chunkEdits': chunk_edits,
-        'uiPrefs': data.get('uiPrefs', {}),
-        'updatedAt': datetime.now(timezone.utc).isoformat()
-    }
-    
     # Ensure review directory exists
     job_dir = session_store.job_dir(session_id, job_id)
     review_dir = os.path.join(job_dir, 'review')
     os.makedirs(review_dir, exist_ok=True)
-    
     state_path = os.path.join(review_dir, 'review_state.json')
-    session_store.atomic_write_json(state_path, state)
     
-    return jsonify({
-        'message': 'Review state saved',
-        'state': state
-    })
+    # Load existing state to preserve other inputs' data
+    existing_state = session_store.read_json(state_path) or {}
+    
+    # Build input-specific state
+    input_state = {
+        'speakerLabelMap': speaker_labels,
+        'speakerColorMap': speaker_colors,
+        'speakerNumberMap': data.get('speakerNumberMap', {}),
+        'chunkEdits': chunk_edits,
+        'manualSpeakers': data.get('manualSpeakers', []),
+    }
+    
+    # Use perInput format if inputId provided
+    if input_id:
+        # Migrate existing state to perInput format if needed
+        if 'perInput' not in existing_state:
+            existing_state = {
+                'perInput': {},
+                'uiPrefs': existing_state.get('uiPrefs', {})
+            }
+        
+        # Update only this input's state
+        existing_state['perInput'][input_id] = input_state
+        existing_state['uiPrefs'] = data.get('uiPrefs', existing_state.get('uiPrefs', {}))
+        existing_state['updatedAt'] = datetime.now(timezone.utc).isoformat()
+        
+        session_store.atomic_write_json(state_path, existing_state)
+        
+        return jsonify({
+            'message': 'Review state saved',
+            'inputId': input_id
+        })
+    else:
+        # Legacy format (no inputId) - save flat structure
+        state = {
+            'speakerLabelMap': speaker_labels,
+            'speakerColorMap': speaker_colors,
+            'chunkEdits': chunk_edits,
+            'uiPrefs': data.get('uiPrefs', {}),
+            'updatedAt': datetime.now(timezone.utc).isoformat()
+        }
+        session_store.atomic_write_json(state_path, state)
+        
+        return jsonify({
+            'message': 'Review state saved',
+            'state': state
+        })
 
 _CSRF_PROTECTED_ENDPOINTS.add('api_put_review_state')
 

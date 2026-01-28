@@ -5143,7 +5143,7 @@
         let reviewTimelineRaw = null;  // Original raw chunks (pre-merge)
         let reviewTimelineMerged = null;  // Merged chunks (post-merge)
         let reviewChunkViewMode = 'merged';  // 'merged' or 'raw'
-        let reviewState = { speakerLabelMap: {}, speakerColorMap: {}, chunkEdits: {}, uiPrefs: {} };
+        let reviewState = { speakerLabelMap: {}, speakerColorMap: {}, speakerNumberMap: {}, chunkEdits: {}, uiPrefs: {}, manualSpeakers: [] };
         let reviewSelectedInputId = null;
         let reviewSelectedChunkIndex = -1;
         let reviewCurrentChunkIndex = -1;
@@ -5455,19 +5455,18 @@
             const targetInput = reviewJobData.inputs?.find(i => i.uploadId === newInputId);
             if (!targetInput) return;
             
+            // Save current input's state before switching
+            if (reviewHasUnsavedChanges && reviewSelectedInputId) {
+                await saveReviewState();
+            }
+            
             // Update state
             reviewSelectedInputId = newInputId;
             
             // Update audio player
             setupReviewAudio(reviewJobData.jobId, targetInput);
             
-            // Save last input preference
-            if (!reviewState.uiPrefs) reviewState.uiPrefs = {};
-            reviewState.uiPrefs.lastInputId = newInputId;
-            markUnsaved();
-            debounceSave();
-            
-            // Reload timeline for the new input
+            // Reload timeline for the new input (this also loads the new input's review state)
             await loadReviewTimeline(false);
         }
         
@@ -5730,13 +5729,15 @@
                 // Update merged toggle state based on whether raw/merged differ
                 updateMergedToggleState();
                 
-                // Also load review state
-                const stateResp = await fetch(`/api/jobs/${reviewJobData.jobId}/review/state`);
+                // Also load review state (scoped to current input)
+                const stateUrl = `/api/jobs/${reviewJobData.jobId}/review/state?inputId=${encodeURIComponent(reviewSelectedInputId)}`;
+                const stateResp = await fetch(stateUrl);
                 if (stateResp.ok) {
                     const loaded = await stateResp.json();
                     reviewState = {
                         speakerLabelMap: loaded.speakerLabelMap || {},
                         speakerColorMap: loaded.speakerColorMap || {},
+                        speakerNumberMap: loaded.speakerNumberMap || {},
                         chunkEdits: loaded.chunkEdits || {},
                         uiPrefs: loaded.uiPrefs || {},
                         manualSpeakers: loaded.manualSpeakers || []
@@ -6841,6 +6842,10 @@
         
         async function saveReviewState() {
             if (!reviewJobData || !reviewHasUnsavedChanges) return;
+            if (!reviewSelectedInputId) {
+                console.warn('Cannot save review state: no input selected');
+                return;
+            }
             
             updateSaveStatus('saving');
             
@@ -6848,14 +6853,17 @@
                 const headers = { 'Content-Type': 'application/json' };
                 if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
                 
-                const response = await fetch(`/api/jobs/${reviewJobData.jobId}/review/state`, {
+                // Save with inputId to scope edits per input file
+                const saveUrl = `/api/jobs/${reviewJobData.jobId}/review/state?inputId=${encodeURIComponent(reviewSelectedInputId)}`;
+                const response = await fetch(saveUrl, {
                     method: 'PUT',
                     headers,
                     body: JSON.stringify(reviewState)
                 });
                 
                 if (!response.ok) {
-                    throw new Error('Save failed');
+                    const errData = await response.json().catch(() => ({}));
+                    throw new Error(errData.error || 'Save failed');
                 }
                 
                 reviewHasUnsavedChanges = false;
