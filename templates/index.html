@@ -6477,11 +6477,23 @@
             if (matchIndex === reviewCurrentChunkIndex) return;
             reviewCurrentChunkIndex = matchIndex;
             
+            // Auto-select the current chunk while playing (if auto-scroll enabled and not editing)
+            const autoScrollEnabled = document.getElementById('autoScrollCheckbox')?.checked;
+            const isPlaying = reviewAudioElement && !reviewAudioElement.paused;
+            const notEditing = reviewEditingChunkIndex === null;
+            
+            if (isPlaying && autoScrollEnabled && notEditing && matchIndex >= 0) {
+                // Update selection to follow playback
+                if (reviewSelectedChunkIndex !== matchIndex) {
+                    selectChunk(matchIndex);
+                }
+            }
+            
             const chunks = document.querySelectorAll('.chunk-row');
             chunks.forEach((el, idx) => {
                 if (idx === matchIndex) {
                     el.classList.add('bg-surface-700/50');
-                    if (document.getElementById('autoScrollCheckbox').checked) {
+                    if (autoScrollEnabled) {
                         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     }
                 } else if (idx !== reviewSelectedChunkIndex) {
@@ -6731,8 +6743,8 @@
             
             // Must have a selection (not just cursor)
             if (selStart === selEnd) {
-                // No selection - fall back to cursor split
-                splitChunkAtCursor(chunkIndex);
+                // No selection - show warning and do nothing
+                alert('Select text to split around. Use Cmd/Ctrl+S for cursor split.');
                 return;
             }
             
@@ -6741,8 +6753,17 @@
             const selectedText = text.substring(selStart, selEnd).trim();
             const afterText = text.substring(selEnd).trim();
             
-            // Selected text must have content
-            if (!selectedText) return;
+            // Selected text must have content after trimming
+            if (!selectedText) {
+                alert('Selected text is empty (whitespace only).');
+                return;
+            }
+            
+            // Need at least one of before/after to make a meaningful 3-way split
+            if (!beforeText && !afterText) {
+                alert('Selection covers entire text. Use Cmd/Ctrl+S for cursor split instead.');
+                return;
+            }
             
             // Calculate timing splits based on text position ratios
             const duration = chunk.end - chunk.start;
