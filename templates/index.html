@@ -6437,7 +6437,9 @@
             });
         }
         
-        function selectChunk(index) {
+        function selectChunk(index, options = {}) {
+            // options.silent: if true, don't seek audio (used during playback auto-follow)
+            const { silent = false } = options;
             const chunks = document.querySelectorAll('.chunk-row');
             
             // Deselect previous
@@ -6456,8 +6458,8 @@
                 const chunk = reviewTimeline.chunks[index];
                 document.getElementById('reviewSelectedChunk').textContent = `Chunk ${index + 1} / ${reviewTimeline.chunks.length}`;
                 
-                // Seek audio to chunk start
-                if (reviewAudioElement && chunk) {
+                // Seek audio to chunk start (unless silent mode for playback follow)
+                if (!silent && reviewAudioElement && chunk) {
                     reviewAudioElement.currentTime = chunk.start;
                 }
             }
@@ -6484,9 +6486,9 @@
             const notEditing = reviewEditingChunkIndex === null;
             
             if (isPlaying && autoScrollEnabled && notEditing && matchIndex >= 0) {
-                // Update selection to follow playback
+                // Update selection to follow playback (silent = don't seek, we're already playing)
                 if (reviewSelectedChunkIndex !== matchIndex) {
-                    selectChunk(matchIndex);
+                    selectChunk(matchIndex, { silent: true });
                 }
             }
             
