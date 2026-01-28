@@ -892,6 +892,8 @@ def generate_speaker_markdown(transcript: dict, diarization: list, filename: str
     # Merge transcript segments with speaker labels
     segments = transcript.get('segments', [])
     
+    # First pass: assign speakers and build segment list
+    assigned_segments = []
     for segment in segments:
         start = segment.get('start', 0)
         end = segment.get('end', 0)
@@ -900,13 +902,54 @@ def generate_speaker_markdown(transcript: dict, diarization: list, filename: str
         if not text:
             continue
         
-        # Find speaker for this segment
         speaker = find_speaker_for_segment(start, end, diarization)
+        assigned_segments.append({
+            'start': start,
+            'end': end,
+            'speaker': speaker,
+            'text': text
+        })
+    
+    # Second pass: dedupe consecutive identical segments (same speaker + same text within 2s)
+    # This handles Whisper hallucinations like repeated "Processing." at 1-second intervals
+    deduped_segments = []
+    for seg in assigned_segments:
+        if not deduped_segments:
+            deduped_segments.append(seg)
+            continue
         
-        # Format timestamp
-        ts = format_timestamp(start)
+        last = deduped_segments[-1]
+        gap = seg['start'] - last['end']
+        same_speaker = seg['speaker'] == last['speaker']
+        same_text = seg['text'].lower().strip() == last['text'].lower().strip()
         
-        content += f"**[{ts}] {speaker}:** {text}\n\n"
+        if same_speaker and same_text and gap <= 2.0:
+            # Extend the previous segment's end time (collapse duplicate)
+            last['end'] = seg['end']
+        else:
+            deduped_segments.append(seg)
+    
+    # Third pass: merge consecutive same-speaker segments (different text, small gap)
+    merged_segments = []
+    for seg in deduped_segments:
+        if not merged_segments:
+            merged_segments.append(seg.copy())
+            continue
+        
+        last = merged_segments[-1]
+        gap = seg['start'] - last['end']
+        
+        if seg['speaker'] == last['speaker'] and gap <= 1.0:
+            # Merge: extend end time and append text
+            last['end'] = seg['end']
+            last['text'] = last['text'] + ' ' + seg['text']
+        else:
+            merged_segments.append(seg.copy())
+    
+    # Output merged segments
+    for seg in merged_segments:
+        ts = format_timestamp(seg['start'])
+        content += f"**[{ts}] {seg['speaker']}:** {seg['text']}\n\n"
     
     return content
 

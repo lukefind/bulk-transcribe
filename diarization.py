@@ -475,9 +475,28 @@ def merge_transcript_with_speakers(
             "text": text
         })
     
-    # Merge consecutive segments from same speaker if gap is small
-    merged = []
+    # First: dedupe consecutive identical segments (same speaker + same text within 2s)
+    # This handles Whisper hallucinations like repeated "Processing." at 1-second intervals
+    deduped = []
     for seg in assigned_segments:
+        if not deduped:
+            deduped.append(seg.copy())
+            continue
+        
+        last = deduped[-1]
+        gap = seg["start"] - last["end"]
+        same_speaker = seg["speaker"] == last["speaker"]
+        same_text = seg["text"].lower().strip() == last["text"].lower().strip()
+        
+        if same_speaker and same_text and gap <= 2.0:
+            # Extend the previous segment's end time (collapse duplicate)
+            last["end"] = seg["end"]
+        else:
+            deduped.append(seg.copy())
+    
+    # Second: merge consecutive segments from same speaker if gap is small
+    merged = []
+    for seg in deduped:
         if not merged:
             merged.append(seg.copy())
             continue
@@ -494,6 +513,8 @@ def merge_transcript_with_speakers(
     
     log_event('info', 'merge_finished', 
              numMergedSegments=len(merged),
+             numDedupedSegments=len(deduped),
+             numOriginalSegments=len(assigned_segments),
              **log_fields)
     
     return merged
