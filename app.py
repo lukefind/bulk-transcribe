@@ -2501,6 +2501,7 @@ def api_get_job(job_id):
         'updatedAt': manifest.get('updatedAt'),
         'startedAt': manifest.get('startedAt'),
         'finishedAt': manifest.get('finishedAt'),
+        'finished': manifest.get('finished', False),
         'status': manifest.get('status'),
         'backend': manifest.get('backend'),
         'executionMode': manifest.get('executionMode', 'local'),
