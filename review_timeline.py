@@ -331,6 +331,8 @@ class ReviewTimeline:
         before_count = len(self.chunks)
         
         if before_count <= 1:
+            # Set chunks_before_merge for consistency
+            self.chunks_before_merge = [c.to_dict() for c in self.chunks]
             self.postprocess_stats = {
                 'before': before_count,
                 'afterContainmentDrop': before_count,
@@ -501,6 +503,11 @@ class ReviewTimeline:
         
         self.chunks = merged_chunks
         
+        # Debug log
+        import logging
+        logging.info(f"postprocess_chunks: before={before_count}, afterContainment={after_containment}, afterMerge={len(merged_chunks)}, merged={merge_count}")
+        logging.info(f"postprocess_chunks: chunks_before_merge has {len(self.chunks_before_merge)} items")
+        
         self.postprocess_stats = {
             'before': before_count,
             'afterContainmentDrop': after_containment,
@@ -566,8 +573,17 @@ class TimelineParser:
         
         # chunks_raw = after containment drop, BEFORE merge (captured in postprocess_chunks)
         # chunks_merged = after merge (current state)
-        timeline.chunks_raw = getattr(timeline, 'chunks_before_merge', [c.to_dict() for c in timeline.chunks])
+        chunks_before = getattr(timeline, 'chunks_before_merge', None)
+        if chunks_before is not None:
+            timeline.chunks_raw = chunks_before
+        else:
+            # Fallback if chunks_before_merge wasn't set
+            timeline.chunks_raw = [c.to_dict() for c in timeline.chunks]
         timeline.chunks_merged = [c.to_dict() for c in timeline.chunks]
+        
+        # Debug log
+        import logging
+        logging.info(f"Timeline raw/merged: raw={len(timeline.chunks_raw)}, merged={len(timeline.chunks_merged)}, diff={len(timeline.chunks_raw) - len(timeline.chunks_merged)}")
         
         timeline.dedupe_stats = {
             'before': before_dedupe,
