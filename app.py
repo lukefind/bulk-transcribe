@@ -4665,7 +4665,7 @@ def _build_job_export_files(session_id: str, job_id: str, input_id: str = None) 
 
 @app.route('/api/session/export', methods=['POST'])
 def api_export_session():
-    """Export all jobs in the current session as a single zip."""
+    """Export all jobs in the current session as a single zip with full editor state."""
     session_id = g.session_id
     
     # Get all jobs for this session
@@ -4679,20 +4679,77 @@ def api_export_session():
     
     zip_buffer = io.BytesIO()
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    root_folder = f'session_export_{timestamp}'
+    
+    # Track summary stats
+    job_count = 0
+    files_total = 0
+    with_review_state = 0
+    failed_jobs = []
     
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        # Export session.json (session metadata)
+        session_meta = {
+            'sessionId': session_id,
+            'exportedAt': datetime.now(timezone.utc).isoformat(),
+            'version': '1.0',
+            'buildCommit': os.environ.get('BUILD_COMMIT', 'unknown'),
+        }
+        zf.writestr(f'{root_folder}/session.json', json.dumps(session_meta, indent=2).encode('utf-8'))
+        
         for job_id in job_ids:
+            job_folder = f'{root_folder}/jobs/{job_id}'
             try:
-                files, filename = _build_job_export_files(session_id, job_id)
-                safe_name = secure_filename(Path(filename).stem) or 'project'
-                folder_name = f'{job_id}__{safe_name}'
+                # Include raw job.json manifest
+                manifest_path = session_store.job_manifest_path(session_id, job_id)
+                manifest = session_store.read_json(manifest_path)
+                if manifest:
+                    zf.writestr(f'{job_folder}/job.json', json.dumps(manifest, indent=2).encode('utf-8'))
                 
-                for file_path, content in files.items():
-                    zf.writestr(f'session_export_{timestamp}/{folder_name}/{file_path}', content)
+                # Include review_state.json if exists
+                job_dir = session_store.job_dir(session_id, job_id)
+                state_path = os.path.join(job_dir, 'review', 'review_state.json')
+                review_state = session_store.read_json(state_path)
+                if review_state:
+                    zf.writestr(f'{job_folder}/review_state.json', json.dumps(review_state, indent=2).encode('utf-8'))
+                    with_review_state += 1
+                
+                # Include timeline.json if exists
+                timeline_path = os.path.join(job_dir, 'review', 'timeline.json')
+                if os.path.exists(timeline_path):
+                    with open(timeline_path, 'r', encoding='utf-8') as f:
+                        zf.writestr(f'{job_folder}/timeline.json', f.read().encode('utf-8'))
+                
+                # Include all outputs
+                outputs = manifest.get('outputs', []) if manifest else []
+                for output in outputs:
+                    output_path = output.get('path')
+                    output_filename = output.get('filename', '')
+                    if output_path and os.path.exists(output_path) and output_filename:
+                        try:
+                            with open(output_path, 'r', encoding='utf-8') as f:
+                                zf.writestr(f'{job_folder}/outputs/{output_filename}', f.read().encode('utf-8'))
+                                files_total += 1
+                        except Exception:
+                            pass
+                
+                job_count += 1
                     
             except Exception as e:
+                failed_jobs.append({'jobId': job_id, 'reason': str(e)[:200]})
                 error_content = f'Export failed: {str(e)[:200]}'
-                zf.writestr(f'session_export_{timestamp}/{job_id}__error/error.txt', error_content.encode('utf-8'))
+                zf.writestr(f'{job_folder}/error.txt', error_content.encode('utf-8'))
+        
+        # Write session summary at root
+        summary = {
+            'exportedAt': datetime.now(timezone.utc).isoformat(),
+            'sessionId': session_id,
+            'jobCount': job_count,
+            'filesTotal': files_total,
+            'withReviewState': with_review_state,
+            'failedJobs': failed_jobs,
+        }
+        zf.writestr(f'{root_folder}/session_summary.json', json.dumps(summary, indent=2).encode('utf-8'))
     
     zip_buffer.seek(0)
     
@@ -4704,6 +4761,149 @@ def api_export_session():
     )
 
 _CSRF_PROTECTED_ENDPOINTS.add('api_export_session')
+
+
+@app.route('/api/session/import', methods=['POST'])
+def api_import_session():
+    """
+    Import a session export zip, restoring all jobs with their editor state.
+    
+    Accepts multipart form with 'file' containing the session export zip.
+    Returns summary of imported jobs.
+    """
+    session_id = g.session_id
+    
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    
+    file = request.files['file']
+    if not file.filename:
+        return jsonify({'error': 'No file selected'}), 400
+    
+    MAX_SESSION_SIZE = 500 * 1024 * 1024  # 500MB limit
+    
+    # Read file into memory
+    file_content = file.read()
+    if len(file_content) > MAX_SESSION_SIZE:
+        return jsonify({'error': f'File too large (max {MAX_SESSION_SIZE // 1024 // 1024}MB)'}), 400
+    
+    imported = []
+    failed = []
+    
+    try:
+        with zipfile.ZipFile(io.BytesIO(file_content), 'r') as zf:
+            # Find the root folder (session_export_TIMESTAMP or similar)
+            namelist = zf.namelist()
+            if not namelist:
+                return jsonify({'error': 'Empty zip file'}), 400
+            
+            # Detect root folder
+            root_folder = None
+            for name in namelist:
+                parts = name.split('/')
+                if len(parts) >= 1 and parts[0]:
+                    root_folder = parts[0]
+                    break
+            
+            if not root_folder:
+                return jsonify({'error': 'Invalid session export structure'}), 400
+            
+            # Find all job folders
+            job_folders = set()
+            for name in namelist:
+                if name.startswith(f'{root_folder}/jobs/') and '/job.json' in name:
+                    # Extract job_id from path like "root/jobs/job_id/job.json"
+                    parts = name.split('/')
+                    if len(parts) >= 4:
+                        job_folders.add(parts[2])
+            
+            if not job_folders:
+                return jsonify({'error': 'No jobs found in session export'}), 400
+            
+            for orig_job_id in job_folders:
+                job_prefix = f'{root_folder}/jobs/{orig_job_id}/'
+                
+                try:
+                    # Read job.json
+                    job_json_path = f'{job_prefix}job.json'
+                    if job_json_path not in namelist:
+                        failed.append({'jobId': orig_job_id, 'reason': 'Missing job.json'})
+                        continue
+                    
+                    job_data = json.loads(zf.read(job_json_path).decode('utf-8'))
+                    
+                    # Check if job ID already exists - generate new one if so
+                    new_job_id = orig_job_id
+                    existing_manifest = session_store.job_manifest_path(session_id, orig_job_id)
+                    if os.path.exists(existing_manifest):
+                        new_job_id = str(uuid.uuid4())
+                        job_data['jobId'] = new_job_id
+                        job_data['importedFrom'] = orig_job_id
+                    
+                    # Create job directory
+                    job_dir = session_store.job_dir(session_id, new_job_id)
+                    os.makedirs(job_dir, exist_ok=True)
+                    os.makedirs(os.path.join(job_dir, 'review'), exist_ok=True)
+                    os.makedirs(os.path.join(job_dir, 'outputs'), exist_ok=True)
+                    
+                    # Update output paths in manifest to point to new location
+                    outputs = job_data.get('outputs', [])
+                    for output in outputs:
+                        old_path = output.get('path', '')
+                        filename = output.get('filename', '')
+                        if filename:
+                            new_path = os.path.join(job_dir, 'outputs', filename)
+                            output['path'] = new_path
+                    
+                    # Write job manifest
+                    manifest_path = session_store.job_manifest_path(session_id, new_job_id)
+                    session_store.write_json(manifest_path, job_data)
+                    
+                    # Restore review_state.json if present
+                    review_state_path = f'{job_prefix}review_state.json'
+                    if review_state_path in namelist:
+                        review_state = json.loads(zf.read(review_state_path).decode('utf-8'))
+                        state_dest = os.path.join(job_dir, 'review', 'review_state.json')
+                        session_store.write_json(state_dest, review_state)
+                    
+                    # Restore timeline.json if present
+                    timeline_path = f'{job_prefix}timeline.json'
+                    if timeline_path in namelist:
+                        timeline_content = zf.read(timeline_path).decode('utf-8')
+                        timeline_dest = os.path.join(job_dir, 'review', 'timeline.json')
+                        with open(timeline_dest, 'w', encoding='utf-8') as f:
+                            f.write(timeline_content)
+                    
+                    # Restore outputs
+                    for name in namelist:
+                        if name.startswith(f'{job_prefix}outputs/') and not name.endswith('/'):
+                            filename = name.split('/')[-1]
+                            if filename:
+                                output_dest = os.path.join(job_dir, 'outputs', filename)
+                                with open(output_dest, 'wb') as f:
+                                    f.write(zf.read(name))
+                    
+                    imported.append({
+                        'originalJobId': orig_job_id,
+                        'newJobId': new_job_id,
+                        'remapped': new_job_id != orig_job_id
+                    })
+                    
+                except Exception as e:
+                    failed.append({'jobId': orig_job_id, 'reason': str(e)[:200]})
+    
+    except zipfile.BadZipFile:
+        return jsonify({'error': 'Invalid zip file'}), 400
+    except Exception as e:
+        return jsonify({'error': f'Import failed: {str(e)[:200]}'}), 500
+    
+    return jsonify({
+        'imported': len(imported),
+        'importedJobs': imported,
+        'failed': failed
+    })
+
+_CSRF_PROTECTED_ENDPOINTS.add('api_import_session')
 
 
 @app.route('/api/jobs/bulk-export', methods=['POST'])

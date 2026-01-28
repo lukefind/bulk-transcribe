@@ -65,3 +65,35 @@ From Review:
 - Use **Fixed speakers** for known counts (e.g., 3 for 1 adult + 2 kids)
 - Use **Fast Switching** only when needed — it is slower
 - Keep chunk durations short if diarization misses rapid turn‑taking
+
+---
+
+## Export / Import Sessions
+
+### Export Session
+
+Export all jobs in your current session as a single zip archive:
+
+1. Click **Export Session** in the Recent Jobs header
+2. The zip contains:
+   - `session.json` — session metadata
+   - `session_summary.json` — stats (job count, files, review state count)
+   - `jobs/<job_id>/` — per-job folders with:
+     - `job.json` — full job manifest
+     - `review_state.json` — speaker labels, colors, merges, edits
+     - `timeline.json` — parsed timeline with edits applied
+     - `outputs/` — all output files (JSON, Markdown, etc.)
+
+### Import Session
+
+Restore a previously exported session:
+
+1. Click **Import Session** in the Recent Jobs header
+2. Select a session export zip
+3. Jobs are restored with all editor state (speaker labels, colors, edits)
+4. If a job ID already exists, a new ID is generated automatically
+
+**Use cases:**
+- Backup/restore work across machines
+- Share review progress with collaborators
+- Archive completed sessions

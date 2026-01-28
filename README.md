@@ -63,6 +63,18 @@ The review interface supports:
 - **Word (.docx)** — timestamped transcript (requires `python-docx`)
 - **PDF (.pdf)** — timestamped transcript (requires `reportlab`)
 
+### Session Export/Import
+
+Export your entire session (all jobs with editor state) as a zip:
+- Click **Export Session** in Recent Jobs header
+- Includes job manifests, review state, timelines, and outputs
+
+Import a session export to restore all jobs:
+- Click **Import Session** and select a session zip
+- All editor state (speaker labels, colors, edits) is preserved
+
+See [Review Workflow](docs/REVIEW_WORKFLOW.md) for details.
+
 ## Privacy & Security
 
 - **Local by default** — no cloud APIs

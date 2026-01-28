@@ -446,6 +446,10 @@
                             </label>
                             <button type="button" id="bulkExportHeaderBtn" onclick="bulkExportSelectedJobs()" disabled class="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed">Bulk Export (select)</button>
                             <button type="button" onclick="exportSession()" class="text-xs text-gray-400 hover:text-gray-300">Export Session</button>
+                            <label class="text-xs text-gray-400 hover:text-gray-300 cursor-pointer">
+                                Import Session
+                                <input type="file" accept=".zip" class="hidden" onchange="importSession(this.files[0]); this.value='';">
+                            </label>
                             <span class="text-gray-600">|</span>
                             <select id="finishedFilterSelect" onchange="onFinishedFilterChange()" class="text-xs bg-surface-700 border border-gray-600/50 rounded px-1.5 py-0.5 text-gray-300">
                                 <option value="all">All</option>
@@ -2875,6 +2879,50 @@
                 URL.revokeObjectURL(url);
             } catch (e) {
                 showError(`Session export failed: ${e.message}`);
+            }
+        }
+        
+        async function importSession(file) {
+            if (!file) return;
+            
+            if (!confirm(`Import session from "${file.name}"? This will add jobs to your current session.`)) return;
+            
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                const headers = {};
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch('/api/session/import', {
+                    method: 'POST',
+                    headers,
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    showError(data.error || 'Session import failed');
+                    return;
+                }
+                
+                // Show summary
+                let msg = `Imported ${data.imported} job(s).`;
+                if (data.failed && data.failed.length > 0) {
+                    msg += ` ${data.failed.length} failed.`;
+                }
+                if (data.importedJobs && data.importedJobs.some(j => j.remapped)) {
+                    const remapped = data.importedJobs.filter(j => j.remapped).length;
+                    msg += ` (${remapped} remapped due to ID conflicts)`;
+                }
+                alert(msg);
+                
+                // Refresh job list
+                loadJobHistoryAndRestore();
+                
+            } catch (e) {
+                showError(`Session import failed: ${e.message}`);
             }
         }
         
