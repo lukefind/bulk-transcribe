@@ -242,16 +242,52 @@
             border-color: rgba(99, 102, 241, 0.4);
         }
         :root.theme-light .job-card-row {
-            background-color: rgba(241, 245, 249, 0.5);
-            border-color: rgba(203, 213, 225, 0.5);
+            background-color: #ffffff;
+            border-color: #e2e8f0;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
         }
         :root.theme-light .job-card-row:hover {
-            background-color: rgba(241, 245, 249, 0.8);
-            border-color: rgba(99, 102, 241, 0.3);
+            background-color: #f8fafc;
+            border-color: #6366f1;
+            box-shadow: 0 2px 4px rgba(99, 102, 241, 0.1);
         }
         :root.theme-light .job-card-row.selected {
-            background-color: rgba(99, 102, 241, 0.08);
-            border-color: rgba(99, 102, 241, 0.4);
+            background-color: #eef2ff;
+            border-color: #6366f1;
+        }
+        /* Light mode: job row text contrast */
+        :root.theme-light .job-card-row .text-gray-200 {
+            color: #1e293b !important;
+        }
+        :root.theme-light .job-card-row .text-gray-300 {
+            color: #334155 !important;
+        }
+        :root.theme-light .job-card-row .text-gray-400 {
+            color: #475569 !important;
+        }
+        :root.theme-light .job-card-row .text-gray-500 {
+            color: #64748b !important;
+        }
+        /* Light mode: action buttons (distinct from tags) */
+        :root.theme-light .job-card-row .bg-surface-600\/60 {
+            background-color: #f1f5f9 !important;
+            border-color: #cbd5e1 !important;
+        }
+        :root.theme-light .job-card-row .bg-surface-600\/60:hover {
+            background-color: #e2e8f0 !important;
+        }
+        /* Light mode: Done button states */
+        :root.theme-light .job-card-row .bg-green-600 {
+            background-color: #16a34a !important;
+        }
+        :root.theme-light .job-card-row .bg-green-600:hover {
+            background-color: #15803d !important;
+        }
+        /* Light mode: tags (pills) - more muted than buttons */
+        :root.theme-light .job-card-row .bg-surface-700\/60,
+        :root.theme-light .job-card-row .bg-surface-700\/40 {
+            background-color: #f1f5f9 !important;
+            color: #64748b !important;
         }
         
         /* Light mode: cancel buttons */
@@ -1149,28 +1185,57 @@
         
         <!-- Speaker Label Editor Modal -->
         <div id="speakerEditorModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
-            <div class="bg-surface-800 border border-gray-700 rounded-2xl p-6 max-w-md w-full max-h-[80vh] overflow-y-auto">
+            <div class="bg-surface-800 border border-gray-700 rounded-2xl p-6 max-w-lg w-full max-h-[80vh] overflow-y-auto">
                 <div class="flex items-center justify-between mb-4">
-                    <h3 class="text-lg font-semibold text-white">Edit Speaker Labels</h3>
+                    <h3 class="text-lg font-semibold text-white">Edit Speakers</h3>
                     <button onclick="closeSpeakerEditor()" class="text-gray-400 hover:text-white">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
                         </svg>
                     </button>
                 </div>
-                <p class="text-sm text-gray-400 mb-4">Rename speakers to make the transcript easier to read.</p>
-                <div id="speakerLabelsList" class="space-y-3 mb-4">
-                    <p class="text-gray-500 text-sm italic">Loading speakers...</p>
+                
+                <!-- Labels Section -->
+                <div class="mb-6">
+                    <h4 class="text-sm font-medium text-gray-300 mb-2">Rename Speakers</h4>
+                    <p class="text-xs text-gray-500 mb-3">Give speakers meaningful names.</p>
+                    <div id="speakerLabelsList" class="space-y-2 mb-3">
+                        <p class="text-gray-500 text-sm italic">Loading speakers...</p>
+                    </div>
+                    <div class="flex gap-2">
+                        <button onclick="resetSpeakerLabels()" class="px-3 py-1.5 bg-surface-700 hover:bg-surface-600 text-gray-300 rounded-lg text-xs">
+                            Reset
+                        </button>
+                        <button onclick="saveSpeakerLabels()" class="flex-1 px-3 py-1.5 bg-primary-600 hover:bg-primary-500 text-white rounded-lg text-xs">
+                            Apply Labels
+                        </button>
+                    </div>
                 </div>
-                <div id="speakerEditorError" class="text-red-400 text-sm mb-3 hidden"></div>
-                <div class="flex gap-2">
-                    <button onclick="resetSpeakerLabels()" class="px-4 py-2 bg-surface-700 hover:bg-surface-600 text-gray-300 rounded-lg text-sm">
-                        Reset
-                    </button>
-                    <button onclick="saveSpeakerLabels()" class="flex-1 px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg text-sm">
-                        Apply Labels
-                    </button>
+                
+                <!-- Merge Section -->
+                <div class="border-t border-gray-700 pt-4">
+                    <h4 class="text-sm font-medium text-gray-300 mb-2">Merge Speakers</h4>
+                    <p class="text-xs text-gray-500 mb-3">Combine two speakers that are the same person.</p>
+                    <div id="mergeSpeakersSection" class="space-y-3">
+                        <div class="flex items-center gap-2">
+                            <label class="text-xs text-gray-400 w-16">Merge:</label>
+                            <select id="mergeSourceSpeaker" class="flex-1 px-2 py-1.5 bg-surface-700 border border-gray-600 rounded-lg text-white text-sm">
+                                <option value="">Select speaker to remove...</option>
+                            </select>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <label class="text-xs text-gray-400 w-16">Into:</label>
+                            <select id="mergeTargetSpeaker" class="flex-1 px-2 py-1.5 bg-surface-700 border border-gray-600 rounded-lg text-white text-sm">
+                                <option value="">Select speaker to keep...</option>
+                            </select>
+                        </div>
+                        <button onclick="mergeSpeakers()" class="w-full px-3 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed" id="mergeSpeakersBtn">
+                            Merge Speakers
+                        </button>
+                    </div>
                 </div>
+                
+                <div id="speakerEditorError" class="text-red-400 text-sm mt-3 hidden"></div>
             </div>
         </div>
         
@@ -6699,6 +6764,9 @@
                 `;
                 list.appendChild(div);
             }
+            
+            // Populate merge dropdowns
+            populateMergeSpeakerDropdowns();
         }
         
         function closeSpeakerEditor() {
@@ -6728,6 +6796,108 @@
         function resetSpeakerLabels() {
             const inputs = document.querySelectorAll('#speakerLabelsList input[data-speaker-id]');
             inputs.forEach(input => input.value = '');
+        }
+        
+        function populateMergeSpeakerDropdowns() {
+            const sourceSelect = document.getElementById('mergeSourceSpeaker');
+            const targetSelect = document.getElementById('mergeTargetSpeaker');
+            
+            if (!sourceSelect || !targetSelect || !reviewTimeline?.speakers) return;
+            
+            // Clear existing options
+            sourceSelect.innerHTML = '<option value="">Select speaker to remove...</option>';
+            targetSelect.innerHTML = '<option value="">Select speaker to keep...</option>';
+            
+            // Add speaker options
+            for (const speaker of reviewTimeline.speakers) {
+                const label = getSpeakerDisplayLabel(speaker);
+                const optionHtml = `<option value="${speaker.id}">${label} (${speaker.id})</option>`;
+                sourceSelect.innerHTML += optionHtml;
+                targetSelect.innerHTML += optionHtml;
+            }
+        }
+        
+        async function mergeSpeakers() {
+            const sourceId = document.getElementById('mergeSourceSpeaker').value;
+            const targetId = document.getElementById('mergeTargetSpeaker').value;
+            const errorEl = document.getElementById('speakerEditorError');
+            
+            // Validation
+            if (!sourceId || !targetId) {
+                errorEl.textContent = 'Please select both speakers.';
+                errorEl.classList.remove('hidden');
+                return;
+            }
+            
+            if (sourceId === targetId) {
+                errorEl.textContent = 'Cannot merge a speaker into itself.';
+                errorEl.classList.remove('hidden');
+                return;
+            }
+            
+            errorEl.classList.add('hidden');
+            
+            const sourceSpeaker = reviewTimeline.speakers.find(s => s.id === sourceId);
+            const targetSpeaker = reviewTimeline.speakers.find(s => s.id === targetId);
+            
+            if (!sourceSpeaker || !targetSpeaker) {
+                errorEl.textContent = 'Speaker not found.';
+                errorEl.classList.remove('hidden');
+                return;
+            }
+            
+            const sourceLabel = getSpeakerDisplayLabel(sourceSpeaker);
+            const targetLabel = getSpeakerDisplayLabel(targetSpeaker);
+            
+            // Count affected chunks
+            const affectedChunks = reviewTimeline.chunks.filter(c => c.speaker_id === sourceId);
+            
+            if (!confirm(`Merge "${sourceLabel}" into "${targetLabel}"?\n\nThis will reassign ${affectedChunks.length} chunk(s) and remove "${sourceLabel}" from the speaker list.`)) {
+                return;
+            }
+            
+            // Perform merge
+            // 1. Reassign all chunks from source to target
+            for (const chunk of reviewTimeline.chunks) {
+                if (chunk.speaker_id === sourceId) {
+                    chunk.speaker_id = targetId;
+                }
+            }
+            
+            // 2. Remove source speaker from list
+            reviewTimeline.speakers = reviewTimeline.speakers.filter(s => s.id !== sourceId);
+            
+            // 3. Clean up state maps
+            if (reviewState.speakerLabelMap?.[sourceId]) {
+                delete reviewState.speakerLabelMap[sourceId];
+            }
+            if (reviewState.speakerColorMap?.[sourceId]) {
+                delete reviewState.speakerColorMap[sourceId];
+            }
+            
+            // 4. Track merge in state for persistence
+            if (!reviewState.speakerMerges) reviewState.speakerMerges = [];
+            reviewState.speakerMerges.push({
+                sourceId,
+                targetId,
+                sourceLabel,
+                targetLabel,
+                chunksReassigned: affectedChunks.length,
+                mergedAt: new Date().toISOString()
+            });
+            
+            // 5. Mark as unsaved and persist
+            markUnsaved();
+            await saveReviewState();
+            
+            // 6. Re-render everything
+            renderTimeline();
+            renderSpeakerLegend();
+            
+            // 7. Refresh the speaker editor
+            openSpeakerEditor();
+            
+            console.log(`Merged speaker ${sourceId} into ${targetId}, reassigned ${affectedChunks.length} chunks`);
         }
     </script>
     
