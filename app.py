@@ -2424,6 +2424,56 @@ def _run_remote_session_job(session_id: str, job_id: str, inputs: list, options:
                 _active_jobs[(session_id, job_id)]['running'] = False
 
 
+def _repair_output_ids(outputs: list, inputs: list) -> list:
+    """
+    Repair outputs missing forUploadId by matching filename patterns.
+    
+    Output filenames are typically: <input_basename>_suffix.ext
+    e.g., Call_27-05-2025_transcript.json from Call_27-05-2025.m4a
+    """
+    import re
+    
+    if not outputs or not inputs:
+        return outputs
+    
+    # Build lookup: input basename -> uploadId
+    input_lookup = {}
+    for inp in inputs:
+        original = inp.get('originalFilename') or inp.get('filename') or ''
+        if original:
+            basename = os.path.splitext(original)[0]
+            input_lookup[basename.lower()] = inp.get('uploadId')
+    
+    repaired = []
+    for output in outputs:
+        out = dict(output)  # Copy to avoid mutating original
+        
+        # Already has forUploadId or inputId - use it
+        existing_id = out.get('forUploadId') or out.get('inputId')
+        if existing_id:
+            out['forUploadId'] = existing_id
+            repaired.append(out)
+            continue
+        
+        # Try to match by filename pattern
+        out_filename = out.get('filename') or ''
+        if out_filename:
+            # Strip common suffixes to get base name
+            # Patterns: _transcript.json, _diarization.json, _speaker.md, .md, .json, .rttm
+            base = re.sub(r'(_transcript|_diarization|_speaker|\.speaker)?(\.(json|md|rttm))$', '', out_filename, flags=re.IGNORECASE)
+            # Also strip upload ID suffix if present (e.g., _abc123)
+            base = re.sub(r'_[a-zA-Z0-9]{6}$', '', base)
+            
+            # Look up in inputs
+            matched_id = input_lookup.get(base.lower())
+            if matched_id:
+                out['forUploadId'] = matched_id
+        
+        repaired.append(out)
+    
+    return repaired
+
+
 @app.route('/api/jobs/<job_id>', methods=['GET'])
 def api_get_job(job_id):
     """Get job status and details."""
@@ -2439,6 +2489,11 @@ def api_get_job(job_id):
         session_store.mark_job_stale(session_id, job_id)
         manifest = session_store.read_json(manifest_path)
     
+    # Repair outputs missing forUploadId using filename matching
+    raw_outputs = manifest.get('outputs', [])
+    raw_inputs = manifest.get('inputs', [])
+    repaired_outputs = _repair_output_ids(raw_outputs, raw_inputs)
+    
     # Don't expose internal paths
     safe_manifest = {
         'jobId': manifest.get('jobId'),
@@ -2452,7 +2507,7 @@ def api_get_job(job_id):
         'environment': manifest.get('environment'),
         'options': manifest.get('options'),
         'inputs': [{'uploadId': i.get('uploadId'), 'filename': i.get('originalFilename'), 'durationSec': i.get('durationSec')} for i in manifest.get('inputs', [])],
-        'outputs': [{'id': o.get('id'), 'forUploadId': o.get('forUploadId'), 'filename': o.get('filename'), 'type': o.get('type'), 'sizeBytes': o.get('sizeBytes'), 'error': o.get('error')} for o in manifest.get('outputs', [])],
+        'outputs': [{'id': o.get('id'), 'forUploadId': o.get('forUploadId'), 'filename': o.get('filename'), 'type': o.get('type'), 'sizeBytes': o.get('sizeBytes'), 'error': o.get('error')} for o in repaired_outputs],
         'progress': manifest.get('progress'),
         'error': manifest.get('error')
     }
@@ -5201,12 +5256,20 @@ def api_worker_upload_output(job_id):
     file.save(output_path)
     
     # Register output in manifest
+    # Find the original filename for this input
+    input_filename = None
+    for inp in manifest.get('inputs', []):
+        if inp.get('uploadId') == input_id:
+            input_filename = inp.get('originalFilename')
+            break
+    
     output_entry = {
         'id': session_store.new_id(8),
         'filename': safe_filename,
         'path': output_path,
         'type': output_type,
-        'inputId': input_id,
+        'forUploadId': input_id,  # Use forUploadId for consistency with local pipeline
+        'inputFilename': input_filename,
         'sizeBytes': os.path.getsize(output_path),
         'fromWorker': True,
         'workerJobId': worker_job_id
