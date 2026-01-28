@@ -2165,17 +2165,9 @@
             filteredJobs.slice(0, 10).forEach(job => {
                 const div = document.createElement('div');
                 const isSelected = selectedJobIds.has(job.jobId);
-                div.className = `job-card-row group${isSelected ? ' selected' : ''}`;
+                div.className = `job-card-row group cursor-pointer${isSelected ? ' selected' : ''}`;
                 div.dataset.jobId = job.jobId;
                 
-                const statusColors = {
-                    'complete': 'text-green-400',
-                    'complete_with_errors': 'text-amber-400',
-                    'running': 'text-yellow-400',
-                    'failed': 'text-red-400',
-                    'canceled': 'text-gray-400',
-                    'queued': 'text-blue-400'
-                };
                 const statusBgColors = {
                     'complete': 'bg-green-400',
                     'complete_with_errors': 'bg-amber-400',
@@ -2184,7 +2176,6 @@
                     'canceled': 'bg-gray-400',
                     'queued': 'bg-blue-400'
                 };
-                const statusColor = statusColors[job.status] || 'text-gray-400';
                 const statusBg = statusBgColors[job.status] || 'bg-gray-400';
                 const isRunning = job.status === 'running' || job.status === 'queued';
                 const isReviewable = job.reviewable && !isRunning;
@@ -2197,76 +2188,84 @@
                 }
                 const elapsed = formatDuration(job.elapsedSeconds);
                 const audioDuration = formatDuration(job.primaryDurationSec);
-                const execLabel = job.executionMode === 'remote' ? 'remote' : 'local';
+                const execLabel = job.executionMode === 'remote' ? 'GPU' : 'local';
                 const modelLabel = job.model ? `${job.model}` : '';
-                const backendLabel = job.backend ? `${job.backend}` : '';
+                
+                // Click row to open review (for reviewable jobs) or load job details
+                const rowClickAction = isReviewable ? `openReviewLatestForJob('${job.jobId}')` : `loadJob('${job.jobId}')`;
                 
                 div.innerHTML = `
-                    <!-- Row 1: Filename + Status/Actions -->
-                    <div class="flex items-center justify-between mb-2">
-                        <div class="flex items-center gap-3 cursor-pointer flex-1 min-w-0" onclick="loadJob('${job.jobId}')">
+                    <!-- Row 1: Checkbox + Status dot + Filename + Arrow hint -->
+                    <div class="flex items-center gap-3 mb-1.5" onclick="${rowClickAction}">
+                        ${!isRunning ? `
+                            <input type="checkbox" class="job-select-checkbox w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 cursor-pointer flex-shrink-0"
+                                   data-job-id="${job.jobId}"
+                                   ${isSelected ? 'checked' : ''}
+                                   onclick="event.stopPropagation(); toggleJobSelection('${job.jobId}', this.checked)"
+                                   title="Select for batch actions">
+                        ` : '<span class="w-4"></span>'}
+                        <span class="w-2 h-2 rounded-full ${statusBg} ${isRunning ? 'animate-pulse' : ''} flex-shrink-0"></span>
+                        <span class="font-medium text-gray-200 truncate flex-1" title="${escapeHtml(primaryFilename)}">${escapeHtml(primaryFilename)}</span>
+                        <!-- Arrow hint on hover -->
+                        <svg class="w-4 h-4 text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                    </div>
+                    <!-- Row 2: Metadata + Actions -->
+                    <div class="flex items-center gap-2 text-xs text-gray-500 pl-7">
+                        <span class="truncate">${date}</span>
+                        ${audioDuration ? `<span class="hidden sm:inline">• ${audioDuration}</span>` : ''}
+                        ${elapsed ? `<span class="hidden sm:inline">• ${elapsed}</span>` : ''}
+                        
+                        <!-- Spacer -->
+                        <div class="flex-1"></div>
+                        
+                        <!-- Action buttons cluster -->
+                        <div class="flex items-center gap-1.5" onclick="event.stopPropagation()">
+                            <!-- Mark Done toggle - always visible, distinct style -->
+                            <button onclick="toggleJobFinished('${job.jobId}', ${!job.finished})" 
+                                    class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all ${job.finished 
+                                        ? 'bg-green-600 text-white hover:bg-green-700' 
+                                        : 'bg-surface-600/60 text-gray-300 hover:bg-surface-500 border border-gray-600/50'}"
+                                    title="${job.finished ? 'Mark as not done' : 'Mark as done'}">
+                                ${job.finished 
+                                    ? '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>' 
+                                    : '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>'}
+                                ${job.finished ? 'Done' : 'Done'}
+                            </button>
+                            
                             ${!isRunning ? `
-                                <input type="checkbox" class="job-select-checkbox w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 cursor-pointer flex-shrink-0"
-                                       data-job-id="${job.jobId}"
-                                       ${isSelected ? 'checked' : ''}
-                                       onclick="event.stopPropagation(); toggleJobSelection('${job.jobId}', this.checked)"
-                                       title="Select for batch actions">
-                            ` : '<span class="w-4"></span>'}
-                            <span class="w-2 h-2 rounded-full ${statusBg} ${isRunning ? 'animate-pulse' : ''} flex-shrink-0"></span>
-                            <span class="font-medium text-gray-200 truncate" title="${escapeHtml(primaryFilename)}">${escapeHtml(primaryFilename)}</span>
-                        </div>
-                        <div class="flex items-center gap-2 flex-shrink-0 ml-3">
-                            <span class="text-xs ${statusColor} font-medium">${job.status.replace('_', ' ')}</span>
-                            ${isReviewable ? `
-                                <button onclick="event.stopPropagation(); openReviewLatestForJob('${job.jobId}')" 
-                                        class="px-2.5 py-1 text-xs bg-primary-600/60 hover:bg-primary-600 text-primary-100 rounded transition-all font-medium"
-                                        title="Review latest completed file">
-                                    Review
-                                </button>
+                                <!-- Files button for batch jobs -->
                                 ${job.inputCount > 1 ? `
-                                    <button onclick="event.stopPropagation(); openJobFilesModal('${job.jobId}')" 
-                                            class="px-2.5 py-1 text-xs bg-surface-600/50 hover:bg-surface-600 text-gray-300 rounded transition-all"
-                                            title="View files in this batch">
-                                        Files
+                                    <button onclick="openJobFilesModal('${job.jobId}')" 
+                                            class="px-2 py-1 text-xs bg-surface-600/60 hover:bg-surface-500 text-gray-300 rounded-md transition-all border border-gray-600/50"
+                                            title="View ${job.inputCount} files in batch">
+                                        ${job.inputCount} files
                                     </button>
                                 ` : ''}
-                            ` : ''}
-                            ${!isRunning ? `
-                                <button onclick="event.stopPropagation(); rerunJob('${job.jobId}')" 
-                                        class="px-2 py-1 text-xs bg-surface-600/50 hover:bg-surface-600 text-gray-300 rounded transition-all"
+                                
+                                <!-- Secondary actions (show on hover) -->
+                                <button onclick="rerunJob('${job.jobId}')" 
+                                        class="opacity-0 group-hover:opacity-100 px-2 py-1 text-xs bg-surface-600/60 hover:bg-surface-500 text-gray-300 rounded-md transition-all"
                                         title="Re-run this job">
-                                    Re-run
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                    </svg>
                                 </button>
-                                <button onclick="event.stopPropagation(); downloadAllFormats('${job.jobId}')" 
-                                        class="opacity-0 group-hover:opacity-100 px-2 py-1 text-xs bg-surface-600/50 hover:bg-surface-600 text-gray-300 rounded transition-all"
-                                        title="Download all formats (zip)">
-                                    All
-                                </button>
-                                <button onclick="event.stopPropagation(); deleteJob('${job.jobId}')" 
-                                        class="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 transition-all"
+                                <button onclick="deleteJob('${job.jobId}')" 
+                                        class="opacity-0 group-hover:opacity-100 px-1.5 py-1 text-gray-500 hover:text-red-400 rounded transition-all"
                                         title="Delete job">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
                                     </svg>
                                 </button>
                             ` : ''}
                         </div>
-                    </div>
-                    <!-- Row 2: Metadata -->
-                    <div class="flex items-center gap-3 text-xs text-gray-500 pl-7">
-                        <span>${date}</span>
-                        ${audioDuration ? `<span>• ${audioDuration} audio</span>` : ''}
-                        ${elapsed ? `<span>• took ${elapsed}</span>` : ''}
-                        <div class="flex items-center gap-1.5 ml-auto">
-                            <button onclick="event.stopPropagation(); toggleJobFinished('${job.jobId}', ${!job.finished})" 
-                                    class="flex items-center gap-1 px-2 py-0.5 rounded-md border ${job.finished ? 'border-green-500/50 bg-green-600/20 text-green-300 hover:bg-green-600/30' : 'border-gray-500/30 bg-surface-700/40 text-gray-400 hover:bg-surface-600 hover:text-gray-200'} text-[10px] transition-all"
-                                    title="${job.finished ? 'Mark as unfinished' : 'Mark as finished'}">
-                                ${job.finished ? '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> Done' : '☐ Mark Done'}
-                            </button>
-                            ${modelLabel ? `<span class="px-1.5 py-0.5 rounded bg-surface-700/60 text-gray-400 text-[10px] uppercase">${escapeHtml(modelLabel)}</span>` : ''}
-                            ${backendLabel ? `<span class="px-1.5 py-0.5 rounded bg-surface-700/60 text-gray-400 text-[10px] uppercase">${escapeHtml(backendLabel)}</span>` : ''}
-                            <span class="px-1.5 py-0.5 rounded bg-surface-700/40 text-gray-400 text-[10px] uppercase">${execLabel}</span>
-                            ${job.diarizationEnabled ? '<span class="px-1.5 py-0.5 rounded bg-surface-700/40 text-gray-400 text-[10px] uppercase">diarization</span>' : ''}
+                        
+                        <!-- Tags (model, exec mode) -->
+                        <div class="hidden sm:flex items-center gap-1">
+                            ${modelLabel ? `<span class="px-1.5 py-0.5 rounded bg-surface-700/60 text-gray-500 text-[10px] uppercase">${escapeHtml(modelLabel)}</span>` : ''}
+                            <span class="px-1.5 py-0.5 rounded bg-surface-700/40 text-gray-500 text-[10px] uppercase">${execLabel}</span>
                         </div>
                     </div>
                 `;
