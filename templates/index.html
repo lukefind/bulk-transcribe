@@ -7655,31 +7655,36 @@
         function exportReviewMd() {
             if (!reviewJobData?.jobId) return;
             const inputId = reviewSelectedInputId || '';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-md?inputId=${inputId}`;
+            const viewMode = reviewChunkViewMode || 'merged';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-md?inputId=${inputId}&viewMode=${viewMode}`;
         }
         
         function exportReviewTxt() {
             if (!reviewJobData?.jobId) return;
             const inputId = reviewSelectedInputId || '';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-txt?inputId=${inputId}`;
+            const viewMode = reviewChunkViewMode || 'merged';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-txt?inputId=${inputId}&viewMode=${viewMode}`;
         }
         
         function exportReviewJson() {
             if (!reviewJobData?.jobId) return;
             const inputId = reviewSelectedInputId || '';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-timeline-json?inputId=${inputId}`;
+            const viewMode = reviewChunkViewMode || 'merged';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-timeline-json?inputId=${inputId}&viewMode=${viewMode}`;
         }
         
         function exportReviewDocx() {
             if (!reviewJobData?.jobId) return;
             const inputId = reviewSelectedInputId || '';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-docx?inputId=${inputId}`;
+            const viewMode = reviewChunkViewMode || 'merged';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-docx?inputId=${inputId}&viewMode=${viewMode}`;
         }
         
         function exportReviewPdf() {
             if (!reviewJobData?.jobId) return;
             const inputId = reviewSelectedInputId || '';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-pdf?inputId=${inputId}`;
+            const viewMode = reviewChunkViewMode || 'merged';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-pdf?inputId=${inputId}&viewMode=${viewMode}`;
         }
         
         // Keyboard shortcuts

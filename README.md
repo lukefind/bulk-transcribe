@@ -16,6 +16,8 @@ Local-first transcription with a review workflow built for 100% accuracy. Bulk T
 - **Exports**: Project archive (.btproj), Markdown, JSON timeline, Word (DOCX), PDF
 - **Bulk ops**: bulk export/import, re-run selected jobs, clear duplicates
 - **Session sharing**: share a session by token (read-only or full-edit)
+- **Audio hygiene**: optional Silero VAD pre-filter and hallucination detection (flag-only)
+- **Audio hygiene**: optional Silero VAD pre-filter and hallucination detection (flag-only)
 
 ## Quick Start (Local)
 
@@ -69,8 +71,7 @@ The review interface supports:
 Export your entire session (all jobs with editor state) as a zip:
 - Click **Export Session** in Recent Jobs header
 - Includes job manifests, review state, timelines, and outputs
-
-Export runs in the background with a progress modal and a download link.
+- Export runs in the background with a progress modal and a download link
 
 Import a session export to restore all jobs:
 - Click **Import Session** and select a session zip

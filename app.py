@@ -4356,8 +4356,9 @@ def api_export_review_md(job_id):
     filename = target_input.get('originalFilename', target_input.get('filename', 'unknown'))
     safe_name = secure_filename(Path(filename).stem) or 'transcript'
     
-    # Build timeline with review state
-    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest)
+    # Build timeline with review state (respect view mode)
+    view_mode = request.args.get('viewMode', 'merged')
+    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
     
     # Format as markdown
     lines = []
@@ -4402,8 +4403,9 @@ def api_export_review_txt(job_id):
     filename = target_input.get('originalFilename', target_input.get('filename', 'unknown'))
     safe_name = secure_filename(Path(filename).stem) or 'transcript'
     
-    # Build timeline with review state
-    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest)
+    # Build timeline with review state (respect view mode)
+    view_mode = request.args.get('viewMode', 'merged')
+    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
     
     # Format as plain text
     lines = []
@@ -4443,8 +4445,9 @@ def api_export_review_timeline_json(job_id):
     filename = target_input.get('originalFilename', target_input.get('filename', 'unknown'))
     safe_name = secure_filename(Path(filename).stem) or 'transcript'
     
-    # Build timeline with review state
-    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest)
+    # Build timeline with review state (respect view mode)
+    view_mode = request.args.get('viewMode', 'merged')
+    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
     
     content = timeline.to_json()
     
@@ -4455,8 +4458,12 @@ def api_export_review_timeline_json(job_id):
     )
 
 
-def _build_review_timeline(session_id: str, job_id: str, input_id: str, filename: str, manifest: dict):
-    """Build timeline with review state applied. Returns (timeline, review_state)."""
+def _build_review_timeline(session_id: str, job_id: str, input_id: str, filename: str, manifest: dict, view_mode: str = 'merged'):
+    """Build timeline with review state applied. Returns (timeline, review_state).
+    
+    Args:
+        view_mode: 'merged' (default) or 'raw' - controls which chunk view to use for export
+    """
     from review_timeline import TimelineParser, apply_review_state
     
     outputs = manifest.get('outputs', [])
@@ -4505,6 +4512,12 @@ def _build_review_timeline(session_id: str, job_id: str, input_id: str, filename
     if review_state:
         timeline = apply_review_state(timeline, review_state)
     
+    # Apply view mode: use raw or merged chunks
+    if view_mode == 'raw' and hasattr(timeline, 'chunks_raw') and timeline.chunks_raw:
+        timeline.chunks = timeline.chunks_raw
+    elif hasattr(timeline, 'chunks_merged') and timeline.chunks_merged:
+        timeline.chunks = timeline.chunks_merged
+    
     return timeline, review_state
 
 
@@ -4551,8 +4564,9 @@ def api_export_review_docx(job_id):
         filename = target_input.get('originalFilename', target_input.get('filename', 'unknown'))
         safe_name = secure_filename(Path(filename).stem) or 'transcript'
         
-        # Build timeline with review state
-        timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest)
+        # Build timeline with review state (respect view mode)
+        view_mode = request.args.get('viewMode', 'merged')
+        timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
         
         # Create DOCX document
         doc = Document()
@@ -4757,8 +4771,9 @@ def api_export_review_pdf(job_id):
         filename = target_input.get('originalFilename', target_input.get('filename', 'unknown'))
         safe_name = secure_filename(Path(filename).stem) or 'transcript'
         
-        # Build timeline with review state
-        timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest)
+        # Build timeline with review state (respect view mode)
+        view_mode = request.args.get('viewMode', 'merged')
+        timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
         
         # Format time helper
         def fmt_time(seconds):

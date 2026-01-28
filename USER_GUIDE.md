@@ -55,6 +55,9 @@ Supported Whisper models:
 - **Include timestamps** — add timecodes to segments
 - **Word-level timestamps** — slower, but enables max segment length splitting
 - **Overwrite existing files** — re-transcribe even if outputs exist
+- **Silence threshold** — now includes **0.4** (very permissive) up to 0.8 (strict)
+- **VAD pre-filter** — optional Silero VAD to remove silence before Whisper
+- **Hallucination detection** — flags likely hallucinations (repeated phrases, foreign text); flag-only, no removal
 
 ---
 
@@ -132,6 +135,11 @@ This lets you insert short interjections as separate chunks and assign a differe
 ### Assign speaker
 - Use number keys **1–9** to assign speaker
 - Speaker buttons appear on hover or when chunk is selected
+
+### Delete / Undo
+- **Backspace/Delete**: delete selected chunk (when not editing)
+- **Cmd/Ctrl + Z**: undo last change (per file, in-memory)
+- Inline **Undo** button on each chunk (disabled when no history)
 
 ---
 

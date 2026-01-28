@@ -33,6 +33,11 @@ This lets you insert short interjections as their own chunk and assign a new spe
 - Hover a chunk to reveal speaker buttons
 - Press keys **1–9** to assign quickly
 
+### Delete / Undo
+- **Backspace/Delete**: delete selected chunk (when not editing)
+- **Cmd/Ctrl + Z**: undo last change (per file, in-memory, non-persistent)
+- Inline **Undo** button next to chunk actions
+
 ### Speaker hotkey numbers
 
 In **Edit Speakers**, assign hotkey numbers (1–9) per file:
@@ -49,6 +54,9 @@ The review toolbar includes a **Merged** checkbox:
 - **Raw**: Shows diarization-aligned chunks with more speaker switches.
 
 Use Raw view when debugging speaker assignment or when you need to see the original segmentation.
+
+### Hallucination flags
+- Chunks containing segments flagged by hallucination detection show a small warning badge with reasons (flag-only; text is preserved).
 
 ### Info Modal
 

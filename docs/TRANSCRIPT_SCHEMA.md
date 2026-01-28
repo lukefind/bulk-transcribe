@@ -109,3 +109,4 @@ Structured representation of the transcript used in Review UI and exports:
 Notes:
 - Speaker labels/colors reflect **review edits**.
 - Chunks may be split/merged by review actions.
+- Segments may carry `hallucination_warning` (flag-only; text is preserved).
