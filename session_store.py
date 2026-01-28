@@ -101,6 +101,11 @@ def set_new_session_cookie(request, response, session_id: str) -> None:
 # Session Directory Structure
 # =============================================================================
 
+def get_sessions_dir() -> str:
+    """Get the sessions root directory path."""
+    return os.path.join(data_root(), 'sessions')
+
+
 def session_dir(session_id: str) -> str:
     """Get the session directory path."""
     return os.path.join(data_root(), 'sessions', session_id)
