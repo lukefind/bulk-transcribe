@@ -3449,10 +3449,9 @@
                     return;
                 }
                 
-                // Success - reload page to apply new session
-                closeJoinSessionModal();
-                showSuccess(`Joined session in ${data.mode} mode. Reloading...`);
-                setTimeout(() => window.location.reload(), 1000);
+                // Success - reload page immediately to apply new session cookie
+                // The Set-Cookie header from the response has already been processed
+                window.location.reload();
                 
             } catch (e) {
                 document.getElementById('joinError').textContent = e.message;
