@@ -17,7 +17,6 @@ Local-first transcription with a review workflow built for 100% accuracy. Bulk T
 - **Bulk ops**: bulk export/import, re-run selected jobs, clear duplicates
 - **Session sharing**: share a session by token (read-only or full-edit)
 - **Audio hygiene**: optional Silero VAD pre-filter and hallucination detection (flag-only)
-- **Audio hygiene**: optional Silero VAD pre-filter and hallucination detection (flag-only)
 
 ## Quick Start (Local)
 
