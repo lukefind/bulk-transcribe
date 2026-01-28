@@ -5843,6 +5843,9 @@
             const newJobId = select.value;
             if (!newJobId || newJobId === reviewJobData?.jobId) return;
             
+            // Clear all undo stacks when switching jobs (avoid stale snapshots)
+            reviewUndoStacks = {};
+            
             // Find the job in our cached list
             const newJob = reviewJobList.find(j => j.jobId === newJobId);
             if (!newJob) {
@@ -6001,6 +6004,9 @@
             
             // Update state
             reviewSelectedInputId = newInputId;
+            
+            // Clear undo stack for the new input (don't carry stale snapshots)
+            // Stack is per-inputId, so switching files starts fresh or uses that file's stack
             
             // Update audio player
             setupReviewAudio(reviewJobData.jobId, targetInput);
@@ -6545,6 +6551,13 @@
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
                             </svg>
                         </button>
+                        <button onclick="event.stopPropagation(); undoLastEdit()" 
+                                class="undo-btn p-1 text-gray-500 hover:text-amber-400 transition-colors ${canUndo() ? '' : 'opacity-30 cursor-not-allowed'}" 
+                                title="Undo last edit (⌘/Ctrl+Z)" ${canUndo() ? '' : 'disabled'}>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"></path>
+                            </svg>
+                        </button>
                         <div class="speaker-buttons hidden">
                             ${renderSpeakerButtons(chunk, idx)}
                         </div>
@@ -6912,6 +6925,11 @@
         function setSpeakerNumberFromModal(speakerId, number) {
             // Called from the Edit Speakers modal
             const num = parseInt(number);
+            
+            // Push undo snapshot before hotkey reassign
+            const speaker = reviewTimeline?.speakers?.find(s => s.id === speakerId);
+            const label = speaker ? getSpeakerDisplayLabel(speaker) : speakerId;
+            pushUndoSnapshot('hotkey_reassign', `Reassign hotkey for ${label}`);
             
             if (!reviewState.speakerNumberMap) reviewState.speakerNumberMap = {};
             
@@ -7977,6 +7995,9 @@
             if (!confirm(`Merge "${sourceLabel}" into "${targetLabel}"?\n\nThis will reassign ${affectedChunks.length} chunk(s) and remove "${sourceLabel}" from the speaker list.`)) {
                 return;
             }
+            
+            // Push undo snapshot before merge
+            pushUndoSnapshot('merge_speakers', `Merge ${sourceLabel} into ${targetLabel}`);
             
             // Perform merge
             // 1. Reassign all chunks from source to target
