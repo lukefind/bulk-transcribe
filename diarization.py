@@ -475,8 +475,14 @@ def merge_transcript_with_speakers(
             "text": text
         })
     
-    # First: dedupe consecutive identical segments (same speaker + same text within 2s)
-    # This handles Whisper hallucinations like repeated "Processing." at 1-second intervals
+    # First: dedupe consecutive identical segments (Whisper hallucination handling)
+    # Only dedupe SHORT repeated segments to avoid removing real repeated speech.
+    # Conditions (all must be true):
+    #   1. Same speaker
+    #   2. Same normalized text
+    #   3. Time gap ≤ 2.0s
+    #   4. Text length ≤ 20 characters (targets short hallucinations like "Processing.")
+    #   5. Segment duration ≤ 2.0s
     deduped = []
     for seg in assigned_segments:
         if not deduped:
@@ -485,10 +491,13 @@ def merge_transcript_with_speakers(
         
         last = deduped[-1]
         gap = seg["start"] - last["end"]
+        seg_duration = seg["end"] - seg["start"]
         same_speaker = seg["speaker"] == last["speaker"]
         same_text = seg["text"].lower().strip() == last["text"].lower().strip()
+        is_short_text = len(seg["text"].strip()) <= 20
+        is_short_segment = seg_duration <= 2.0
         
-        if same_speaker and same_text and gap <= 2.0:
+        if same_speaker and same_text and gap <= 2.0 and is_short_text and is_short_segment:
             # Extend the previous segment's end time (collapse duplicate)
             last["end"] = seg["end"]
         else:
