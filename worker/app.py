@@ -16,6 +16,9 @@ Environment variables:
   - auto: Use CUDA if available, else CPU
   - cuda: Force CUDA (fail if unavailable)
   - cpu: Force CPU (debug only)
+- WORKER_LOG_PROGRESS: Enable verbose progress logging (true|false, default: false)
+  - Logs detailed stage timing and per-file progress
+  - Useful for debugging, may be noisy in production
 """
 
 import os
@@ -46,6 +49,9 @@ WORKER_MAX_CONCURRENT_JOBS = int(os.environ.get('WORKER_MAX_CONCURRENT_JOBS', '1
 
 # Diarization device configuration
 DIARIZATION_DEVICE = os.environ.get('DIARIZATION_DEVICE', 'auto').lower()
+
+# Verbose progress logging (useful for debugging, noisy in production)
+WORKER_LOG_PROGRESS = os.environ.get('WORKER_LOG_PROGRESS', '').lower() == 'true'
 
 # Identity configuration
 # BUILD_COMMIT and BUILD_TIME are injected at Docker build time (baked into image)
@@ -547,7 +553,10 @@ def process_job(worker_job_id: str):
         
         # Step 1: Download input files
         update_job(worker_job_id, stage='downloading')
-        add_log(worker_job_id, 'info', 'downloading_started', f'Downloading {len(inputs)} file(s)')
+        download_stage_start = time.time()
+        add_log(worker_job_id, 'info', 'download_started', 
+                f'Downloading {len(inputs)} file(s)',
+                fileCount=len(inputs))
         
         downloaded_files = []
         for i, inp in enumerate(inputs):
@@ -561,34 +570,68 @@ def process_job(worker_job_id: str):
                 'currentFile': inp['filename']
             })
             
+            file_download_start = time.time()
             local_path = download_input(job_tmp_dir, inp)
+            file_download_duration = time.time() - file_download_start
+            
             downloaded_files.append({
                 'inputId': inp['inputId'],
                 'filename': inp['filename'],
                 'localPath': local_path
             })
-            add_log(worker_job_id, 'info', 'file_downloaded', f'Downloaded {inp["filename"]}')
+            
+            file_size_mb = os.path.getsize(local_path) / (1024 * 1024)
+            add_log(worker_job_id, 'info', 'file_downloaded', 
+                    f'Downloaded {inp["filename"]} ({file_size_mb:.1f}MB in {file_download_duration:.1f}s)',
+                    filename=inp['filename'],
+                    sizeMB=round(file_size_mb, 2),
+                    durationSec=round(file_download_duration, 2))
+        
+        download_stage_duration = time.time() - download_stage_start
+        add_log(worker_job_id, 'info', 'download_finished',
+                f'All files downloaded in {download_stage_duration:.1f}s',
+                durationSec=round(download_stage_duration, 2),
+                fileCount=len(downloaded_files))
         
         # Step 2: Load Whisper model
         update_job(worker_job_id, stage='loading_model')
-        add_log(worker_job_id, 'info', 'loading_model', f'Loading model {options.get("model", WORKER_MODEL)}')
+        model_name = options.get('model', WORKER_MODEL)
+        model_load_start = time.time()
+        add_log(worker_job_id, 'info', 'model_load_started', 
+                f'Loading model {model_name}',
+                model=model_name)
         
-        model = load_whisper_model(options.get('model', WORKER_MODEL))
+        model = load_whisper_model(model_name)
+        
+        model_load_duration = time.time() - model_load_start
+        add_log(worker_job_id, 'info', 'model_load_finished',
+                f'Model {model_name} loaded in {model_load_duration:.1f}s',
+                model=model_name,
+                durationSec=round(model_load_duration, 2))
         
         # Step 3 & 4: Process each file (transcribe + diarize)
         for i, file_info in enumerate(downloaded_files):
             if job.get('cancelRequested'):
                 raise CancelledException('Job cancelled during processing')
             
+            filename = file_info['filename']
+            file_process_start = time.time()
+            
             update_job(worker_job_id, stage='transcribing', progress={
                 'currentFileIndex': i,
                 'totalFiles': len(downloaded_files),
                 'percent': 10 + int((i / len(downloaded_files)) * 70),  # Transcription is 70%
-                'currentFile': file_info['filename']
+                'currentFile': filename
             })
-            add_log(worker_job_id, 'info', 'transcribing_file', f'Transcribing {file_info["filename"]}')
             
             # Transcribe
+            transcribe_start = time.time()
+            add_log(worker_job_id, 'info', 'transcribe_started', 
+                    f'Transcribing {filename}',
+                    filename=filename,
+                    fileIndex=i,
+                    totalFiles=len(downloaded_files))
+            
             transcript_result = transcribe_file(
                 model, 
                 file_info['localPath'],
@@ -596,11 +639,19 @@ def process_job(worker_job_id: str):
                 worker_job_id
             )
             
+            transcribe_duration = time.time() - transcribe_start
+            segment_count = len(transcript_result.get('segments', []))
+            add_log(worker_job_id, 'info', 'transcribe_finished',
+                    f'Transcribed {filename} in {transcribe_duration:.1f}s ({segment_count} segments)',
+                    filename=filename,
+                    durationSec=round(transcribe_duration, 2),
+                    segmentCount=segment_count)
+            
             # Save transcript outputs
             file_outputs = save_transcript_outputs(
                 job_tmp_dir,
                 file_info['inputId'],
-                file_info['filename'],
+                filename,
                 transcript_result,
                 options
             )
@@ -612,7 +663,11 @@ def process_job(worker_job_id: str):
                     raise CancelledException('Job cancelled before diarization')
                 
                 update_job(worker_job_id, stage='diarizing')
-                add_log(worker_job_id, 'info', 'diarizing_file', f'Diarizing {file_info["filename"]}')
+                
+                diarize_start = time.time()
+                add_log(worker_job_id, 'info', 'diarization_started',
+                        f'Diarizing {filename}',
+                        filename=filename)
                 
                 diarization_result = run_diarization_on_file(
                     file_info['localPath'],
@@ -620,26 +675,70 @@ def process_job(worker_job_id: str):
                     worker_job_id
                 )
                 
+                diarize_duration = time.time() - diarize_start
+                speaker_count = len(set(s.get('speaker', '') for s in diarization_result)) if diarization_result else 0
+                add_log(worker_job_id, 'info', 'diarization_finished',
+                        f'Diarized {filename} in {diarize_duration:.1f}s ({speaker_count} speakers)',
+                        filename=filename,
+                        durationSec=round(diarize_duration, 2),
+                        speakerCount=speaker_count)
+                
+                # Merge transcript + diarization
+                merge_start = time.time()
+                if WORKER_LOG_PROGRESS:
+                    add_log(worker_job_id, 'debug', 'merge_started',
+                            f'Merging transcript with diarization for {filename}',
+                            filename=filename)
+                
                 # Save diarization outputs
                 diar_outputs = save_diarization_outputs(
                     job_tmp_dir,
                     file_info['inputId'],
-                    file_info['filename'],
+                    filename,
                     transcript_result,
                     diarization_result,
                     options
                 )
                 outputs.extend(diar_outputs)
+                
+                merge_duration = time.time() - merge_start
+                if WORKER_LOG_PROGRESS:
+                    add_log(worker_job_id, 'debug', 'merge_finished',
+                            f'Merged outputs for {filename} in {merge_duration:.1f}s',
+                            filename=filename,
+                            durationSec=round(merge_duration, 2))
+            
+            file_process_duration = time.time() - file_process_start
+            add_log(worker_job_id, 'info', 'file_processed',
+                    f'Completed {filename} in {file_process_duration:.1f}s',
+                    filename=filename,
+                    durationSec=round(file_process_duration, 2),
+                    fileIndex=i,
+                    totalFiles=len(downloaded_files))
         
         # Step 5: Upload outputs to controller
         update_job(worker_job_id, stage='uploading', progress={'percent': 90})
-        add_log(worker_job_id, 'info', 'uploading_outputs', f'Uploading {len(outputs)} output(s)')
+        upload_start = time.time()
+        add_log(worker_job_id, 'info', 'upload_started', 
+                f'Uploading {len(outputs)} output(s)',
+                outputCount=len(outputs))
         
         upload_outputs_to_controller(job, job_tmp_dir, outputs)
         
+        upload_duration = time.time() - upload_start
+        add_log(worker_job_id, 'info', 'upload_finished',
+                f'Uploaded {len(outputs)} output(s) in {upload_duration:.1f}s',
+                durationSec=round(upload_duration, 2),
+                outputCount=len(outputs))
+        
         # Step 6: Mark complete
+        job_total_duration = time.time() - download_stage_start
         update_job(worker_job_id, status='complete', stage='complete', progress={'percent': 100})
-        add_log(worker_job_id, 'info', 'job_complete', f'Job completed with {len(outputs)} outputs')
+        add_log(worker_job_id, 'info', 'job_complete', 
+                f'Job completed with {len(outputs)} outputs in {job_total_duration:.1f}s',
+                totalDurationSec=round(job_total_duration, 2),
+                outputCount=len(outputs),
+                fileCount=len(downloaded_files))
         
         # Notify controller
         notify_controller_complete(job, outputs)

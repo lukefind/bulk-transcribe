@@ -64,7 +64,58 @@ WORKER_MODEL=large-v3
 # For diarization
 HF_TOKEN=your-huggingface-token
 DIARIZATION_DEVICE=cuda  # or auto
+
+# Logging
+WORKER_LOG_PROGRESS=true  # Enable verbose progress logging (optional)
 ```
+
+## Worker Logging
+
+The worker outputs structured JSON logs to stdout for observability. Each log line is a single JSON object for easy parsing by log aggregators.
+
+### Log Events
+
+| Event | Level | Description |
+|-------|-------|-------------|
+| `job_started` | info | Job processing began |
+| `download_started` | info | Starting to download input files |
+| `file_downloaded` | info | Individual file downloaded (includes size, duration) |
+| `download_finished` | info | All files downloaded |
+| `model_load_started` | info | Loading Whisper model |
+| `model_load_finished` | info | Model loaded (includes duration) |
+| `transcribe_started` | info | Starting transcription for a file |
+| `transcribe_finished` | info | Transcription complete (includes duration, segment count) |
+| `diarization_started` | info | Starting speaker diarization |
+| `diarization_finished` | info | Diarization complete (includes duration, speaker count) |
+| `merge_started` | debug | Merging transcript with diarization (verbose only) |
+| `merge_finished` | debug | Merge complete (verbose only) |
+| `file_processed` | info | File fully processed (includes total duration) |
+| `upload_started` | info | Starting output upload |
+| `upload_finished` | info | Upload complete (includes duration) |
+| `job_complete` | info | Job finished successfully (includes total duration) |
+| `job_failed` | error | Job failed with error |
+| `job_canceled` | info | Job was canceled |
+
+### Log Fields
+
+Each log entry includes:
+- `ts`: Unix timestamp
+- `level`: Log level (info, debug, error, warning)
+- `event`: Event name (see table above)
+- `message`: Human-readable message
+- `workerJobId`: Worker job ID for correlation
+
+Stage-specific fields:
+- `filename`: Current file being processed
+- `durationSec`: Stage duration in seconds
+- `sizeMB`: File size in megabytes
+- `segmentCount`: Number of transcript segments
+- `speakerCount`: Number of detected speakers
+- `fileIndex` / `totalFiles`: Progress through file list
+
+### Verbose Logging
+
+Set `WORKER_LOG_PROGRESS=true` to enable additional debug-level logs for merge operations. This is useful for debugging but may be noisy in production.
 
 ## Deployment Options
 
