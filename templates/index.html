@@ -4348,10 +4348,18 @@
                     'complete': 'bg-green-500/20 text-green-300',
                     'complete_with_errors': 'bg-amber-500/20 text-amber-300',
                     'failed': 'bg-red-500/20 text-red-300',
-                    'canceled': 'bg-gray-500/20 text-gray-300'
+                    'canceled': 'bg-gray-500/20 text-gray-300',
+                    'canceling': 'bg-amber-500/20 text-amber-300'
                 };
-                statusBadge.className = `text-xs font-semibold px-2.5 py-1 rounded-full ${statusColors[job.status] || statusColors.running}`;
-                statusBadge.textContent = (job.status || 'running').toUpperCase().replace('_', ' ');
+                
+                // Show "CANCELING" if cancelRequested flag is set
+                let displayStatus = job.status || 'running';
+                if (job.cancelRequested && job.status === 'running') {
+                    displayStatus = 'canceling';
+                }
+                
+                statusBadge.className = `text-xs font-semibold px-2.5 py-1 rounded-full ${statusColors[displayStatus] || statusColors.running}`;
+                statusBadge.textContent = displayStatus.toUpperCase().replace('_', ' ');
             }
             
             // Update execution mode badge

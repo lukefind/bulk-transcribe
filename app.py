@@ -2600,13 +2600,7 @@ def api_cancel_job(job_id):
     """Cancel a running job immediately."""
     session_id = g.session_id
     
-    with _active_jobs_lock:
-        job_info = _active_jobs.get((session_id, job_id))
-        if job_info and job_info.get('running'):
-            job_info['cancel_requested'] = True
-            return jsonify({'status': 'canceling', 'message': 'Cancel requested'})
-    
-    # Check if job exists
+    # Check if job exists first
     manifest_path = session_store.job_manifest_path(session_id, job_id)
     manifest = session_store.read_json(manifest_path)
     
@@ -2616,6 +2610,31 @@ def api_cancel_job(job_id):
     # Check terminal states (note: 'canceled' is the canonical spelling)
     if manifest.get('status') in ('complete', 'complete_with_errors', 'failed', 'canceled'):
         return jsonify({'status': manifest.get('status'), 'message': 'Job already finished'})
+    
+    with _active_jobs_lock:
+        job_info = _active_jobs.get((session_id, job_id))
+        if job_info and job_info.get('running'):
+            job_info['cancel_requested'] = True
+            
+            # Immediately update manifest to show canceling state
+            # This ensures UI sees the state change right away
+            manifest['cancelRequested'] = True
+            manifest['progress'] = manifest.get('progress', {})
+            manifest['progress']['stage'] = 'canceling'
+            manifest['progress']['currentFile'] = 'Canceling job...'
+            manifest['updatedAt'] = datetime.now(timezone.utc).isoformat()
+            session_store.atomic_write_json(manifest_path, manifest)
+            
+            return jsonify({'status': 'canceling', 'message': 'Cancel requested'})
+    
+    # Job not in active jobs but manifest shows running - might be stale
+    if manifest.get('status') == 'running':
+        # Force update to canceled since job thread is gone
+        manifest['status'] = 'canceled'
+        manifest['finishedAt'] = datetime.now(timezone.utc).isoformat()
+        manifest['error'] = {'code': 'STALE_JOB', 'message': 'Job was orphaned and has been canceled'}
+        session_store.atomic_write_json(manifest_path, manifest)
+        return jsonify({'status': 'canceled', 'message': 'Orphaned job canceled'})
     
     return jsonify({'status': 'not_running'})
 
