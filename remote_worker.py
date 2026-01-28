@@ -621,6 +621,8 @@ def dispatch_to_remote_worker(
     capacity_wait_start = time.time()
     capacity_wait_timeout = 3600  # 1 hour max wait for capacity
     capacity_check_attempt = 0
+    consecutive_unreachable = 0
+    MAX_CONSECUTIVE_UNREACHABLE = 6  # Fail after 6 consecutive unreachable checks
     
     while True:
         if is_cancelled_callback():
@@ -636,12 +638,30 @@ def dispatch_to_remote_worker(
         
         if capacity['error']:
             # Worker unreachable - use backoff
+            consecutive_unreachable += 1
             backoff = calculate_backoff(capacity_check_attempt)
             log_event('warning', 'remote_capacity_check_failed',
-                      jobId=job_id, error=capacity['error'], backoffSeconds=backoff)
+                      jobId=job_id, error=capacity['error'], backoffSeconds=backoff,
+                      consecutiveFailures=consecutive_unreachable)
+            
+            # Check if we've exceeded consecutive failure threshold
+            if consecutive_unreachable >= MAX_CONSECUTIVE_UNREACHABLE:
+                log_event('error', 'remote_worker_unavailable', 
+                          jobId=job_id, consecutiveFailures=consecutive_unreachable,
+                          message='Worker offline or restarted - exceeded retry threshold')
+                update_manifest_callback(
+                    status='failed',
+                    finishedAt=datetime.now(timezone.utc).isoformat(),
+                    error={
+                        'code': 'REMOTE_WORKER_UNAVAILABLE',
+                        'message': f'Remote worker offline or restarted. Failed {consecutive_unreachable} consecutive capacity checks.'
+                    }
+                )
+                return False
+            
             update_manifest_callback(
                 status='queued_remote',
-                progress={'stage': 'queued_remote', 'currentFile': f'Worker unreachable, retrying in {int(backoff)}s...'},
+                progress={'stage': 'queued_remote', 'currentFile': f'Worker unreachable ({consecutive_unreachable}/{MAX_CONSECUTIVE_UNREACHABLE}), retrying in {int(backoff)}s...'},
                 lastErrorCode='REMOTE_WORKER_UNREACHABLE',
                 lastErrorMessage=capacity['error'][:200],
                 lastErrorAt=datetime.now(timezone.utc).isoformat()
@@ -659,6 +679,9 @@ def dispatch_to_remote_worker(
                 )
                 return False
             continue
+        
+        # Reset consecutive failure counter on successful check
+        consecutive_unreachable = 0
         
         if capacity['hasCapacity']:
             log_event('info', 'remote_capacity_available',

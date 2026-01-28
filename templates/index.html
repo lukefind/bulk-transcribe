@@ -4042,11 +4042,17 @@
                 const remoteLastErrorCode = remoteLastError?.code;
                 const remoteLastErrorMessage = remoteLastError?.message;
                 
-                // Special user-friendly message for worker 404 (job lost)
+                // Special user-friendly message for worker errors
                 let displayMsg = errorMsg;
                 let showRetryHint = false;
                 if (errorCode === 'REMOTE_JOB_NOT_FOUND') {
                     displayMsg = 'Remote worker restarted or lost the job. Please retry.';
+                    showRetryHint = true;
+                } else if (errorCode === 'REMOTE_WORKER_UNAVAILABLE') {
+                    displayMsg = 'Remote worker offline or restarted. Connection failed after multiple attempts.';
+                    showRetryHint = true;
+                } else if (errorCode === 'REMOTE_WORKER_TIMEOUT') {
+                    displayMsg = 'Timed out waiting for remote worker. The worker may be overloaded or offline.';
                     showRetryHint = true;
                 }
 
