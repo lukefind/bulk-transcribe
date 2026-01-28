@@ -1182,6 +1182,23 @@
                     </button>
                 </div>
                 
+                <!-- Speaker Numbers (hotkey mapping) -->
+                <div id="speakerNumbersPanel" class="p-4 border-b border-gray-700/50 hidden">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-xs font-medium text-gray-400">Hotkey Numbers</h3>
+                    </div>
+                    <p class="text-[10px] text-gray-500 mb-2">Numbers affect 1–9 shortcuts in this file only.</p>
+                    <div id="speakerNumbersList" class="space-y-1.5"></div>
+                    <div class="flex gap-2 mt-3">
+                        <button onclick="copySpeakerNumbersFromPrevious()" class="flex-1 px-2 py-1.5 text-[10px] rounded bg-surface-700 hover:bg-surface-600 text-gray-400 transition-colors" title="Copy number assignments from previous file in batch">
+                            Copy from prev
+                        </button>
+                        <button onclick="resetSpeakerNumbers()" class="flex-1 px-2 py-1.5 text-[10px] rounded bg-surface-700 hover:bg-surface-600 text-gray-400 transition-colors" title="Reset to default numbering">
+                            Reset
+                        </button>
+                    </div>
+                </div>
+                
                 <!-- Keyboard Shortcuts -->
                 <div class="p-4 border-b border-gray-700/50">
                     <h3 class="text-xs font-medium text-gray-400 mb-2">Keyboard Shortcuts</h3>
@@ -5762,6 +5779,7 @@
                 
                 renderTimeline();
                 renderSpeakerLegend();
+                renderSpeakerNumbersPanel();
                 
             } catch (e) {
                 content.innerHTML = `<p class="text-red-400 p-4">Error: ${e.message}</p>`;
@@ -6188,6 +6206,193 @@
         
         // Alias for compatibility
         const updateSpeakerSidebar = renderSpeakerLegend;
+        
+        // Speaker number mapping (per-file hotkey assignments)
+        function renderSpeakerNumbersPanel() {
+            const panel = document.getElementById('speakerNumbersPanel');
+            const list = document.getElementById('speakerNumbersList');
+            
+            if (!reviewTimeline?.speakers || reviewTimeline.speakers.length <= 1) {
+                if (panel) panel.classList.add('hidden');
+                return;
+            }
+            
+            if (panel) panel.classList.remove('hidden');
+            if (!list) return;
+            
+            list.innerHTML = '';
+            
+            // Get current number map (or initialize)
+            const numberMap = reviewState.speakerNumberMap || {};
+            
+            // Build reverse map: number -> speakerId
+            const numberToSpeaker = {};
+            for (const [spkId, num] of Object.entries(numberMap)) {
+                numberToSpeaker[num] = spkId;
+            }
+            
+            reviewTimeline.speakers.forEach((speaker, idx) => {
+                const label = getSpeakerDisplayLabel(speaker);
+                const color = getSpeakerDisplayColor(speaker);
+                const currentNum = numberMap[speaker.id] ?? (idx + 1);
+                
+                const div = document.createElement('div');
+                div.className = 'flex items-center gap-2';
+                div.innerHTML = `
+                    <span class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background-color: ${color}"></span>
+                    <span class="text-xs text-gray-300 truncate flex-1" title="${label}">${label}</span>
+                    <select onchange="setSpeakerNumber('${speaker.id}', this.value)" 
+                            class="px-1.5 py-0.5 bg-surface-700 border border-gray-600/50 rounded text-xs text-gray-300 w-12">
+                        ${[1,2,3,4,5,6,7,8,9].map(n => {
+                            const selected = currentNum === n ? 'selected' : '';
+                            const taken = numberToSpeaker[n] && numberToSpeaker[n] !== speaker.id;
+                            const disabled = taken ? 'disabled' : '';
+                            const takenLabel = taken ? ' (used)' : '';
+                            return `<option value="${n}" ${selected} ${disabled}>${n}${takenLabel}</option>`;
+                        }).join('')}
+                    </select>
+                `;
+                list.appendChild(div);
+            });
+        }
+        
+        function setSpeakerNumber(speakerId, number) {
+            const num = parseInt(number);
+            if (isNaN(num) || num < 1 || num > 9) return;
+            
+            if (!reviewState.speakerNumberMap) reviewState.speakerNumberMap = {};
+            
+            // Remove any existing speaker with this number
+            for (const [spkId, n] of Object.entries(reviewState.speakerNumberMap)) {
+                if (n === num && spkId !== speakerId) {
+                    delete reviewState.speakerNumberMap[spkId];
+                }
+            }
+            
+            reviewState.speakerNumberMap[speakerId] = num;
+            
+            markUnsaved();
+            renderSpeakerNumbersPanel();
+            saveReviewState();
+        }
+        
+        function getSpeakerByNumber(number) {
+            // Returns speaker ID for a given hotkey number (1-9)
+            // Uses speakerNumberMap if set, otherwise falls back to index order
+            const num = parseInt(number);
+            if (isNaN(num) || num < 1 || num > 9) return null;
+            if (!reviewTimeline?.speakers) return null;
+            
+            const numberMap = reviewState.speakerNumberMap || {};
+            
+            // Check if any speaker is mapped to this number
+            for (const [spkId, n] of Object.entries(numberMap)) {
+                if (n === num) {
+                    // Verify speaker still exists
+                    if (reviewTimeline.speakers.find(s => s.id === spkId)) {
+                        return spkId;
+                    }
+                }
+            }
+            
+            // Fallback: use index order
+            const idx = num - 1;
+            if (idx < reviewTimeline.speakers.length) {
+                return reviewTimeline.speakers[idx].id;
+            }
+            
+            return null;
+        }
+        
+        function copySpeakerNumbersFromPrevious() {
+            // Look for previous file in batch with speakerNumberMap
+            if (!reviewJobData?.inputs || reviewJobData.inputs.length <= 1) {
+                alert('No previous file in batch to copy from.');
+                return;
+            }
+            
+            // Find current file index
+            const currentIdx = reviewJobData.inputs.findIndex(i => i.uploadId === reviewSelectedInputId);
+            if (currentIdx <= 0) {
+                alert('No previous file to copy from.');
+                return;
+            }
+            
+            // We need to fetch review state from previous file
+            // For now, use a simple approach: copy from session storage if available
+            const prevInputId = reviewJobData.inputs[currentIdx - 1].uploadId;
+            const storageKey = `speakerNumberMap_${reviewJobData.jobId}_${prevInputId}`;
+            const prevMap = localStorage.getItem(storageKey);
+            
+            if (!prevMap) {
+                alert('No speaker number mapping found in previous file.');
+                return;
+            }
+            
+            try {
+                const prevNumberMap = JSON.parse(prevMap);
+                
+                // Match speakers by label (or color as fallback)
+                const newMap = {};
+                const currentSpeakers = reviewTimeline?.speakers || [];
+                
+                for (const [prevSpkId, num] of Object.entries(prevNumberMap)) {
+                    // Find matching speaker in current file
+                    // First try by label
+                    const prevLabel = prevNumberMap[`_label_${prevSpkId}`];
+                    let match = null;
+                    
+                    if (prevLabel) {
+                        match = currentSpeakers.find(s => getSpeakerDisplayLabel(s).toLowerCase() === prevLabel.toLowerCase());
+                    }
+                    
+                    if (match) {
+                        newMap[match.id] = num;
+                    }
+                }
+                
+                if (Object.keys(newMap).length === 0) {
+                    alert('Could not match any speakers from previous file.');
+                    return;
+                }
+                
+                reviewState.speakerNumberMap = newMap;
+                markUnsaved();
+                renderSpeakerNumbersPanel();
+                saveReviewState();
+                
+                alert(`Copied ${Object.keys(newMap).length} speaker number(s) from previous file.`);
+                
+            } catch (e) {
+                alert('Failed to parse previous speaker mapping.');
+            }
+        }
+        
+        function resetSpeakerNumbers() {
+            if (!confirm('Reset speaker numbers to default order?')) return;
+            
+            reviewState.speakerNumberMap = {};
+            markUnsaved();
+            renderSpeakerNumbersPanel();
+            saveReviewState();
+        }
+        
+        // Save speaker number map to localStorage for cross-file copying
+        function saveSpeakerNumberMapToStorage() {
+            if (!reviewJobData?.jobId || !reviewSelectedInputId) return;
+            
+            const storageKey = `speakerNumberMap_${reviewJobData.jobId}_${reviewSelectedInputId}`;
+            const mapToSave = { ...(reviewState.speakerNumberMap || {}) };
+            
+            // Also save labels for matching
+            if (reviewTimeline?.speakers) {
+                for (const speaker of reviewTimeline.speakers) {
+                    mapToSave[`_label_${speaker.id}`] = getSpeakerDisplayLabel(speaker);
+                }
+            }
+            
+            localStorage.setItem(storageKey, JSON.stringify(mapToSave));
+        }
         
         function beginInlineSpeakerRename(speakerId, event) {
             event.stopPropagation();
@@ -6659,6 +6864,9 @@
                 
                 reviewHasUnsavedChanges = false;
                 updateSaveStatus('saved');
+                
+                // Save speaker number map to localStorage for cross-file copying
+                saveSpeakerNumberMapToStorage();
             } catch (e) {
                 console.error('Failed to save review state:', e);
                 updateSaveStatus('error');
@@ -6806,10 +7014,11 @@
                 case '1': case '2': case '3': case '4': case '5':
                 case '6': case '7': case '8': case '9':
                     if (reviewSelectedChunkIndex >= 0 && reviewTimeline?.speakers) {
-                        const speakerIdx = parseInt(e.key) - 1;
-                        if (speakerIdx < reviewTimeline.speakers.length) {
+                        // Use speaker number mapping (per-file) or fallback to index
+                        const speakerId = getSpeakerByNumber(e.key);
+                        if (speakerId) {
                             e.preventDefault();
-                            assignSpeaker(reviewSelectedChunkIndex, reviewTimeline.speakers[speakerIdx].id);
+                            assignSpeaker(reviewSelectedChunkIndex, speakerId);
                             // Shift+number: assign and advance
                             if (e.shiftKey && reviewSelectedChunkIndex < reviewTimeline.chunks.length - 1) {
                                 selectChunk(reviewSelectedChunkIndex + 1);
