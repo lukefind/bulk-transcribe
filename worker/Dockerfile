@@ -63,6 +63,8 @@ COPY diarization.py /app/diarization.py
 COPY diarization_policy.py /app/diarization_policy.py
 COPY audio_utils.py /app/audio_utils.py
 COPY logger.py /app/logger.py
+COPY vad.py /app/vad.py
+COPY hallucination_filter.py /app/hallucination_filter.py
 
 # Create temp directory
 RUN mkdir -p /tmp/bt-worker

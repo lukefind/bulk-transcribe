@@ -636,7 +636,10 @@ def process_job(worker_job_id: str):
                 model, 
                 file_info['localPath'],
                 options.get('language'),
-                worker_job_id
+                worker_job_id,
+                vad_enabled=options.get('vadEnabled', False),
+                hallucination_detection=options.get('hallucinationDetection', True),
+                no_speech_threshold=float(options.get('noSpeechThreshold', 0.6))
             )
             
             transcribe_duration = time.time() - transcribe_start
@@ -796,15 +799,113 @@ def load_whisper_model(model_name: str):
     return model
 
 
-def transcribe_file(model, audio_path: str, language: Optional[str], worker_job_id: str) -> dict:
-    """Transcribe a single audio file."""
+def transcribe_file(
+    model, 
+    audio_path: str, 
+    language: Optional[str], 
+    worker_job_id: str,
+    vad_enabled: bool = False,
+    hallucination_detection: bool = True,
+    no_speech_threshold: float = 0.6
+) -> dict:
+    """
+    Transcribe a single audio file with optional VAD pre-filtering and hallucination detection.
+    
+    Args:
+        model: Loaded Whisper model
+        audio_path: Path to audio file
+        language: Language code or None for auto-detect
+        worker_job_id: Job ID for logging
+        vad_enabled: If True, use Silero VAD to filter silence before transcription
+        hallucination_detection: If True, flag likely hallucinations in output
+        no_speech_threshold: Whisper's no_speech_threshold parameter
+    """
     import whisper
     
-    options = {}
+    options = {
+        'no_speech_threshold': no_speech_threshold
+    }
     if language:
         options['language'] = language
     
-    result = model.transcribe(audio_path, **options)
+    # VAD pre-filtering
+    vad_mapping = None
+    actual_audio_path = audio_path
+    
+    if vad_enabled:
+        try:
+            from vad import filter_audio_by_vad, create_timestamp_mapping
+            
+            add_log(worker_job_id, 'debug', 'vad_started', 
+                    f'Running VAD pre-filter on {os.path.basename(audio_path)}')
+            
+            filtered_path, speech_segments, total_speech = filter_audio_by_vad(
+                audio_path,
+                threshold=0.5,
+                min_speech_duration_ms=250,
+                min_silence_duration_ms=500,
+                speech_pad_ms=100
+            )
+            
+            if speech_segments:
+                vad_mapping = create_timestamp_mapping(speech_segments)
+                actual_audio_path = filtered_path
+                add_log(worker_job_id, 'info', 'vad_finished',
+                        f'VAD filtered to {total_speech:.1f}s of speech ({len(speech_segments)} segments)',
+                        speechDurationSec=round(total_speech, 2),
+                        segmentCount=len(speech_segments))
+            else:
+                add_log(worker_job_id, 'warning', 'vad_no_speech',
+                        'VAD detected no speech in audio, using original file')
+        except Exception as e:
+            add_log(worker_job_id, 'warning', 'vad_failed',
+                    f'VAD pre-filter failed, using original audio: {e}')
+    
+    # Run Whisper transcription
+    result = model.transcribe(actual_audio_path, **options)
+    
+    # Remap timestamps if VAD was used
+    if vad_mapping and result.get('segments'):
+        try:
+            from vad import remap_timestamps
+            result['segments'] = remap_timestamps(result['segments'], vad_mapping)
+            result['vad_applied'] = True
+            result['vad_segments'] = len(vad_mapping)
+        except Exception as e:
+            add_log(worker_job_id, 'warning', 'vad_remap_failed',
+                    f'Failed to remap VAD timestamps: {e}')
+    
+    # Hallucination detection
+    if hallucination_detection and result.get('segments'):
+        try:
+            from hallucination_filter import filter_hallucinations, get_hallucination_summary
+            
+            filtered_segments, stats = filter_hallucinations(
+                result['segments'],
+                remove=False,  # Don't remove, just flag
+                flag_only=True,
+                repetition_threshold=3
+            )
+            
+            result['segments'] = filtered_segments
+            result['hallucination_stats'] = stats
+            
+            if stats['flagged'] > 0:
+                add_log(worker_job_id, 'info', 'hallucination_detected',
+                        f'Flagged {stats["flagged"]} potential hallucinations',
+                        flaggedCount=stats['flagged'],
+                        reasons=stats.get('reasons', {}))
+        except Exception as e:
+            add_log(worker_job_id, 'warning', 'hallucination_detection_failed',
+                    f'Hallucination detection failed: {e}')
+    
+    # Clean up temporary VAD file
+    if vad_mapping and actual_audio_path != audio_path:
+        try:
+            os.remove(actual_audio_path)
+        except Exception:
+            pass
+    
     return result
 
 

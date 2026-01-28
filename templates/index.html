@@ -811,7 +811,8 @@
                         <div class="flex items-center justify-between">
                              <label class="text-sm text-gray-300" title="Higher = stricter (skips more potential non-speech)">Silence threshold</label>
                              <select id="noSpeechThreshold" onchange="saveUIState()" class="px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
-                                 <option value="0.5">0.5 (most permissive; keeps more)</option>
+                                 <option value="0.4">0.4 (very permissive; keeps most)</option>
+                                 <option value="0.5">0.5 (permissive; keeps more)</option>
                                  <option value="0.6" selected>0.6 (default)</option>
                                  <option value="0.7">0.7 (stricter; skips more)</option>
                                  <option value="0.8">0.8 (strictest; skips most)</option>
@@ -828,6 +829,25 @@
                             </select>
                         </div>
                         <p class="text-xs text-gray-500">Max segment length only applies when word timestamps are enabled.</p>
+                        
+                        <!-- VAD and Hallucination Detection -->
+                        <div class="border-t border-gray-700/50 pt-3 mt-3">
+                            <p class="text-xs text-gray-400 mb-2 font-medium">Audio Pre-processing</p>
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="text-sm text-gray-300 flex items-center gap-2" title="Use Silero VAD to filter silence before transcription. Reduces hallucinations on quiet audio.">
+                                    <input type="checkbox" id="vadEnabled" onchange="saveUIState()" class="rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500">
+                                    <span>VAD pre-filter</span>
+                                </label>
+                                <span class="text-xs text-gray-500">Filters silence before Whisper</span>
+                            </div>
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="text-sm text-gray-300 flex items-center gap-2" title="Detect and flag likely hallucinations (repeated phrases, foreign text, low confidence)">
+                                    <input type="checkbox" id="hallucinationDetection" onchange="saveUIState()" class="rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500" checked>
+                                    <span>Hallucination detection</span>
+                                </label>
+                                <span class="text-xs text-gray-500">Flags suspicious segments</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1659,6 +1679,8 @@
             qualityPreset: 'bulk_transcribe_quality_preset',
             silenceThreshold: 'bulk_transcribe_silence_threshold',
             maxSegmentDuration: 'bulk_transcribe_max_segment_duration',
+            vadEnabled: 'bulk_transcribe_vad_enabled',
+            hallucinationDetection: 'bulk_transcribe_hallucination_detection',
             speakerColorsByLabel: 'bulk_transcribe_speaker_colors_by_label'
         };
 
@@ -1755,6 +1777,8 @@
             _restoreSelect('qualityPreset', STORAGE_KEYS.qualityPreset);
             _restoreSelect('silenceThreshold', STORAGE_KEYS.silenceThreshold);
             _restoreSelect('maxSegmentDuration', STORAGE_KEYS.maxSegmentDuration);
+            _restoreCheckbox('vadEnabled', STORAGE_KEYS.vadEnabled);
+            _restoreCheckbox('hallucinationDetection', STORAGE_KEYS.hallucinationDetection);
 
             updateDiarizationOptions();
             updateDiarizationPolicy();
@@ -1809,6 +1833,12 @@
                     if (qualityPreset) saveToStorage(STORAGE_KEYS.qualityPreset, qualityPreset);
                     if (silenceThreshold) saveToStorage(STORAGE_KEYS.silenceThreshold, silenceThreshold);
                     if (maxSegmentDuration) saveToStorage(STORAGE_KEYS.maxSegmentDuration, maxSegmentDuration);
+                    
+                    // VAD and hallucination detection
+                    const vadEnabled = document.getElementById('vadEnabled')?.checked;
+                    const hallucinationDetection = document.getElementById('hallucinationDetection')?.checked;
+                    saveToStorage(STORAGE_KEYS.vadEnabled, vadEnabled ? 'true' : 'false');
+                    saveToStorage(STORAGE_KEYS.hallucinationDetection, hallucinationDetection ? 'true' : 'false');
                     
                     showSettingsSaved();
                 } catch (e) {
@@ -4212,6 +4242,14 @@
                 // Note: chunkSeconds and overlapSeconds are auto-computed by backend policy
             }
             
+            // VAD and hallucination detection options
+            options.vadEnabled = document.getElementById('vadEnabled')?.checked || false;
+            options.hallucinationDetection = document.getElementById('hallucinationDetection')?.checked !== false;
+            
+            // Silence threshold
+            const noSpeechThreshold = document.getElementById('noSpeechThreshold')?.value;
+            if (noSpeechThreshold) options.noSpeechThreshold = parseFloat(noSpeechThreshold);
+            
             submitBtn.disabled = true;
             submitBtn.innerHTML = '<span class="spinner mr-2"></span> Starting...';
             hideError();
@@ -5342,7 +5380,9 @@
                         workers: (document.getElementById('processingMode').value === 'metal' && !wordTimestamps) ? 1 : parseInt(document.getElementById('workers').value) || 1,
                         quality_preset: qualityPreset,
                         no_speech_threshold: noSpeechThreshold,
-                        max_segment_duration: maxSegmentDuration ? parseFloat(maxSegmentDuration) : null
+                        max_segment_duration: maxSegmentDuration ? parseFloat(maxSegmentDuration) : null,
+                        vad_enabled: document.getElementById('vadEnabled')?.checked || false,
+                        hallucination_detection: document.getElementById('hallucinationDetection')?.checked !== false
                     })
                 });
                 
