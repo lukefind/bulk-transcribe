@@ -290,6 +290,46 @@
             color: #64748b !important;
         }
         
+        /* Job row icons - dark mode (default) */
+        .job-row-icon {
+            color: #d1d5db; /* gray-300 */
+        }
+        .job-row-icon:hover {
+            color: #ffffff;
+        }
+        .job-row-action {
+            color: #d1d5db; /* gray-300 */
+            background-color: rgba(71, 85, 105, 0.4); /* surface-600/40 */
+        }
+        .job-row-action:hover {
+            color: #ffffff;
+            background-color: rgba(71, 85, 105, 0.8);
+        }
+        .job-row-action-danger:hover {
+            color: #f87171 !important; /* red-400 */
+            background-color: rgba(239, 68, 68, 0.1) !important;
+        }
+        
+        /* Job row icons - light mode */
+        :root.theme-light .job-row-icon {
+            color: #475569; /* gray-600 */
+        }
+        :root.theme-light .job-row-icon:hover {
+            color: #1e293b; /* gray-900 */
+        }
+        :root.theme-light .job-row-action {
+            color: #475569; /* gray-600 */
+            background-color: #e2e8f0; /* gray-200 */
+        }
+        :root.theme-light .job-row-action:hover {
+            color: #1e293b; /* gray-900 */
+            background-color: #cbd5e1; /* gray-300 */
+        }
+        :root.theme-light .job-row-action-danger:hover {
+            color: #dc2626 !important; /* red-600 */
+            background-color: rgba(239, 68, 68, 0.1) !important;
+        }
+        
         /* Light mode: cancel buttons */
         :root.theme-light #cancelAfterBtn {
             background-color: #fef3c7 !important;
@@ -2257,11 +2297,20 @@
                 const modelLabel = job.model ? `${job.model}` : '';
                 
                 // Click row to open review (for reviewable jobs) or load job details
-                const rowClickAction = isReviewable ? `openReviewLatestForJob('${job.jobId}')` : `loadJob('${job.jobId}')`;
+                // Single click handler on entire row for consistent behavior
+                div.onclick = (e) => {
+                    // Don't trigger if clicking on interactive elements
+                    if (e.target.closest('button, input, a')) return;
+                    if (isReviewable) {
+                        openReviewLatestForJob('${job.jobId}');
+                    } else {
+                        loadJob('${job.jobId}');
+                    }
+                };
                 
                 div.innerHTML = `
                     <!-- Row 1: Checkbox + Status dot + Filename + Arrow hint -->
-                    <div class="flex items-center gap-3 mb-1.5" onclick="${rowClickAction}">
+                    <div class="flex items-center gap-3 mb-1.5">
                         ${!isRunning ? `
                             <input type="checkbox" class="job-select-checkbox w-4 h-4 rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500 cursor-pointer flex-shrink-0"
                                    data-job-id="${job.jobId}"
@@ -2271,8 +2320,8 @@
                         ` : '<span class="w-4"></span>'}
                         <span class="w-2 h-2 rounded-full ${statusBg} ${isRunning ? 'animate-pulse' : ''} flex-shrink-0"></span>
                         <span class="font-medium text-gray-200 truncate flex-1" title="${escapeHtml(primaryFilename)}">${escapeHtml(primaryFilename)}</span>
-                        <!-- Arrow hint on hover -->
-                        <svg class="w-4 h-4 text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <!-- Arrow hint on hover - visible icon -->
+                        <svg class="job-row-icon w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
                         </svg>
                     </div>
@@ -2286,9 +2335,9 @@
                         <div class="flex-1"></div>
                         
                         <!-- Action buttons cluster -->
-                        <div class="flex items-center gap-1.5" onclick="event.stopPropagation()">
+                        <div class="flex items-center gap-1.5">
                             <!-- Mark Done toggle - always visible, distinct style -->
-                            <button onclick="toggleJobFinished('${job.jobId}', ${!job.finished})" 
+                            <button onclick="event.stopPropagation(); toggleJobFinished('${job.jobId}', ${!job.finished})" 
                                     class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all ${job.finished 
                                         ? 'bg-green-600 text-white hover:bg-green-700' 
                                         : 'bg-surface-600/60 text-gray-300 hover:bg-surface-500 border border-gray-600/50'}"
@@ -2302,23 +2351,23 @@
                             ${!isRunning ? `
                                 <!-- Files button for batch jobs -->
                                 ${job.inputCount > 1 ? `
-                                    <button onclick="openJobFilesModal('${job.jobId}')" 
+                                    <button onclick="event.stopPropagation(); openJobFilesModal('${job.jobId}')" 
                                             class="px-2 py-1 text-xs bg-surface-600/60 hover:bg-surface-500 text-gray-300 rounded-md transition-all border border-gray-600/50"
                                             title="View ${job.inputCount} files in batch">
                                         ${job.inputCount} files
                                     </button>
                                 ` : ''}
                                 
-                                <!-- Secondary actions (show on hover) -->
-                                <button onclick="rerunJob('${job.jobId}')" 
-                                        class="opacity-0 group-hover:opacity-100 px-2 py-1 text-xs bg-surface-600/60 hover:bg-surface-500 text-gray-300 rounded-md transition-all"
+                                <!-- Secondary actions (show on hover) - better icon visibility -->
+                                <button onclick="event.stopPropagation(); rerunJob('${job.jobId}')" 
+                                        class="job-row-action opacity-0 group-hover:opacity-100 px-2 py-1 text-xs rounded-md transition-all"
                                         title="Re-run this job">
                                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
                                     </svg>
                                 </button>
-                                <button onclick="deleteJob('${job.jobId}')" 
-                                        class="opacity-0 group-hover:opacity-100 px-1.5 py-1 text-gray-500 hover:text-red-400 rounded transition-all"
+                                <button onclick="event.stopPropagation(); deleteJob('${job.jobId}')" 
+                                        class="job-row-action job-row-action-danger opacity-0 group-hover:opacity-100 px-1.5 py-1 rounded transition-all"
                                         title="Delete job">
                                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
