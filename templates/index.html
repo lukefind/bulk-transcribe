@@ -3904,13 +3904,19 @@
             updateOutputOptions();
             
             // Trigger file preview when user types in input folder (for server mode)
-            document.getElementById('inputFolder').addEventListener('change', () => {
-                saveToStorage(STORAGE_KEYS.inputFolder, document.getElementById('inputFolder').value);
-                previewFiles();
-            });
-            document.getElementById('outputFolder').addEventListener('change', () => {
-                saveToStorage(STORAGE_KEYS.outputFolder, document.getElementById('outputFolder').value);
-            });
+            const inputFolderEl = document.getElementById('inputFolder');
+            const outputFolderEl = document.getElementById('outputFolder');
+            if (inputFolderEl) {
+                inputFolderEl.addEventListener('change', () => {
+                    saveToStorage(STORAGE_KEYS.inputFolder, inputFolderEl.value);
+                    previewFiles();
+                });
+            }
+            if (outputFolderEl) {
+                outputFolderEl.addEventListener('change', () => {
+                    saveToStorage(STORAGE_KEYS.outputFolder, outputFolderEl.value);
+                });
+            }
         });
         
         async function loadJobHistoryAndRestore() {
