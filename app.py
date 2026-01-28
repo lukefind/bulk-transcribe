@@ -2946,17 +2946,45 @@ def api_rerun_job(job_id):
     data = request.json or {}
     options = data.get('options', original_manifest.get('options', {}))
     
-    # Validate and determine backend
+    # Determine backend with proper precedence:
+    # 1. If REMOTE_WORKER_MODE=required, always use remote
+    # 2. If options specify a backend, use that
+    # 3. Otherwise, use original job's backend
+    # 4. Fall back to environment's recommended backend
     env = compute_backend.get_cached_environment()
-    requested_backend = options.get('backend', env['recommendedBackend'])
+    original_backend = original_manifest.get('backend', '')
     
-    # Map UI concept "remote" to a real backend
-    if requested_backend == 'remote':
+    # Check if remote worker is required
+    worker_config = remote_worker.get_worker_config()
+    remote_required = worker_config.get('mode') == 'required'
+    remote_available = worker_config.get('url') and worker_config.get('token')
+    
+    if remote_required and remote_available:
+        # Force remote when mode is required
+        requested_backend = 'remote'
+    elif 'backend' in options:
+        # Explicit backend in request options
+        requested_backend = options['backend']
+    elif original_backend:
+        # Use original job's backend (preserve remote if it was remote)
+        requested_backend = original_backend
+    else:
+        # Fall back to environment recommendation
         requested_backend = env['recommendedBackend']
     
-    is_valid, error = compute_backend.validate_backend(requested_backend)
+    # Map UI concept "remote" to a real backend for validation
+    actual_backend = requested_backend
+    if requested_backend == 'remote':
+        actual_backend = env['recommendedBackend']
+    
+    is_valid, error = compute_backend.validate_backend(actual_backend)
     if not is_valid:
         return jsonify({'error': error}), 400
+    
+    # Keep 'remote' as the backend value if that's what we're using
+    # This ensures the job shows as "Remote GPU" in the UI
+    if requested_backend == 'remote':
+        actual_backend = 'remote'
     
     # Create new job
     new_job_id = session_store.new_id(12)
@@ -3000,17 +3028,22 @@ def api_rerun_job(job_id):
     
     session_store.atomic_write_json(session_store.job_manifest_path(session_id, new_job_id), manifest)
     
-    # Start job in background thread
-    def run_job():
-        _run_session_job(session_id, new_job_id, inputs, manifest['options'], dirs['outputs'], requested_backend)
-    
     with _active_jobs_lock:
         _active_jobs[(session_id, new_job_id)] = {'running': True, 'cancel_requested': False}
     
-    job_thread = threading.Thread(target=run_job, daemon=True)
+    # Start job in background thread - dispatch to remote or local based on backend
+    if requested_backend == 'remote':
+        def run_remote_job():
+            _run_remote_session_job(session_id, new_job_id, inputs, manifest['options'], dirs['outputs'])
+        job_thread = threading.Thread(target=run_remote_job, daemon=True)
+    else:
+        def run_job():
+            _run_session_job(session_id, new_job_id, inputs, manifest['options'], dirs['outputs'], requested_backend)
+        job_thread = threading.Thread(target=run_job, daemon=True)
+    
     job_thread.start()
     
-    return jsonify({'jobId': new_job_id, 'rerunOf': job_id})
+    return jsonify({'jobId': new_job_id, 'rerunOf': job_id, 'executionMode': requested_backend})
 
 
 # Add rerun to CSRF protected endpoints
