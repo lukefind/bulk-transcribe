@@ -2298,15 +2298,17 @@
                 
                 // Click row to open review (for reviewable jobs) or load job details
                 // Single click handler on entire row for consistent behavior
-                div.onclick = (e) => {
+                const jobId = job.jobId;
+                const canReview = isReviewable;
+                div.addEventListener('click', function(e) {
                     // Don't trigger if clicking on interactive elements
-                    if (e.target.closest('button, input, a')) return;
-                    if (isReviewable) {
-                        openReviewLatestForJob('${job.jobId}');
+                    if (e.target.closest('button, input, a, select, textarea')) return;
+                    if (canReview) {
+                        openReviewLatestForJob(jobId);
                     } else {
-                        loadJob('${job.jobId}');
+                        loadJob(jobId);
                     }
-                };
+                });
                 
                 div.innerHTML = `
                     <!-- Row 1: Checkbox + Status dot + Filename + Arrow hint -->
@@ -2358,16 +2360,16 @@
                                     </button>
                                 ` : ''}
                                 
-                                <!-- Secondary actions (show on hover) - better icon visibility -->
+                                <!-- Secondary actions - always visible -->
                                 <button onclick="event.stopPropagation(); rerunJob('${job.jobId}')" 
-                                        class="job-row-action opacity-0 group-hover:opacity-100 px-2 py-1 text-xs rounded-md transition-all"
+                                        class="job-row-action px-2 py-1 text-xs rounded-md transition-all"
                                         title="Re-run this job">
                                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
                                     </svg>
                                 </button>
                                 <button onclick="event.stopPropagation(); deleteJob('${job.jobId}')" 
-                                        class="job-row-action job-row-action-danger opacity-0 group-hover:opacity-100 px-1.5 py-1 rounded transition-all"
+                                        class="job-row-action job-row-action-danger px-1.5 py-1 rounded transition-all"
                                         title="Delete job">
                                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
