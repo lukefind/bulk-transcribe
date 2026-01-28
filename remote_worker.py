@@ -858,6 +858,8 @@ def dispatch_to_remote_worker(
         timeout = config['timeoutSeconds']
         start_time = time.time()
         consecutive_errors = 0
+        consecutive_404s = 0
+        MAX_CONSECUTIVE_404S = 3  # Require 3 consecutive 404s before declaring job lost
         
         while True:
             # Check for cancellation
@@ -895,12 +897,45 @@ def dispatch_to_remote_worker(
                     now_iso = datetime.now(timezone.utc).isoformat()
 
                     if classified is not None:
-                        # Special handling for 404 - job lost, may auto-retry
+                        # Special handling for 404 - require multiple consecutive 404s
+                        # A single 404 could be a transient issue (proxy hiccup, etc)
                         if response.status_code == 404:
+                            consecutive_404s += 1
+                            
+                            if consecutive_404s < MAX_CONSECUTIVE_404S:
+                                # Not enough consecutive 404s yet - treat as transient
+                                log_event('warning', 'remote_job_404_transient',
+                                          jobId=job_id,
+                                          workerJobId=worker_job_id,
+                                          consecutive404s=consecutive_404s,
+                                          maxRequired=MAX_CONSECUTIVE_404S,
+                                          message='Got 404, waiting for more before declaring lost')
+                                
+                                # Update manifest to show we're having issues but not failed yet
+                                update_manifest_callback(
+                                    progress={
+                                        'currentFile': f'Worker returned 404 ({consecutive_404s}/{MAX_CONSECUTIVE_404S}), retrying...',
+                                    },
+                                    remote={
+                                        'workerJobId': worker_job_id,
+                                        'lastError': {
+                                            'code': 'TRANSIENT_404',
+                                            'message': f'Worker returned 404 ({consecutive_404s}/{MAX_CONSECUTIVE_404S})',
+                                            'at': now_iso,
+                                        },
+                                    }
+                                )
+                                
+                                # Wait and retry
+                                time.sleep(poll_interval * 2)  # Double wait on 404
+                                continue
+                            
+                            # Multiple consecutive 404s - job is truly lost
                             log_event('error', 'remote_job_lost',
                                       jobId=job_id,
                                       workerJobId=worker_job_id,
-                                      message='Worker restarted or lost the job')
+                                      consecutive404s=consecutive_404s,
+                                      message='Worker lost the job after multiple 404s')
                             
                             # Check if we should auto-retry
                             current_retry_count = 0
@@ -953,6 +988,7 @@ def dispatch_to_remote_worker(
 
                 status = response.json()
                 consecutive_errors = 0  # Reset on success
+                consecutive_404s = 0  # Reset 404 counter on success
                 
                 # Update manifest with progress
                 worker_progress = status.get('progress', {})
