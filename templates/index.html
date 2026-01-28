@@ -6740,9 +6740,28 @@
         // Keyboard shortcuts
         function setupReviewKeyboardShortcuts() {
             document.addEventListener('keydown', handleReviewKeydown);
+            
+            // Blur checkboxes on change to prevent Space from toggling them
+            const mergedCheckbox = document.getElementById('mergedViewCheckbox');
+            const autoScrollCheckbox = document.getElementById('autoScrollCheckbox');
+            [mergedCheckbox, autoScrollCheckbox].forEach(el => {
+                if (!el) return;
+                el.addEventListener('change', () => el.blur());
+            });
         }
         
         function handleReviewKeydown(e) {
+            // Prevent Space from toggling checkboxes - blur and let audio handle it
+            if (e.code === 'Space') {
+                const active = document.activeElement;
+                if (active?.tagName === 'INPUT' && active.type === 'checkbox') {
+                    active.blur();
+                    e.preventDefault();
+                    toggleAudioPlayback();
+                    return;
+                }
+            }
+            
             const isTyping = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable;
             
             // Don't handle if review workspace is hidden
