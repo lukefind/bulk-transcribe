@@ -143,8 +143,25 @@ def before_request_session():
     global _request_counter
     
     # Get or generate session ID
-    session_id = request.cookies.get(session_store.COOKIE_NAME)
-    if not session_id:
+    raw_session_id = request.cookies.get(session_store.COOKIE_NAME)
+    
+    # Handle shared sessions: "shared:<mode>:<real_session_id>"
+    g.share_mode = None
+    g.is_shared_session = False
+    
+    if raw_session_id and raw_session_id.startswith('shared:'):
+        parts = raw_session_id.split(':', 2)
+        if len(parts) == 3:
+            g.share_mode = parts[1]  # 'read' or 'edit'
+            session_id = parts[2]    # The actual session ID
+            g.is_shared_session = True
+        else:
+            # Malformed, generate new
+            session_id = session_store.new_id(32)
+            g._new_session_id = session_id
+    elif raw_session_id:
+        session_id = raw_session_id
+    else:
         session_id = session_store.new_id(32)
         g._new_session_id = session_id
     
@@ -208,10 +225,51 @@ def _require_csrf():
     return None
 
 
+# Endpoints blocked for read-only shared sessions
+_READ_ONLY_BLOCKED_ENDPOINTS = {
+    'api_upload_files',
+    'api_create_job',
+    'api_cancel_job',
+    'api_cancel_after_current',
+    'api_delete_job',
+    'api_mark_job_finished',
+    'api_bulk_delete_jobs',
+    'api_clear_jobs',
+    'api_clear_duplicate_jobs',
+    'api_rerun_job',
+    'api_put_review_state',
+    'api_update_speaker_labels',
+    'api_share_session',  # Can't create shares from shared session
+    'api_revoke_share',
+}
+
+
+def _check_read_only():
+    """Block write operations for read-only shared sessions."""
+    if not getattr(g, 'is_shared_session', False):
+        return None
+    
+    if getattr(g, 'share_mode', None) != 'read':
+        return None  # Edit mode allowed
+    
+    if request.endpoint in _READ_ONLY_BLOCKED_ENDPOINTS:
+        return jsonify({'error': 'This session is read-only'}), 403
+    
+    return None
+
+
 @app.before_request
 def before_request_csrf():
     """Validate CSRF token for protected endpoints."""
     result = _require_csrf()
+    if result:
+        return result
+
+
+@app.before_request
+def before_request_read_only():
+    """Block write operations for read-only shared sessions."""
+    result = _check_read_only()
     if result:
         return result
 
@@ -5087,6 +5145,160 @@ def api_import_session():
     })
 
 _CSRF_PROTECTED_ENDPOINTS.add('api_import_session')
+
+
+# =============================================================================
+# SESSION SHARING ENDPOINTS
+# =============================================================================
+
+@app.route('/api/session/share', methods=['POST'])
+def api_share_session():
+    """
+    Create a share token for the current session.
+    
+    Body: { "mode": "read"|"edit", "password": "optional" }
+    Returns: { "token": "abc123" }
+    """
+    import hashlib
+    
+    session_id = g.session_id
+    data = request.get_json() or {}
+    
+    mode = data.get('mode', 'read')
+    if mode not in ('read', 'edit'):
+        return jsonify({'error': 'Invalid mode. Must be "read" or "edit"'}), 400
+    
+    password = data.get('password')
+    password_hash = None
+    if password:
+        # Simple hash (not bcrypt to avoid dependency, but sufficient for share tokens)
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+    
+    # Generate token
+    token = secrets.token_urlsafe(16)
+    
+    # Store share
+    session_store.add_share_token(session_id, token, mode, password_hash)
+    
+    return jsonify({'token': token, 'mode': mode})
+
+_CSRF_PROTECTED_ENDPOINTS.add('api_share_session')
+
+
+@app.route('/api/session/share', methods=['GET'])
+def api_list_shares():
+    """List all share tokens for the current session."""
+    session_id = g.session_id
+    shares = session_store.get_shared_sessions(session_id)
+    
+    # Don't expose password hashes
+    safe_shares = []
+    for s in shares:
+        safe_shares.append({
+            'token': s.get('token'),
+            'mode': s.get('mode'),
+            'hasPassword': bool(s.get('passwordHash')),
+            'createdAt': s.get('createdAt')
+        })
+    
+    return jsonify({'shares': safe_shares})
+
+
+@app.route('/api/session/share/<token>', methods=['DELETE'])
+def api_revoke_share(token):
+    """Revoke a share token."""
+    session_id = g.session_id
+    
+    if session_store.revoke_share_token(session_id, token):
+        return jsonify({'message': 'Token revoked'})
+    else:
+        return jsonify({'error': 'Token not found'}), 404
+
+_CSRF_PROTECTED_ENDPOINTS.add('api_revoke_share')
+
+
+@app.route('/api/session/join', methods=['POST'])
+def api_join_session():
+    """
+    Join a shared session using a token.
+    
+    Body: { "token": "abc123", "password": "optional" }
+    Returns: { "sessionId": "...", "mode": "read"|"edit" }
+    
+    Sets session cookie to the shared session.
+    """
+    import hashlib
+    
+    data = request.get_json() or {}
+    token = data.get('token', '').strip()
+    password = data.get('password', '')
+    
+    if not token:
+        return jsonify({'error': 'Token required'}), 400
+    
+    # Find share
+    share = session_store.find_share_by_token(token)
+    if not share:
+        return jsonify({'error': 'Invalid token'}), 404
+    
+    # Verify password if required
+    if share.get('passwordHash'):
+        if not password:
+            return jsonify({'error': 'Password required'}), 401
+        provided_hash = hashlib.sha256(password.encode()).hexdigest()
+        if provided_hash != share['passwordHash']:
+            return jsonify({'error': 'Invalid password'}), 401
+    
+    # Set the shared session ID and mode
+    shared_session_id = share['sessionId']
+    mode = share['mode']
+    
+    # Store mode in a special way - we'll use a prefixed session ID
+    # Format: "shared:<mode>:<original_session_id>"
+    # This allows the middleware to detect shared sessions and enforce read-only
+    joined_session_id = f"shared:{mode}:{shared_session_id}"
+    
+    # Mark that we need to set a new cookie
+    g._new_session_id = joined_session_id
+    g._joined_share_mode = mode
+    
+    return jsonify({
+        'message': 'Joined session',
+        'mode': mode,
+        'sessionId': shared_session_id[:8] + '...'  # Partial for privacy
+    })
+
+
+@app.route('/api/session/info', methods=['GET'])
+def api_session_info():
+    """Get info about current session including share mode."""
+    raw_session_id = request.cookies.get(session_store.COOKIE_NAME, '')
+    
+    is_shared = raw_session_id.startswith('shared:')
+    mode = 'edit'  # Default for own session
+    
+    if is_shared:
+        parts = raw_session_id.split(':', 2)
+        if len(parts) >= 2:
+            mode = parts[1]
+    
+    return jsonify({
+        'isShared': is_shared,
+        'mode': mode,
+        'readOnly': mode == 'read'
+    })
+
+
+@app.route('/api/session/leave', methods=['POST'])
+def api_leave_session():
+    """Leave a shared session and get a fresh session."""
+    # Generate new session ID
+    new_session_id = session_store.new_id(32)
+    g._new_session_id = new_session_id
+    
+    return jsonify({'message': 'Left shared session'})
+
+_CSRF_PROTECTED_ENDPOINTS.add('api_leave_session')
 
 
 @app.route('/api/jobs/bulk-export', methods=['POST'])

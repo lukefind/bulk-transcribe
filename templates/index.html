@@ -451,6 +451,9 @@
                                 <input type="file" accept=".zip" class="hidden" onchange="importSession(this.files[0]); this.value='';">
                             </label>
                             <span class="text-gray-600">|</span>
+                            <button type="button" onclick="openShareSessionModal()" class="text-xs text-gray-400 hover:text-gray-300">Share</button>
+                            <button type="button" onclick="openJoinSessionModal()" class="text-xs text-gray-400 hover:text-gray-300">Join</button>
+                            <span class="text-gray-600">|</span>
                             <select id="finishedFilterSelect" onchange="onFinishedFilterChange()" class="text-xs bg-surface-700 border border-gray-600/50 rounded px-1.5 py-0.5 text-gray-300">
                                 <option value="all">All</option>
                                 <option value="unfinished">Unfinished</option>
@@ -3124,6 +3127,255 @@
                 showError(`Bulk export failed: ${e.message}`);
             }
         }
+        
+        // =================================================================
+        // SESSION SHARING
+        // =================================================================
+        
+        let sessionShareMode = null;  // null = own session, 'read' or 'edit' = shared
+        let isSharedSession = false;
+        
+        async function checkSessionInfo() {
+            try {
+                const response = await fetch('/api/session/info');
+                if (response.ok) {
+                    const data = await response.json();
+                    isSharedSession = data.isShared;
+                    sessionShareMode = data.mode;
+                    updateReadOnlyUI();
+                }
+            } catch (e) {
+                console.error('Failed to check session info:', e);
+            }
+        }
+        
+        function updateReadOnlyUI() {
+            const banner = document.getElementById('readOnlyBanner');
+            if (isSharedSession && sessionShareMode === 'read') {
+                if (!banner) {
+                    const newBanner = document.createElement('div');
+                    newBanner.id = 'readOnlyBanner';
+                    newBanner.className = 'bg-yellow-600/90 text-white text-center py-2 px-4 text-sm';
+                    newBanner.innerHTML = `
+                        <span class="font-medium">Read-Only Mode</span> — You are viewing a shared session. Editing is disabled.
+                        <button onclick="leaveSharedSession()" class="ml-4 underline hover:no-underline">Leave Session</button>
+                    `;
+                    document.body.insertBefore(newBanner, document.body.firstChild);
+                }
+                // Disable upload and other write controls
+                document.querySelectorAll('[data-requires-edit]').forEach(el => {
+                    el.disabled = true;
+                    el.classList.add('opacity-50', 'cursor-not-allowed');
+                });
+            } else if (banner) {
+                banner.remove();
+            }
+        }
+        
+        function openShareSessionModal() {
+            let modal = document.getElementById('shareSessionModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'shareSessionModal';
+                modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50';
+                modal.innerHTML = `
+                    <div class="bg-surface-800 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+                        <h3 class="text-lg font-semibold text-white mb-4">Share Session</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm text-gray-400 mb-1">Access Mode</label>
+                                <select id="shareMode" class="w-full bg-surface-700 border border-gray-600 rounded px-3 py-2 text-white">
+                                    <option value="read">Read-Only (view & export only)</option>
+                                    <option value="edit">Full Edit (can modify)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-400 mb-1">Password (optional)</label>
+                                <input type="password" id="sharePassword" placeholder="Leave empty for no password" 
+                                       class="w-full bg-surface-700 border border-gray-600 rounded px-3 py-2 text-white">
+                            </div>
+                            <div id="shareResult" class="hidden">
+                                <label class="block text-sm text-gray-400 mb-1">Share Token</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="shareToken" readonly 
+                                           class="flex-1 bg-surface-900 border border-gray-600 rounded px-3 py-2 text-white font-mono text-sm">
+                                    <button onclick="copyShareToken()" class="px-3 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded text-sm">Copy</button>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-1">Share this token with others to give them access.</p>
+                            </div>
+                            <div id="shareError" class="text-red-400 text-sm hidden"></div>
+                        </div>
+                        <div class="flex justify-end gap-2 mt-6">
+                            <button onclick="closeShareSessionModal()" class="px-4 py-2 text-sm text-gray-400 hover:text-white">Close</button>
+                            <button id="createShareBtn" onclick="createShareToken()" class="px-4 py-2 text-sm bg-primary-600 hover:bg-primary-500 text-white rounded">Create Share Link</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+            }
+            
+            // Reset state
+            modal.classList.remove('hidden');
+            document.getElementById('shareMode').value = 'read';
+            document.getElementById('sharePassword').value = '';
+            document.getElementById('shareResult').classList.add('hidden');
+            document.getElementById('shareError').classList.add('hidden');
+            document.getElementById('createShareBtn').classList.remove('hidden');
+        }
+        
+        function closeShareSessionModal() {
+            const modal = document.getElementById('shareSessionModal');
+            if (modal) modal.classList.add('hidden');
+        }
+        
+        async function createShareToken() {
+            const mode = document.getElementById('shareMode').value;
+            const password = document.getElementById('sharePassword').value;
+            
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch('/api/session/share', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ mode, password: password || undefined })
+                });
+                
+                if (!response.ok) {
+                    const data = await response.json();
+                    document.getElementById('shareError').textContent = data.error || 'Failed to create share';
+                    document.getElementById('shareError').classList.remove('hidden');
+                    return;
+                }
+                
+                const data = await response.json();
+                document.getElementById('shareToken').value = data.token;
+                document.getElementById('shareResult').classList.remove('hidden');
+                document.getElementById('createShareBtn').classList.add('hidden');
+                document.getElementById('shareError').classList.add('hidden');
+                
+            } catch (e) {
+                document.getElementById('shareError').textContent = e.message;
+                document.getElementById('shareError').classList.remove('hidden');
+            }
+        }
+        
+        function copyShareToken() {
+            const token = document.getElementById('shareToken').value;
+            navigator.clipboard.writeText(token).then(() => {
+                showSuccess('Token copied to clipboard');
+            }).catch(() => {
+                // Fallback
+                document.getElementById('shareToken').select();
+                document.execCommand('copy');
+                showSuccess('Token copied');
+            });
+        }
+        
+        function openJoinSessionModal() {
+            let modal = document.getElementById('joinSessionModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'joinSessionModal';
+                modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50';
+                modal.innerHTML = `
+                    <div class="bg-surface-800 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+                        <h3 class="text-lg font-semibold text-white mb-4">Join Shared Session</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm text-gray-400 mb-1">Share Token</label>
+                                <input type="text" id="joinToken" placeholder="Paste share token here" 
+                                       class="w-full bg-surface-700 border border-gray-600 rounded px-3 py-2 text-white font-mono">
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-400 mb-1">Password (if required)</label>
+                                <input type="password" id="joinPassword" placeholder="Enter password if set" 
+                                       class="w-full bg-surface-700 border border-gray-600 rounded px-3 py-2 text-white">
+                            </div>
+                            <div id="joinError" class="text-red-400 text-sm hidden"></div>
+                        </div>
+                        <div class="flex justify-end gap-2 mt-6">
+                            <button onclick="closeJoinSessionModal()" class="px-4 py-2 text-sm text-gray-400 hover:text-white">Cancel</button>
+                            <button onclick="joinSharedSession()" class="px-4 py-2 text-sm bg-primary-600 hover:bg-primary-500 text-white rounded">Join Session</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+            }
+            
+            modal.classList.remove('hidden');
+            document.getElementById('joinToken').value = '';
+            document.getElementById('joinPassword').value = '';
+            document.getElementById('joinError').classList.add('hidden');
+        }
+        
+        function closeJoinSessionModal() {
+            const modal = document.getElementById('joinSessionModal');
+            if (modal) modal.classList.add('hidden');
+        }
+        
+        async function joinSharedSession() {
+            const token = document.getElementById('joinToken').value.trim();
+            const password = document.getElementById('joinPassword').value;
+            
+            if (!token) {
+                document.getElementById('joinError').textContent = 'Please enter a share token';
+                document.getElementById('joinError').classList.remove('hidden');
+                return;
+            }
+            
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                
+                const response = await fetch('/api/session/join', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ token, password: password || undefined })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    document.getElementById('joinError').textContent = data.error || 'Failed to join session';
+                    document.getElementById('joinError').classList.remove('hidden');
+                    return;
+                }
+                
+                // Success - reload page to apply new session
+                closeJoinSessionModal();
+                showSuccess(`Joined session in ${data.mode} mode. Reloading...`);
+                setTimeout(() => window.location.reload(), 1000);
+                
+            } catch (e) {
+                document.getElementById('joinError').textContent = e.message;
+                document.getElementById('joinError').classList.remove('hidden');
+            }
+        }
+        
+        async function leaveSharedSession() {
+            if (!confirm('Leave this shared session? You will get a fresh session.')) return;
+            
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                
+                const response = await fetch('/api/session/leave', {
+                    method: 'POST',
+                    headers
+                });
+                
+                if (response.ok) {
+                    showSuccess('Left shared session. Reloading...');
+                    setTimeout(() => window.location.reload(), 1000);
+                }
+            } catch (e) {
+                showError('Failed to leave session: ' + e.message);
+            }
+        }
+        
+        // Check session info on load
+        document.addEventListener('DOMContentLoaded', checkSessionInfo);
         
         async function bulkImportProjects(files) {
             if (!files || files.length === 0) return;

@@ -610,3 +610,106 @@ def get_max_files_per_job() -> int:
         return int(os.environ.get('MAX_FILES_PER_JOB', '50'))
     except ValueError:
         return 50
+
+
+# =============================================================================
+# Session Sharing
+# =============================================================================
+
+def shared_sessions_path(session_id: str) -> str:
+    """Get path to shared sessions file for a session."""
+    return os.path.join(session_dir(session_id), 'shared_sessions.json')
+
+
+def get_shared_sessions(session_id: str) -> list:
+    """Get all share tokens for a session."""
+    path = shared_sessions_path(session_id)
+    data = read_json(path)
+    return data.get('shares', []) if data else []
+
+
+def add_share_token(session_id: str, token: str, mode: str, password_hash: str = None) -> dict:
+    """
+    Add a share token for a session.
+    
+    Args:
+        session_id: The session to share
+        token: The share token
+        mode: 'read' or 'edit'
+        password_hash: Optional bcrypt hash of password
+    
+    Returns:
+        The created share entry
+    """
+    path = shared_sessions_path(session_id)
+    data = read_json(path) or {'shares': []}
+    
+    entry = {
+        'token': token,
+        'mode': mode,
+        'passwordHash': password_hash,
+        'createdAt': datetime.now(timezone.utc).isoformat(),
+        'createdBy': session_id
+    }
+    
+    data['shares'].append(entry)
+    atomic_write_json(path, data)
+    
+    return entry
+
+
+def revoke_share_token(session_id: str, token: str) -> bool:
+    """
+    Revoke a share token.
+    
+    Returns:
+        True if token was found and revoked, False otherwise
+    """
+    path = shared_sessions_path(session_id)
+    data = read_json(path)
+    if not data or 'shares' not in data:
+        return False
+    
+    original_len = len(data['shares'])
+    data['shares'] = [s for s in data['shares'] if s.get('token') != token]
+    
+    if len(data['shares']) < original_len:
+        atomic_write_json(path, data)
+        return True
+    return False
+
+
+def find_share_by_token(token: str) -> Optional[dict]:
+    """
+    Find a share entry by token across all sessions.
+    
+    Returns:
+        Dict with 'sessionId', 'mode', 'passwordHash' if found, None otherwise
+    """
+    sessions_root = os.path.join(data_root(), 'sessions')
+    if not os.path.exists(sessions_root):
+        return None
+    
+    for session_id in os.listdir(sessions_root):
+        session_path = os.path.join(sessions_root, session_id)
+        if not os.path.isdir(session_path):
+            continue
+        
+        shares_path = os.path.join(session_path, 'shared_sessions.json')
+        if not os.path.exists(shares_path):
+            continue
+        
+        data = read_json(shares_path)
+        if not data or 'shares' not in data:
+            continue
+        
+        for share in data['shares']:
+            if share.get('token') == token:
+                return {
+                    'sessionId': session_id,
+                    'mode': share.get('mode', 'read'),
+                    'passwordHash': share.get('passwordHash'),
+                    'createdAt': share.get('createdAt')
+                }
+    
+    return None
