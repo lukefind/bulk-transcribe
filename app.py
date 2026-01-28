@@ -3034,9 +3034,14 @@ def api_rerun_job(job_id):
     original_backend = original_manifest.get('backend', '')
     
     # Check if remote worker is required
-    worker_config = remote_worker.get_worker_config()
-    remote_required = worker_config.get('mode') == 'required'
-    remote_available = worker_config.get('url') and worker_config.get('token')
+    try:
+        from remote_worker import get_worker_config
+        worker_config = get_worker_config()
+        remote_required = worker_config.get('mode') == 'required'
+        remote_available = worker_config.get('url') and worker_config.get('token')
+    except ImportError:
+        remote_required = False
+        remote_available = False
     
     if remote_required and remote_available:
         # Force remote when mode is required
