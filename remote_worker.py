@@ -640,28 +640,31 @@ def dispatch_to_remote_worker(
             # Worker unreachable - use backoff
             consecutive_unreachable += 1
             backoff = calculate_backoff(capacity_check_attempt)
-            log_event('warning', 'remote_capacity_check_failed',
-                      jobId=job_id, error=capacity['error'], backoffSeconds=backoff,
-                      consecutiveFailures=consecutive_unreachable)
             
-            # Check if we've exceeded consecutive failure threshold
-            if consecutive_unreachable >= MAX_CONSECUTIVE_UNREACHABLE:
-                log_event('error', 'remote_worker_unavailable', 
+            # Log degraded state when threshold exceeded (but don't fail)
+            if consecutive_unreachable == MAX_CONSECUTIVE_UNREACHABLE:
+                log_event('warning', 'remote_worker_degraded', 
                           jobId=job_id, consecutiveFailures=consecutive_unreachable,
-                          message='Worker offline or restarted - exceeded retry threshold')
-                update_manifest_callback(
-                    status='failed',
-                    finishedAt=datetime.now(timezone.utc).isoformat(),
-                    error={
-                        'code': 'REMOTE_WORKER_UNAVAILABLE',
-                        'message': f'Remote worker offline or restarted. Failed {consecutive_unreachable} consecutive capacity checks.'
-                    }
-                )
-                return False
+                          message='Worker unreachable - entering degraded state, will keep retrying')
+            else:
+                log_event('warning', 'remote_capacity_check_failed',
+                          jobId=job_id, error=capacity['error'], backoffSeconds=backoff,
+                          consecutiveFailures=consecutive_unreachable)
+            
+            # Mark as degraded after threshold, but keep retrying (don't fail)
+            is_degraded = consecutive_unreachable >= MAX_CONSECUTIVE_UNREACHABLE
             
             update_manifest_callback(
                 status='queued_remote',
-                progress={'stage': 'queued_remote', 'currentFile': f'Worker unreachable ({consecutive_unreachable}/{MAX_CONSECUTIVE_UNREACHABLE}), retrying in {int(backoff)}s...'},
+                progress={
+                    'stage': 'queued_remote', 
+                    'currentFile': f'Worker unreachable, retrying in {int(backoff)}s...'
+                },
+                remoteStatus={
+                    'degraded': is_degraded,
+                    'reason': 'worker_unreachable' if is_degraded else None,
+                    'consecutiveErrors': consecutive_unreachable
+                },
                 lastErrorCode='REMOTE_WORKER_UNREACHABLE',
                 lastErrorMessage=capacity['error'][:200],
                 lastErrorAt=datetime.now(timezone.utc).isoformat()
@@ -680,8 +683,21 @@ def dispatch_to_remote_worker(
                 return False
             continue
         
-        # Reset consecutive failure counter on successful check
+        # Reset consecutive failure counter and degraded status on successful check
+        if consecutive_unreachable >= MAX_CONSECUTIVE_UNREACHABLE:
+            log_event('info', 'remote_worker_recovered', 
+                      jobId=job_id, previousConsecutiveFailures=consecutive_unreachable,
+                      message='Worker contact re-established after degraded state')
         consecutive_unreachable = 0
+        
+        # Clear degraded status
+        update_manifest_callback(
+            remoteStatus={
+                'degraded': False,
+                'reason': None,
+                'consecutiveErrors': 0
+            }
+        )
         
         if capacity['hasCapacity']:
             log_event('info', 'remote_capacity_available',
