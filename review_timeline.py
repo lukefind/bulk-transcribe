@@ -50,6 +50,7 @@ class Chunk:
     text: str
     confidence: Optional[float] = None
     origin: Optional[Dict[str, Any]] = None
+    hallucination_warning: Optional[Dict[str, Any]] = None  # From Whisper segment if flagged
     
     def to_dict(self) -> dict:
         return asdict(self)
@@ -921,13 +922,32 @@ class TimelineParser:
         chunks = self._group_segments_into_chunks(segments)
         
         for idx, chunk_data in enumerate(chunks):
+            # Combine hallucination warnings if multiple segments had them
+            warnings = chunk_data.get('hallucination_warnings', [])
+            combined_warning = None
+            if warnings:
+                # Merge warnings: take highest confidence and combine reasons
+                all_reasons = []
+                max_confidence = 0
+                for w in warnings:
+                    if w:
+                        max_confidence = max(max_confidence, w.get('confidence', 0))
+                        all_reasons.extend(w.get('reasons', []))
+                if all_reasons:
+                    combined_warning = {
+                        'confidence': max_confidence,
+                        'reasons': list(set(all_reasons)),
+                        'segment_count': len(warnings)
+                    }
+            
             chunk = Chunk(
                 chunk_id=f't_{idx:06d}',
                 start=chunk_data['start'],
                 end=chunk_data['end'],
                 speaker_id=default_speaker.id,
                 text=chunk_data['text'].strip(),
-                origin={'transcript_segment_ids': chunk_data['segment_ids']}
+                origin={'transcript_segment_ids': chunk_data['segment_ids']},
+                hallucination_warning=combined_warning
             )
             timeline.chunks.append(chunk)
     
@@ -1023,13 +1043,15 @@ class TimelineParser:
             'start': segments[0].get('start', 0),
             'end': segments[0].get('end', 0),
             'text': '',
-            'segment_ids': []
+            'segment_ids': [],
+            'hallucination_warnings': []  # Collect warnings from segments
         }
         
         for idx, seg in enumerate(segments):
             seg_text = seg.get('text', '').strip()
             seg_start = seg.get('start', 0)
             seg_end = seg.get('end', 0)
+            seg_warning = seg.get('hallucination_warning')
             
             # Check if we should start a new chunk
             duration = seg_end - current_chunk['start']
@@ -1049,12 +1071,15 @@ class TimelineParser:
                     'start': seg_start,
                     'end': seg_end,
                     'text': seg_text,
-                    'segment_ids': [idx]
+                    'segment_ids': [idx],
+                    'hallucination_warnings': [seg_warning] if seg_warning else []
                 }
             else:
                 current_chunk['end'] = seg_end
                 current_chunk['text'] += ' ' + seg_text if current_chunk['text'] else seg_text
                 current_chunk['segment_ids'].append(idx)
+                if seg_warning:
+                    current_chunk['hallucination_warnings'].append(seg_warning)
         
         # Don't forget the last chunk
         if current_chunk['text']:

@@ -6511,14 +6511,19 @@
                 const displayText = editedText !== undefined ? editedText : chunk.text;
                 const isEdited = editedText !== undefined;
                 
+                // Hallucination warning badge
+                const hallucinationBadge = chunk.hallucination_warning ? 
+                    `<span class="hallucination-badge ml-1 cursor-help text-amber-500" 
+                           title="Possible hallucination: ${(chunk.hallucination_warning.reasons || []).join(', ')}">⚠️</span>` : '';
+                
                 div.innerHTML = `
                     <div class="flex-shrink-0 w-16">
                         <span class="text-primary-400 hover:text-primary-300 cursor-pointer text-xs font-mono" 
                               onclick="event.stopPropagation(); seekToTimestamp(${chunk.start})">[${formatTime(chunk.start)}]</span>
                     </div>
-                    <div class="flex-shrink-0">
+                    <div class="flex-shrink-0 flex items-center">
                         <span class="inline-block px-2 py-0.5 rounded text-xs font-medium" 
-                              style="background-color: ${speakerColor}20; color: ${speakerColor}">${speaker?.label || 'Unknown'}</span>
+                              style="background-color: ${speakerColor}20; color: ${speakerColor}">${speaker?.label || 'Unknown'}</span>${hallucinationBadge}
                     </div>
                     <div class="chunk-text flex-1 text-sm speaker-tinted-text ${isEdited ? 'italic' : ''}" data-chunk-id="${chunk.chunk_id}" data-original="${escapeHtml(chunk.text)}">${escapeHtml(displayText)}</div>
                     <div class="flex-shrink-0 flex items-center gap-1">

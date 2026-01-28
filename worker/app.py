@@ -799,6 +799,54 @@ def load_whisper_model(model_name: str):
     return model
 
 
+def _convert_to_wav_for_vad(audio_path: str, worker_job_id: str) -> str:
+    """
+    Convert audio to 16kHz mono WAV for reliable VAD processing.
+    
+    Args:
+        audio_path: Path to input audio file
+        worker_job_id: Job ID for logging
+    
+    Returns:
+        Path to converted WAV file (caller must clean up)
+    
+    Raises:
+        RuntimeError: If conversion fails
+    """
+    import subprocess
+    import tempfile
+    
+    # Create temp file for WAV output
+    fd, wav_path = tempfile.mkstemp(suffix='.wav', prefix='vad_')
+    os.close(fd)
+    
+    try:
+        cmd = [
+            'ffmpeg', '-y', '-i', audio_path,
+            '-ar', '16000',  # 16kHz sample rate
+            '-ac', '1',      # mono
+            '-c:a', 'pcm_s16le',  # 16-bit PCM
+            wav_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        
+        if result.returncode != 0:
+            # Clean up on failure
+            if os.path.exists(wav_path):
+                os.remove(wav_path)
+            raise RuntimeError(f"ffmpeg failed: {result.stderr[:300]}")
+        
+        return wav_path
+    except subprocess.TimeoutExpired:
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
+        raise RuntimeError("ffmpeg conversion timed out")
+    except Exception as e:
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
+        raise
+
+
 def transcribe_file(
     model, 
     audio_path: str, 
@@ -831,6 +879,7 @@ def transcribe_file(
     # VAD pre-filtering
     vad_mapping = None
     actual_audio_path = audio_path
+    vad_wav_path = None  # Track WAV conversion for cleanup
     
     if vad_enabled:
         try:
@@ -839,8 +888,22 @@ def transcribe_file(
             add_log(worker_job_id, 'debug', 'vad_started', 
                     f'Running VAD pre-filter on {os.path.basename(audio_path)}')
             
+            # Convert to 16kHz mono WAV for reliable VAD (m4a/other formats may fail)
+            vad_input_path = audio_path
+            try:
+                vad_wav_path = _convert_to_wav_for_vad(audio_path, worker_job_id)
+                vad_input_path = vad_wav_path
+                add_log(worker_job_id, 'debug', 'vad_wav_converted',
+                        f'Converted to WAV for VAD: {os.path.basename(vad_wav_path)}')
+            except Exception as conv_err:
+                add_log(worker_job_id, 'warning', 'vad_decode_failed',
+                        f'Failed to convert audio to WAV for VAD, using original: {conv_err}',
+                        originalFormat=os.path.splitext(audio_path)[1])
+                # Fall back to original audio path
+                vad_input_path = audio_path
+            
             filtered_path, speech_segments, total_speech = filter_audio_by_vad(
-                audio_path,
+                vad_input_path,
                 threshold=0.5,
                 min_speech_duration_ms=250,
                 min_silence_duration_ms=500,
@@ -860,6 +923,13 @@ def transcribe_file(
         except Exception as e:
             add_log(worker_job_id, 'warning', 'vad_failed',
                     f'VAD pre-filter failed, using original audio: {e}')
+        finally:
+            # Clean up VAD WAV conversion
+            if vad_wav_path and os.path.exists(vad_wav_path):
+                try:
+                    os.remove(vad_wav_path)
+                except Exception:
+                    pass
     
     # Run Whisper transcription
     result = model.transcribe(actual_audio_path, **options)
