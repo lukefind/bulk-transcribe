@@ -568,17 +568,20 @@ class TimelineParser:
         after_dedupe = len(timeline.chunks)
         
         # Post-processing pass: drop contained fragments, merge same-speaker chunks
-        # This also captures chunks_before_merge for raw view
         postprocess_stats = timeline.postprocess_chunks()
         
-        # chunks_raw = after containment drop, BEFORE merge (captured in postprocess_chunks)
-        # chunks_merged = after merge (current state)
-        chunks_before = getattr(timeline, 'chunks_before_merge', None)
-        if chunks_before is not None:
-            timeline.chunks_raw = chunks_before
+        # chunks_raw = unmerged transcript segments (captured in _parse_transcript_with_diarization)
+        # chunks_merged = after all merging (current state)
+        unmerged = getattr(timeline, '_unmerged_chunks', None)
+        if unmerged and len(unmerged) > 0:
+            timeline.chunks_raw = unmerged
         else:
-            # Fallback if chunks_before_merge wasn't set
-            timeline.chunks_raw = [c.to_dict() for c in timeline.chunks]
+            # Fallback: use chunks_before_merge from postprocess if available
+            chunks_before = getattr(timeline, 'chunks_before_merge', None)
+            if chunks_before is not None:
+                timeline.chunks_raw = chunks_before
+            else:
+                timeline.chunks_raw = [c.to_dict() for c in timeline.chunks]
         timeline.chunks_merged = [c.to_dict() for c in timeline.chunks]
         
         # Debug log
@@ -709,6 +712,28 @@ class TimelineParser:
         
         if not labeled_segments:
             return
+        
+        # Capture unmerged segments as raw chunks BEFORE merging
+        # Each labeled_segment becomes one raw chunk
+        raw_chunks = []
+        for idx, seg in enumerate(labeled_segments):
+            raw_chunks.append({
+                'chunk_id': f'r_{idx:06d}',
+                'start': seg['start'],
+                'end': seg['end'],
+                'speaker_id': seg['speaker_id'],
+                'text': seg['text'],
+                'origin': {
+                    'transcriptSegmentId': seg['segment_id'],
+                    'speakerAssignedBy': 'diarization_overlap',
+                    'merged': False
+                }
+            })
+        
+        # Store raw chunks on timeline for later use
+        if not hasattr(timeline, '_unmerged_chunks'):
+            timeline._unmerged_chunks = []
+        timeline._unmerged_chunks.extend(raw_chunks)
         
         chunks = []
         current = {
