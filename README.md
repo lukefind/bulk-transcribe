@@ -15,6 +15,7 @@ Local-first transcription with a review workflow built for 100% accuracy. Bulk T
 - **Batch processing**: folders, large lists, queue-aware dispatch
 - **Exports**: Project archive (.btproj), Markdown, JSON timeline, Word (DOCX), PDF
 - **Bulk ops**: bulk export/import, re-run selected jobs, clear duplicates
+- **Session sharing**: share a session by token (read-only or full-edit)
 
 ## Quick Start (Local)
 
@@ -69,9 +70,22 @@ Export your entire session (all jobs with editor state) as a zip:
 - Click **Export Session** in Recent Jobs header
 - Includes job manifests, review state, timelines, and outputs
 
+Export runs in the background with a progress modal and a download link.
+
 Import a session export to restore all jobs:
 - Click **Import Session** and select a session zip
 - All editor state (speaker labels, colors, edits) is preserved
+
+### Session Sharing
+
+Share a live server session without exporting:
+- Click **Share Session**
+- Choose **Read-only** or **Full edit**
+- Copy the token (and optional password) to another user
+
+Join a shared session:
+- Click **Join Session** and paste the token
+- Read-only sessions show a banner and disable edits
 
 See [Review Workflow](docs/REVIEW_WORKFLOW.md) for details.
 

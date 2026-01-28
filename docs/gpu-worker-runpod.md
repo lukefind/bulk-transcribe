@@ -12,6 +12,17 @@ git checkout main
 ./scripts/build_worker.sh main-amd64
 ./scripts/push_worker.sh main-amd64 ghcr.io/lukefind
 
+# Or build manually:
+docker build -f worker/Dockerfile \
+  --build-arg BUILD_COMMIT=$(git rev-parse --short HEAD) \
+  --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --platform linux/amd64 \
+  -t ghcr.io/lukefind/bulk-transcribe-worker:main-amd64 \
+  -t ghcr.io/lukefind/bulk-transcribe-worker:latest \
+  .
+docker push ghcr.io/lukefind/bulk-transcribe-worker:main-amd64
+docker push ghcr.io/lukefind/bulk-transcribe-worker:latest
+
 # Redeploy RunPod pod (uses same image tag, pulls latest)
 # Then verify:
 curl $CONTROLLER_URL/api/runtime | jq '.remoteWorker.identity'

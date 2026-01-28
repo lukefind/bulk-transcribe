@@ -33,6 +33,14 @@ This lets you insert short interjections as their own chunk and assign a new spe
 - Hover a chunk to reveal speaker buttons
 - Press keys **1–9** to assign quickly
 
+### Speaker hotkey numbers
+
+In **Edit Speakers**, assign hotkey numbers (1–9) per file:
+- Numbers affect shortcuts **in this file only**
+- Reassigning a number clears it from the previous speaker
+- Use **Copy from previous** to carry assignments to the next file
+- Use **Reset** to clear all assigned numbers
+
 ### Merged/Raw View Toggle
 
 The review toolbar includes a **Merged** checkbox:
@@ -81,8 +89,10 @@ Export all jobs in your current session as a single zip archive:
    - `jobs/<job_id>/` — per-job folders with:
      - `job.json` — full job manifest
      - `review_state.json` — speaker labels, colors, merges, edits
-     - `timeline.json` — parsed timeline with edits applied
-     - `outputs/` — all output files (JSON, Markdown, etc.)
+    - `timeline.json` — parsed timeline with edits applied
+    - `outputs/` — all output files (JSON, Markdown, etc.)
+
+Exports run in the background with a progress modal and download link.
 
 ### Import Session
 
@@ -92,6 +102,17 @@ Restore a previously exported session:
 2. Select a session export zip
 3. Jobs are restored with all editor state (speaker labels, colors, edits)
 4. If a job ID already exists, a new ID is generated automatically
+
+## Session Sharing
+
+Share a live server session without exporting:
+- Click **Share Session**
+- Choose **Read-only** or **Full edit**
+- Copy the token (and optional password) to another user
+
+Join a shared session:
+- Click **Join Session** and paste the token
+- Read-only sessions show a banner and disable edits
 
 **Use cases:**
 - Backup/restore work across machines

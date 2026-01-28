@@ -197,15 +197,14 @@ Remote worker jobs are stored in worker memory by default. If you destroy the po
 
 Controller behavior:
 
-- If the controller polls `/v1/jobs/<workerJobId>` and receives `404`, it will mark the controller job as failed with:
-  - `error.code = REMOTE_JOB_NOT_FOUND`
-  - `error.message = "Remote worker restarted or job expired; please retry."`
-  - `remote.lastError` populated for debugging
+- If the controller polls `/v1/jobs/<workerJobId>` and receives `404`, it will attempt a **single auto‑retry**.
+- If the worker is temporarily unreachable, the job enters a **degraded** state and keeps retrying capacity checks.
+- The job is **not** automatically failed on temporary unreachable states.
 
 UI behavior:
 
-- The UI will show a human-readable error.
-- For `REMOTE_JOB_NOT_FOUND`, the UI will show a **Retry Job** button (server mode).
+- A warning banner indicates the worker is temporarily unreachable.
+- The job remains active until the worker responds or the user cancels.
 
 ### Diarization not working on worker
 

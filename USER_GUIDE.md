@@ -108,6 +108,14 @@ Click the **ⓘ** button in the review toolbar to see a quick reference for:
 - Colors can be changed via the palette
 - Labels + colors persist per session
 
+### Speaker hotkey numbers
+
+In **Edit Speakers**, assign hotkey numbers (1–9) to each speaker:
+- Numbers affect shortcuts **in this file only**
+- Reassigning a number clears it from the previous speaker
+- Use **Copy from previous** to carry assignments to the next file
+- Use **Reset** to clear all assigned numbers
+
 ### Editing text
 - Click the pencil icon or press **E** on a selected chunk
 - **Enter** saves and exits
@@ -136,6 +144,28 @@ From Review:
 - **Timeline (.json)** — structured review data
 - **Word (.docx)** — timestamped transcript with speaker colors
 - **PDF (.pdf)** — timestamped transcript with speaker colors
+
+### Session Export/Import
+
+Export your entire session (all jobs with editor state) as a zip:
+- Click **Export Session** in Recent Jobs header
+- Includes job manifests, review state, timelines, and outputs
+- Export runs in the background with a progress modal
+
+Import a session export to restore all jobs:
+- Click **Import Session** and select a session zip
+- All editor state (speaker labels, colors, edits) is preserved
+
+### Session Sharing
+
+Share a live server session without exporting:
+- Click **Share Session**
+- Choose **Read-only** or **Full edit**
+- Copy the token (and optional password) to another user
+
+Join a shared session:
+- Click **Join Session** and paste the token
+- Read-only sessions show a banner and disable edits
 
 ---
 

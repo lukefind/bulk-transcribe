@@ -50,27 +50,37 @@ A human-readable, timestamped speaker transcript:
 
 ## Review State (review_state.json)
 
-Stores edits made in the Review UI:
+Stores edits made in the Review UI. Review state is **scoped per input file** to avoid cross‑contamination in batch jobs.
 
 ```json
 {
-  "speakerLabelMap": {
-    "SPEAKER_00": "Alice"
-  },
-  "speakerColorMap": {
-    "SPEAKER_00": "#3B82F6"
-  },
-  "chunkEdits": {
-    "t_000123": {
-      "text": "corrected text",
-      "speakerId": "SPEAKER_01"
+  "perInput": {
+    "<inputId>": {
+      "speakerLabelMap": {
+        "SPEAKER_00": "Alice"
+      },
+      "speakerColorMap": {
+        "SPEAKER_00": "#3B82F6"
+      },
+      "speakerNumberMap": {
+        "SPEAKER_00": 1
+      },
+      "chunkEdits": {
+        "t_000123": {
+          "text": "corrected text",
+          "speakerId": "SPEAKER_01"
+        }
+      }
     }
   },
   "uiPrefs": {}
 }
 ```
 
-This file is currently mutable. Future versions may migrate to an append-only edits log.
+Notes:
+- `perInput` keys are upload IDs from the job manifest.
+- Chunk IDs may include split suffixes (e.g., `t_000123_a`).
+- This file is currently mutable. Future versions may migrate to an append‑only edits log.
 
 ---
 

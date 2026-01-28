@@ -143,7 +143,7 @@ Standard error codes for remote worker failures:
 | Code | Description | Action |
 |------|-------------|--------|
 | `REMOTE_WORKER_UNAUTHORIZED` | Token mismatch | Check `REMOTE_WORKER_TOKEN` matches worker |
-| `REMOTE_WORKER_UNREACHABLE` | Cannot connect to worker | Check worker URL and network |
+| `REMOTE_WORKER_UNREACHABLE` | Worker temporarily unreachable | Job stays queued; wait for recovery or cancel |
 | `REMOTE_WORKER_TIMEOUT` | Job or capacity wait timed out | Increase timeout or check worker health |
 | `REMOTE_WORKER_CAPACITY` | Timed out waiting for capacity | Reduce batch size or increase worker capacity |
 | `REMOTE_DISPATCH_FAILED` | Failed to create job on worker | Check worker logs |
