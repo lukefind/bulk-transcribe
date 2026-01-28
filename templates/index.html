@@ -1182,23 +1182,6 @@
                     </button>
                 </div>
                 
-                <!-- Speaker Numbers (hotkey mapping) -->
-                <div id="speakerNumbersPanel" class="p-4 border-b border-gray-700/50 hidden">
-                    <div class="flex items-center justify-between mb-2">
-                        <h3 class="text-xs font-medium text-gray-400">Hotkey Numbers</h3>
-                    </div>
-                    <p class="text-[10px] text-gray-500 mb-2">Numbers affect 1–9 shortcuts in this file only.</p>
-                    <div id="speakerNumbersList" class="space-y-1.5"></div>
-                    <div class="flex gap-2 mt-3">
-                        <button onclick="copySpeakerNumbersFromPrevious()" class="flex-1 px-2 py-1.5 text-[10px] rounded bg-surface-700 hover:bg-surface-600 text-gray-400 transition-colors" title="Copy number assignments from previous file in batch">
-                            Copy from prev
-                        </button>
-                        <button onclick="resetSpeakerNumbers()" class="flex-1 px-2 py-1.5 text-[10px] rounded bg-surface-700 hover:bg-surface-600 text-gray-400 transition-colors" title="Reset to default numbering">
-                            Reset
-                        </button>
-                    </div>
-                </div>
-                
                 <!-- Keyboard Shortcuts -->
                 <div class="p-4 border-b border-gray-700/50">
                     <h3 class="text-xs font-medium text-gray-400 mb-2">Keyboard Shortcuts</h3>
@@ -1279,19 +1262,25 @@
                     </button>
                 </div>
                 
-                <!-- Labels Section -->
+                <!-- Labels & Hotkeys Section -->
                 <div class="mb-6">
-                    <h4 class="text-sm font-medium text-gray-300 mb-2">Rename Speakers</h4>
-                    <p class="text-xs text-gray-500 mb-3">Give speakers meaningful names.</p>
+                    <div class="flex items-center justify-between mb-2">
+                        <h4 class="text-sm font-medium text-gray-300">Speakers</h4>
+                        <span class="text-[10px] text-gray-500">Hotkey</span>
+                    </div>
+                    <p class="text-xs text-gray-500 mb-3">Rename speakers and assign hotkey numbers (1-9). Only one speaker per number.</p>
                     <div id="speakerLabelsList" class="space-y-2 mb-3">
                         <p class="text-gray-500 text-sm italic">Loading speakers...</p>
                     </div>
                     <div class="flex gap-2">
                         <button onclick="resetSpeakerLabels()" class="px-3 py-1.5 bg-surface-700 hover:bg-surface-600 text-gray-300 rounded-lg text-xs">
-                            Reset
+                            Reset Labels
                         </button>
-                        <button onclick="saveSpeakerLabels()" class="flex-1 px-3 py-1.5 bg-primary-600 hover:bg-primary-500 text-white rounded-lg text-xs">
-                            Apply Labels
+                        <button onclick="copySpeakerNumbersFromPrevious()" class="px-3 py-1.5 bg-surface-700 hover:bg-surface-600 text-gray-300 rounded-lg text-xs" title="Copy hotkey assignments from previous file">
+                            Copy Hotkeys
+                        </button>
+                        <button onclick="resetSpeakerNumbers()" class="px-3 py-1.5 bg-surface-700 hover:bg-surface-600 text-gray-300 rounded-lg text-xs" title="Reset hotkey numbers to default order">
+                            Reset Hotkeys
                         </button>
                     </div>
                 </div>
@@ -5779,7 +5768,6 @@
                 
                 renderTimeline();
                 renderSpeakerLegend();
-                renderSpeakerNumbersPanel();
                 
             } catch (e) {
                 content.innerHTML = `<p class="text-red-400 p-4">Error: ${e.message}</p>`;
@@ -6107,6 +6095,7 @@
             reviewTimeline.speakers.forEach((speaker, idx) => {
                 const label = getSpeakerDisplayLabel(speaker);
                 const color = getSpeakerDisplayColor(speaker);
+                const hotkeyNum = getAssignedNumber(speaker.id);
                 const div = document.createElement('div');
                 div.className = 'speaker-row flex items-center gap-2 p-2 rounded-lg bg-surface-700/30 hover:bg-surface-700/50 transition-colors relative';
                 div.dataset.speakerId = speaker.id;
@@ -6116,7 +6105,7 @@
                             onclick="toggleSpeakerColorPicker('${speaker.id}', event)" 
                             title="Change color"></button>
                     <span class="speaker-label-text text-sm text-gray-300 flex-1 truncate cursor-pointer" onclick="beginInlineSpeakerRename('${speaker.id}', event)" title="Click to rename">${escapeHtml(label)}</span>
-                    <kbd class="px-1.5 py-0.5 bg-surface-600 rounded text-xs text-gray-400">${idx + 1}</kbd>
+                    <kbd class="px-1.5 py-0.5 bg-surface-600 rounded text-xs text-gray-400">${hotkeyNum || '–'}</kbd>
                     <div class="speaker-color-picker hidden absolute left-0 top-full mt-1 z-50 speaker-color-grid p-2 rounded-lg shadow-lg" data-speaker-id="${speaker.id}">
                         ${SPEAKER_COLOR_PALETTE.map(c => `
                             <button class="speaker-color-cell w-5 h-5 rounded ${c === color ? 'ring-2 ring-white ring-offset-1 ring-offset-surface-800' : ''}" 
@@ -6208,72 +6197,56 @@
         const updateSpeakerSidebar = renderSpeakerLegend;
         
         // Speaker number mapping (per-file hotkey assignments)
-        function renderSpeakerNumbersPanel() {
-            const panel = document.getElementById('speakerNumbersPanel');
-            const list = document.getElementById('speakerNumbersList');
-            
-            if (!reviewTimeline?.speakers || reviewTimeline.speakers.length <= 1) {
-                if (panel) panel.classList.add('hidden');
-                return;
-            }
-            
-            if (panel) panel.classList.remove('hidden');
-            if (!list) return;
-            
-            list.innerHTML = '';
-            
-            // Get current number map (or initialize)
+        function getAssignedNumber(speakerId) {
+            // Returns the hotkey number assigned to a speaker, or default based on index
             const numberMap = reviewState.speakerNumberMap || {};
-            
-            // Build reverse map: number -> speakerId
-            const numberToSpeaker = {};
-            for (const [spkId, num] of Object.entries(numberMap)) {
-                numberToSpeaker[num] = spkId;
+            if (numberMap[speakerId] !== undefined) {
+                return numberMap[speakerId];
             }
-            
-            reviewTimeline.speakers.forEach((speaker, idx) => {
-                const label = getSpeakerDisplayLabel(speaker);
-                const color = getSpeakerDisplayColor(speaker);
-                const currentNum = numberMap[speaker.id] ?? (idx + 1);
-                
-                const div = document.createElement('div');
-                div.className = 'flex items-center gap-2';
-                div.innerHTML = `
-                    <span class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background-color: ${color}"></span>
-                    <span class="text-xs text-gray-300 truncate flex-1" title="${label}">${label}</span>
-                    <select onchange="setSpeakerNumber('${speaker.id}', this.value)" 
-                            class="px-1.5 py-0.5 bg-surface-700 border border-gray-600/50 rounded text-xs text-gray-300 w-12">
-                        ${[1,2,3,4,5,6,7,8,9].map(n => {
-                            const selected = currentNum === n ? 'selected' : '';
-                            const taken = numberToSpeaker[n] && numberToSpeaker[n] !== speaker.id;
-                            const disabled = taken ? 'disabled' : '';
-                            const takenLabel = taken ? ' (used)' : '';
-                            return `<option value="${n}" ${selected} ${disabled}>${n}${takenLabel}</option>`;
-                        }).join('')}
-                    </select>
-                `;
-                list.appendChild(div);
-            });
+            // Fallback: find index in speakers array
+            const idx = reviewTimeline?.speakers?.findIndex(s => s.id === speakerId);
+            return idx >= 0 ? idx + 1 : null;
         }
         
-        function setSpeakerNumber(speakerId, number) {
+        function setSpeakerNumberFromModal(speakerId, number) {
+            // Called from the Edit Speakers modal
             const num = parseInt(number);
-            if (isNaN(num) || num < 1 || num > 9) return;
             
             if (!reviewState.speakerNumberMap) reviewState.speakerNumberMap = {};
             
-            // Remove any existing speaker with this number
-            for (const [spkId, n] of Object.entries(reviewState.speakerNumberMap)) {
-                if (n === num && spkId !== speakerId) {
-                    delete reviewState.speakerNumberMap[spkId];
+            // If clearing (empty value), remove from map
+            if (!number || isNaN(num)) {
+                delete reviewState.speakerNumberMap[speakerId];
+            } else {
+                // Remove any existing speaker with this number (clear previous assignment)
+                for (const [spkId, n] of Object.entries(reviewState.speakerNumberMap)) {
+                    if (n === num && spkId !== speakerId) {
+                        delete reviewState.speakerNumberMap[spkId];
+                    }
                 }
+                reviewState.speakerNumberMap[speakerId] = num;
             }
             
-            reviewState.speakerNumberMap[speakerId] = num;
-            
             markUnsaved();
-            renderSpeakerNumbersPanel();
+            
+            // Update the modal dropdowns to reflect the change
+            updateSpeakerEditorDropdowns();
+            
+            // Update sidebar speaker list badges
+            renderSpeakerLegend();
+            
             saveReviewState();
+        }
+        
+        function updateSpeakerEditorDropdowns() {
+            // Refresh all hotkey dropdowns in the modal to reflect current state
+            const numberMap = reviewState.speakerNumberMap || {};
+            
+            document.querySelectorAll('#speakerLabelsList select[data-speaker-number]').forEach((select, idx) => {
+                const speakerId = select.dataset.speakerNumber;
+                const currentNum = numberMap[speakerId] ?? (idx + 1);
+                select.value = currentNum || '';
+            });
         }
         
         function getSpeakerByNumber(number) {
@@ -6358,7 +6331,8 @@
                 
                 reviewState.speakerNumberMap = newMap;
                 markUnsaved();
-                renderSpeakerNumbersPanel();
+                updateSpeakerEditorDropdowns();
+                renderSpeakerLegend();
                 saveReviewState();
                 
                 alert(`Copied ${Object.keys(newMap).length} speaker number(s) from previous file.`);
@@ -6373,7 +6347,8 @@
             
             reviewState.speakerNumberMap = {};
             markUnsaved();
-            renderSpeakerNumbersPanel();
+            updateSpeakerEditorDropdowns();
+            renderSpeakerLegend();
             saveReviewState();
         }
         
@@ -7115,22 +7090,44 @@
             }
             
             list.innerHTML = '';
-            for (const speaker of reviewTimeline.speakers) {
+            
+            // Get current number map
+            const numberMap = reviewState.speakerNumberMap || {};
+            
+            // Build reverse map: number -> speakerId
+            const numberToSpeaker = {};
+            for (const [spkId, num] of Object.entries(numberMap)) {
+                numberToSpeaker[num] = spkId;
+            }
+            
+            reviewTimeline.speakers.forEach((speaker, idx) => {
                 const currentLabel = reviewState.speakerLabelMap?.[speaker.id] || '';
+                const currentNum = numberMap[speaker.id] ?? (idx + 1);
+                const color = getSpeakerDisplayColor(speaker);
+                
                 const div = document.createElement('div');
                 div.className = 'flex items-center gap-2';
                 div.innerHTML = `
-                    <span class="w-4 h-4 rounded" style="background-color: ${speaker.color}"></span>
-                    <span class="text-gray-400 text-sm w-20">${speaker.label}</span>
+                    <span class="w-4 h-4 rounded flex-shrink-0" style="background-color: ${color}"></span>
+                    <span class="text-gray-400 text-sm w-20 truncate flex-shrink-0">${speaker.label}</span>
                     <input type="text" 
                            data-speaker-id="${speaker.id}"
                            value="${escapeHtml(currentLabel)}"
                            placeholder="${speaker.label}"
                            maxlength="40"
-                           class="flex-1 px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm">
+                           class="flex-1 px-3 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm min-w-0">
+                    <select data-speaker-number="${speaker.id}" 
+                            onchange="setSpeakerNumberFromModal('${speaker.id}', this.value)"
+                            class="w-14 px-1.5 py-1.5 bg-surface-700 border border-gray-600/50 rounded-lg text-gray-300 text-sm flex-shrink-0">
+                        <option value="">–</option>
+                        ${[1,2,3,4,5,6,7,8,9].map(n => {
+                            const selected = currentNum === n ? 'selected' : '';
+                            return `<option value="${n}" ${selected}>${n}</option>`;
+                        }).join('')}
+                    </select>
                 `;
                 list.appendChild(div);
-            }
+            });
             
             // Populate merge dropdowns
             populateMergeSpeakerDropdowns();
