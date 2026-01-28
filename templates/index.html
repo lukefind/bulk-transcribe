@@ -955,7 +955,14 @@
                     <div class="h-6 w-px bg-gray-700"></div>
                     <div>
                         <div class="text-sm font-medium text-white" id="reviewJobTitle">Review Transcript</div>
-                        <div class="text-xs text-gray-500" id="reviewFileName">Loading...</div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs text-gray-500" id="reviewFileName">Loading...</span>
+                            <!-- File selector for multi-file jobs -->
+                            <select id="reviewInputSelect" onchange="onReviewInputSelectChange()" 
+                                    class="hidden px-2 py-0.5 bg-surface-700/50 border border-gray-600/50 rounded text-primary-400 text-xs max-w-[220px]"
+                                    title="Switch between input files in this job">
+                            </select>
+                        </div>
                     </div>
                     <div class="h-6 w-px bg-gray-700 ml-2"></div>
                     <div class="flex items-center gap-2">
@@ -1110,9 +1117,9 @@
                     <input type="text" id="reviewSearchInput" placeholder="Search transcript..." 
                            class="flex-1 px-3 py-2 bg-surface-700/50 border border-gray-600/50 rounded-lg text-white text-sm"
                            oninput="debounceSearch()">
-                    <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer whitespace-nowrap" title="Merged view reduces noise by combining adjacent same-speaker chunks">
+                    <label id="mergedViewLabel" class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer whitespace-nowrap" title="Merged view reduces noise by combining adjacent same-speaker chunks">
                         <input type="checkbox" id="mergedViewCheckbox" checked class="rounded bg-surface-700 border-gray-600 text-primary-500" onchange="toggleChunkViewMode()">
-                        Merged
+                        <span id="mergedViewText">Merged</span>
                     </label>
                     <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer whitespace-nowrap">
                         <input type="checkbox" id="autoScrollCheckbox" checked class="rounded bg-surface-700 border-gray-600 text-primary-500">
@@ -5118,12 +5125,15 @@
                 targetInput = job.inputs[0];
             }
             
-            // Update filename display
+            // Update filename display and populate file selector
             const filename = targetInput?.filename || targetInput?.originalFilename || 'Unknown file';
             document.getElementById('reviewFileName').textContent = filename;
             
             // Store selected input ID for timeline loading
             reviewSelectedInputId = targetInput?.uploadId || null;
+            
+            // Populate file selector for multi-file jobs
+            populateInputFileSelector(job, reviewSelectedInputId);
             
             // Reset save status
             updateSaveStatus('saved');
@@ -5150,6 +5160,63 @@
             
             // Setup keyboard shortcuts
             setupReviewKeyboardShortcuts();
+        }
+        
+        function populateInputFileSelector(job, selectedInputId) {
+            const select = document.getElementById('reviewInputSelect');
+            const filenameSpan = document.getElementById('reviewFileName');
+            if (!select) return;
+            
+            const inputs = job?.inputs || [];
+            
+            // Hide selector for single-file jobs
+            if (inputs.length <= 1) {
+                select.classList.add('hidden');
+                if (filenameSpan) filenameSpan.classList.remove('hidden');
+                return;
+            }
+            
+            // Multi-file job - show selector, hide static filename
+            select.classList.remove('hidden');
+            if (filenameSpan) filenameSpan.classList.add('hidden');
+            
+            select.innerHTML = '';
+            for (const inp of inputs) {
+                const opt = document.createElement('option');
+                opt.value = inp.uploadId || '';
+                const fname = inp.filename || inp.originalFilename || 'Unknown';
+                const duration = inp.durationSec ? ` (${formatDuration(inp.durationSec)})` : '';
+                opt.textContent = fname + duration;
+                opt.selected = (inp.uploadId === selectedInputId);
+                select.appendChild(opt);
+            }
+        }
+        
+        async function onReviewInputSelectChange() {
+            const select = document.getElementById('reviewInputSelect');
+            if (!select || !reviewJobData) return;
+            
+            const newInputId = select.value;
+            if (newInputId === reviewSelectedInputId) return;
+            
+            // Find the input
+            const targetInput = reviewJobData.inputs?.find(i => i.uploadId === newInputId);
+            if (!targetInput) return;
+            
+            // Update state
+            reviewSelectedInputId = newInputId;
+            
+            // Update audio player
+            setupReviewAudio(reviewJobData.jobId, targetInput);
+            
+            // Save last input preference
+            if (!reviewState.uiPrefs) reviewState.uiPrefs = {};
+            reviewState.uiPrefs.lastInputId = newInputId;
+            markUnsaved();
+            debounceSave();
+            
+            // Reload timeline for the new input
+            await loadReviewTimeline(false);
         }
         
         function renderReviewJobSettingsSummary(job) {
@@ -5405,6 +5472,9 @@
                 reviewTimelineRaw = JSON.parse(JSON.stringify(reviewTimeline.chunks_raw || reviewTimeline.chunks));
                 reviewTimelineMerged = JSON.parse(JSON.stringify(reviewTimeline.chunks_merged || reviewTimeline.chunks));
                 
+                // Update merged toggle state based on whether raw/merged differ
+                updateMergedToggleState();
+                
                 // Also load review state
                 const stateResp = await fetch(`/api/jobs/${reviewJobData.jobId}/review/state`);
                 if (stateResp.ok) {
@@ -5458,23 +5528,44 @@
             reviewTimeline.chunks = JSON.parse(JSON.stringify(source));
         }
         
+        function updateMergedToggleState() {
+            const checkbox = document.getElementById('mergedViewCheckbox');
+            const label = document.getElementById('mergedViewLabel');
+            const textSpan = document.getElementById('mergedViewText');
+            
+            if (!checkbox || !label) return;
+            
+            const rawCount = reviewTimelineRaw?.length || 0;
+            const mergedCount = reviewTimelineMerged?.length || 0;
+            const hasRawMerged = reviewTimeline?.chunks_raw && reviewTimeline?.chunks_merged;
+            
+            // Check if raw and merged are actually different
+            const isDifferent = rawCount !== mergedCount;
+            
+            if (!hasRawMerged) {
+                // No raw/merged data available
+                checkbox.disabled = true;
+                label.classList.add('opacity-50');
+                label.title = 'Raw/merged view not available for this job';
+                if (textSpan) textSpan.textContent = 'Merged (N/A)';
+            } else if (!isDifferent) {
+                // Raw and merged are identical
+                checkbox.disabled = false;
+                label.classList.remove('opacity-50');
+                label.title = 'Raw and merged views are identical for this transcript (no adjacent same-speaker chunks to merge)';
+                if (textSpan) textSpan.textContent = `Merged (${mergedCount})`;
+            } else {
+                // Raw and merged differ - toggle is useful
+                checkbox.disabled = false;
+                label.classList.remove('opacity-50');
+                label.title = `Merged view combines adjacent same-speaker chunks. Raw: ${rawCount} chunks, Merged: ${mergedCount} chunks`;
+                if (textSpan) textSpan.textContent = `Merged (${mergedCount}/${rawCount})`;
+            }
+        }
+        
         function toggleChunkViewMode() {
             const checkbox = document.getElementById('mergedViewCheckbox');
             reviewChunkViewMode = checkbox?.checked ? 'merged' : 'raw';
-            
-            // Check if raw and merged are actually different
-            const rawCount = reviewTimelineRaw?.length || 0;
-            const mergedCount = reviewTimelineMerged?.length || 0;
-            console.log(`Toggle to ${reviewChunkViewMode}: raw=${rawCount} chunks, merged=${mergedCount} chunks`);
-            
-            if (rawCount === mergedCount && rawCount > 0) {
-                // Check if content is actually different
-                const rawFirst = reviewTimelineRaw[0]?.text?.substring(0, 50);
-                const mergedFirst = reviewTimelineMerged[0]?.text?.substring(0, 50);
-                if (rawFirst === mergedFirst) {
-                    console.log('Note: Raw and merged views appear identical for this transcript');
-                }
-            }
             
             // Apply the view mode
             applyChunkViewMode();
