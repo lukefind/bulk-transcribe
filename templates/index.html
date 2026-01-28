@@ -2856,13 +2856,14 @@
             currentJobDetailsId = null;
         }
         
+        let sessionExportPollTimer = null;
+        
         async function exportSession() {
-            if (!confirm('Export all jobs in this session as a single zip?')) return;
-            
             try {
                 const headers = { 'Content-Type': 'application/json' };
                 if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
                 
+                // Start async export
                 const response = await fetch('/api/session/export', {
                     method: 'POST',
                     headers
@@ -2874,18 +2875,125 @@
                     return;
                 }
                 
-                const blob = await response.blob();
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `session-export-${new Date().toISOString().slice(0,10)}.zip`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
+                const { exportId } = await response.json();
+                
+                // Show progress modal
+                showSessionExportModal(exportId);
+                
             } catch (e) {
                 showError(`Session export failed: ${e.message}`);
             }
+        }
+        
+        function showSessionExportModal(exportId) {
+            // Create modal if it doesn't exist
+            let modal = document.getElementById('sessionExportModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'sessionExportModal';
+                modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50';
+                modal.innerHTML = `
+                    <div class="bg-surface-800 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+                        <h3 class="text-lg font-semibold text-white mb-4">Exporting Session</h3>
+                        <div id="sessionExportContent">
+                            <div class="mb-4">
+                                <div class="flex justify-between text-sm text-gray-400 mb-1">
+                                    <span id="sessionExportStatus">Preparing...</span>
+                                    <span id="sessionExportProgress">0 / 0</span>
+                                </div>
+                                <div class="w-full bg-surface-700 rounded-full h-2">
+                                    <div id="sessionExportBar" class="bg-primary-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                                </div>
+                                <p id="sessionExportCurrentJob" class="text-xs text-gray-500 mt-2"></p>
+                            </div>
+                            <div id="sessionExportActions" class="flex justify-end gap-2 hidden">
+                                <button onclick="closeSessionExportModal()" class="px-4 py-2 text-sm text-gray-400 hover:text-white">Close</button>
+                                <a id="sessionExportDownloadBtn" href="#" class="px-4 py-2 text-sm bg-primary-600 hover:bg-primary-500 text-white rounded hidden">Download</a>
+                            </div>
+                            <div id="sessionExportError" class="text-red-400 text-sm hidden"></div>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+            }
+            
+            // Reset state
+            modal.classList.remove('hidden');
+            document.getElementById('sessionExportStatus').textContent = 'Preparing...';
+            document.getElementById('sessionExportProgress').textContent = '0 / 0';
+            document.getElementById('sessionExportBar').style.width = '0%';
+            document.getElementById('sessionExportCurrentJob').textContent = '';
+            document.getElementById('sessionExportActions').classList.add('hidden');
+            document.getElementById('sessionExportDownloadBtn').classList.add('hidden');
+            document.getElementById('sessionExportError').classList.add('hidden');
+            
+            // Start polling
+            pollSessionExport(exportId);
+        }
+        
+        async function pollSessionExport(exportId) {
+            if (sessionExportPollTimer) {
+                clearTimeout(sessionExportPollTimer);
+            }
+            
+            try {
+                const response = await fetch(`/api/session/export/${exportId}`);
+                if (!response.ok) {
+                    throw new Error('Failed to get export status');
+                }
+                
+                const data = await response.json();
+                const { status, progress, downloadUrl, error, summary } = data;
+                
+                // Update progress
+                const jobsDone = progress?.jobsDone || 0;
+                const jobsTotal = progress?.jobsTotal || 1;
+                const currentJob = progress?.currentJob || '';
+                const pct = jobsTotal > 0 ? Math.round((jobsDone / jobsTotal) * 100) : 0;
+                
+                document.getElementById('sessionExportProgress').textContent = `${jobsDone} / ${jobsTotal}`;
+                document.getElementById('sessionExportBar').style.width = `${pct}%`;
+                
+                if (status === 'queued') {
+                    document.getElementById('sessionExportStatus').textContent = 'Queued...';
+                    sessionExportPollTimer = setTimeout(() => pollSessionExport(exportId), 500);
+                } else if (status === 'running') {
+                    document.getElementById('sessionExportStatus').textContent = 'Exporting...';
+                    document.getElementById('sessionExportCurrentJob').textContent = currentJob ? `Processing job ${currentJob}...` : '';
+                    sessionExportPollTimer = setTimeout(() => pollSessionExport(exportId), 1000);
+                } else if (status === 'complete') {
+                    document.getElementById('sessionExportStatus').textContent = 'Export complete!';
+                    document.getElementById('sessionExportBar').style.width = '100%';
+                    document.getElementById('sessionExportCurrentJob').textContent = 
+                        summary ? `${summary.jobCount} jobs, ${summary.filesTotal} files` : '';
+                    document.getElementById('sessionExportActions').classList.remove('hidden');
+                    const downloadBtn = document.getElementById('sessionExportDownloadBtn');
+                    downloadBtn.href = downloadUrl;
+                    downloadBtn.classList.remove('hidden');
+                    // Auto-download
+                    downloadBtn.click();
+                } else if (status === 'failed') {
+                    document.getElementById('sessionExportStatus').textContent = 'Export failed';
+                    document.getElementById('sessionExportError').textContent = error || 'Unknown error';
+                    document.getElementById('sessionExportError').classList.remove('hidden');
+                    document.getElementById('sessionExportActions').classList.remove('hidden');
+                }
+                
+            } catch (e) {
+                document.getElementById('sessionExportStatus').textContent = 'Error';
+                document.getElementById('sessionExportError').textContent = e.message;
+                document.getElementById('sessionExportError').classList.remove('hidden');
+                document.getElementById('sessionExportActions').classList.remove('hidden');
+            }
+        }
+        
+        function closeSessionExportModal() {
+            if (sessionExportPollTimer) {
+                clearTimeout(sessionExportPollTimer);
+                sessionExportPollTimer = null;
+            }
+            const modal = document.getElementById('sessionExportModal');
+            if (modal) modal.classList.add('hidden');
         }
         
         async function importSession(file) {

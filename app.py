@@ -4726,12 +4726,143 @@ def _build_job_export_files(session_id: str, job_id: str, input_id: str = None) 
     return files, filename
 
 
+# Session export job storage (in-memory for simplicity, keyed by export_id)
+_session_exports = {}
+_session_exports_lock = threading.Lock()
+
+
+def _cleanup_old_exports():
+    """Remove exports older than 24 hours."""
+    now = datetime.now(timezone.utc)
+    with _session_exports_lock:
+        expired = [
+            eid for eid, exp in _session_exports.items()
+            if (now - datetime.fromisoformat(exp.get('createdAt', now.isoformat()))).total_seconds() > 86400
+        ]
+        for eid in expired:
+            exp = _session_exports.pop(eid, None)
+            if exp and exp.get('zipPath') and os.path.exists(exp['zipPath']):
+                try:
+                    os.remove(exp['zipPath'])
+                except Exception:
+                    pass
+
+
+def _run_session_export(export_id: str, session_id: str):
+    """Background worker for session export."""
+    try:
+        with _session_exports_lock:
+            _session_exports[export_id]['status'] = 'running'
+        
+        jobs_dir = os.path.join(session_store.session_dir(session_id), 'jobs')
+        job_ids = [d for d in os.listdir(jobs_dir) if os.path.isdir(os.path.join(jobs_dir, d))]
+        jobs_total = len(job_ids)
+        
+        with _session_exports_lock:
+            _session_exports[export_id]['progress'] = {'jobsDone': 0, 'jobsTotal': jobs_total, 'currentJob': ''}
+        
+        # Create temp file for zip
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        root_folder = f'session_export_{timestamp}'
+        zip_path = os.path.join(tempfile.gettempdir(), f'session_export_{export_id}.zip')
+        
+        job_count = 0
+        files_total = 0
+        with_review_state = 0
+        failed_jobs = []
+        
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            # Export session.json
+            session_meta = {
+                'sessionId': session_id,
+                'exportedAt': datetime.now(timezone.utc).isoformat(),
+                'version': '1.0',
+                'buildCommit': os.environ.get('BUILD_COMMIT', 'unknown'),
+            }
+            zf.writestr(f'{root_folder}/session.json', json.dumps(session_meta, indent=2).encode('utf-8'))
+            
+            for idx, job_id in enumerate(job_ids):
+                with _session_exports_lock:
+                    _session_exports[export_id]['progress'] = {
+                        'jobsDone': idx,
+                        'jobsTotal': jobs_total,
+                        'currentJob': job_id[:8]
+                    }
+                
+                job_folder = f'{root_folder}/jobs/{job_id}'
+                try:
+                    manifest_path = session_store.job_manifest_path(session_id, job_id)
+                    manifest = session_store.read_json(manifest_path)
+                    if manifest:
+                        zf.writestr(f'{job_folder}/job.json', json.dumps(manifest, indent=2).encode('utf-8'))
+                    
+                    job_dir = session_store.job_dir(session_id, job_id)
+                    state_path = os.path.join(job_dir, 'review', 'review_state.json')
+                    review_state = session_store.read_json(state_path)
+                    if review_state:
+                        zf.writestr(f'{job_folder}/review_state.json', json.dumps(review_state, indent=2).encode('utf-8'))
+                        with_review_state += 1
+                    
+                    timeline_path = os.path.join(job_dir, 'review', 'timeline.json')
+                    if os.path.exists(timeline_path):
+                        with open(timeline_path, 'r', encoding='utf-8') as f:
+                            zf.writestr(f'{job_folder}/timeline.json', f.read().encode('utf-8'))
+                    
+                    outputs = manifest.get('outputs', []) if manifest else []
+                    for output in outputs:
+                        output_path = output.get('path')
+                        output_filename = output.get('filename', '')
+                        if output_path and os.path.exists(output_path) and output_filename:
+                            try:
+                                with open(output_path, 'r', encoding='utf-8') as f:
+                                    zf.writestr(f'{job_folder}/outputs/{output_filename}', f.read().encode('utf-8'))
+                                    files_total += 1
+                            except Exception:
+                                pass
+                    
+                    job_count += 1
+                        
+                except Exception as e:
+                    failed_jobs.append({'jobId': job_id, 'reason': str(e)[:200]})
+                    error_content = f'Export failed: {str(e)[:200]}'
+                    zf.writestr(f'{job_folder}/error.txt', error_content.encode('utf-8'))
+            
+            summary = {
+                'exportedAt': datetime.now(timezone.utc).isoformat(),
+                'sessionId': session_id,
+                'jobCount': job_count,
+                'filesTotal': files_total,
+                'withReviewState': with_review_state,
+                'failedJobs': failed_jobs,
+            }
+            zf.writestr(f'{root_folder}/session_summary.json', json.dumps(summary, indent=2).encode('utf-8'))
+        
+        with _session_exports_lock:
+            _session_exports[export_id].update({
+                'status': 'complete',
+                'progress': {'jobsDone': jobs_total, 'jobsTotal': jobs_total, 'currentJob': ''},
+                'zipPath': zip_path,
+                'downloadFilename': f'session-export-{timestamp}.zip',
+                'summary': summary,
+            })
+            
+    except Exception as e:
+        with _session_exports_lock:
+            _session_exports[export_id].update({
+                'status': 'failed',
+                'error': str(e)[:500],
+            })
+
+
 @app.route('/api/session/export', methods=['POST'])
 def api_export_session():
-    """Export all jobs in the current session as a single zip with full editor state."""
+    """Start async session export job. Returns exportId for polling."""
     session_id = g.session_id
     
-    # Get all jobs for this session
+    # Cleanup old exports
+    _cleanup_old_exports()
+    
+    # Check if jobs exist
     jobs_dir = os.path.join(session_store.session_dir(session_id), 'jobs')
     if not jobs_dir or not os.path.exists(jobs_dir):
         return jsonify({'error': 'No jobs found'}), 404
@@ -4740,90 +4871,79 @@ def api_export_session():
     if not job_ids:
         return jsonify({'error': 'No jobs found'}), 404
     
-    zip_buffer = io.BytesIO()
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    root_folder = f'session_export_{timestamp}'
-    
-    # Track summary stats
-    job_count = 0
-    files_total = 0
-    with_review_state = 0
-    failed_jobs = []
-    
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        # Export session.json (session metadata)
-        session_meta = {
+    # Create export job
+    export_id = f'exp_{secrets.token_hex(8)}'
+    with _session_exports_lock:
+        _session_exports[export_id] = {
+            'exportId': export_id,
             'sessionId': session_id,
-            'exportedAt': datetime.now(timezone.utc).isoformat(),
-            'version': '1.0',
-            'buildCommit': os.environ.get('BUILD_COMMIT', 'unknown'),
+            'status': 'queued',
+            'progress': {'jobsDone': 0, 'jobsTotal': len(job_ids), 'currentJob': ''},
+            'createdAt': datetime.now(timezone.utc).isoformat(),
         }
-        zf.writestr(f'{root_folder}/session.json', json.dumps(session_meta, indent=2).encode('utf-8'))
-        
-        for job_id in job_ids:
-            job_folder = f'{root_folder}/jobs/{job_id}'
-            try:
-                # Include raw job.json manifest
-                manifest_path = session_store.job_manifest_path(session_id, job_id)
-                manifest = session_store.read_json(manifest_path)
-                if manifest:
-                    zf.writestr(f'{job_folder}/job.json', json.dumps(manifest, indent=2).encode('utf-8'))
-                
-                # Include review_state.json if exists
-                job_dir = session_store.job_dir(session_id, job_id)
-                state_path = os.path.join(job_dir, 'review', 'review_state.json')
-                review_state = session_store.read_json(state_path)
-                if review_state:
-                    zf.writestr(f'{job_folder}/review_state.json', json.dumps(review_state, indent=2).encode('utf-8'))
-                    with_review_state += 1
-                
-                # Include timeline.json if exists
-                timeline_path = os.path.join(job_dir, 'review', 'timeline.json')
-                if os.path.exists(timeline_path):
-                    with open(timeline_path, 'r', encoding='utf-8') as f:
-                        zf.writestr(f'{job_folder}/timeline.json', f.read().encode('utf-8'))
-                
-                # Include all outputs
-                outputs = manifest.get('outputs', []) if manifest else []
-                for output in outputs:
-                    output_path = output.get('path')
-                    output_filename = output.get('filename', '')
-                    if output_path and os.path.exists(output_path) and output_filename:
-                        try:
-                            with open(output_path, 'r', encoding='utf-8') as f:
-                                zf.writestr(f'{job_folder}/outputs/{output_filename}', f.read().encode('utf-8'))
-                                files_total += 1
-                        except Exception:
-                            pass
-                
-                job_count += 1
-                    
-            except Exception as e:
-                failed_jobs.append({'jobId': job_id, 'reason': str(e)[:200]})
-                error_content = f'Export failed: {str(e)[:200]}'
-                zf.writestr(f'{job_folder}/error.txt', error_content.encode('utf-8'))
-        
-        # Write session summary at root
-        summary = {
-            'exportedAt': datetime.now(timezone.utc).isoformat(),
-            'sessionId': session_id,
-            'jobCount': job_count,
-            'filesTotal': files_total,
-            'withReviewState': with_review_state,
-            'failedJobs': failed_jobs,
-        }
-        zf.writestr(f'{root_folder}/session_summary.json', json.dumps(summary, indent=2).encode('utf-8'))
     
-    zip_buffer.seek(0)
+    # Start background thread
+    thread = threading.Thread(target=_run_session_export, args=(export_id, session_id), daemon=True)
+    thread.start()
     
-    return send_file(
-        zip_buffer,
-        mimetype='application/zip',
-        as_attachment=True,
-        download_name=f'session-export-{timestamp}.zip'
-    )
+    return jsonify({'exportId': export_id})
 
 _CSRF_PROTECTED_ENDPOINTS.add('api_export_session')
+
+
+@app.route('/api/session/export/<export_id>', methods=['GET'])
+def api_get_export_status(export_id):
+    """Get status of an export job."""
+    with _session_exports_lock:
+        export = _session_exports.get(export_id)
+    
+    if not export:
+        return jsonify({'error': 'Export not found'}), 404
+    
+    # Verify session ownership
+    if export.get('sessionId') != g.session_id:
+        return jsonify({'error': 'Export not found'}), 404
+    
+    result = {
+        'exportId': export['exportId'],
+        'status': export['status'],
+        'progress': export.get('progress', {}),
+    }
+    
+    if export['status'] == 'complete':
+        result['downloadUrl'] = f'/api/session/export/{export_id}/download'
+        result['summary'] = export.get('summary', {})
+    elif export['status'] == 'failed':
+        result['error'] = export.get('error', 'Unknown error')
+    
+    return jsonify(result)
+
+
+@app.route('/api/session/export/<export_id>/download', methods=['GET'])
+def api_download_export(export_id):
+    """Download completed export zip."""
+    with _session_exports_lock:
+        export = _session_exports.get(export_id)
+    
+    if not export:
+        return jsonify({'error': 'Export not found'}), 404
+    
+    if export.get('sessionId') != g.session_id:
+        return jsonify({'error': 'Export not found'}), 404
+    
+    if export['status'] != 'complete':
+        return jsonify({'error': 'Export not ready'}), 400
+    
+    zip_path = export.get('zipPath')
+    if not zip_path or not os.path.exists(zip_path):
+        return jsonify({'error': 'Export file not found'}), 404
+    
+    return send_file(
+        zip_path,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=export.get('downloadFilename', 'session-export.zip')
+    )
 
 
 @app.route('/api/session/import', methods=['POST'])
