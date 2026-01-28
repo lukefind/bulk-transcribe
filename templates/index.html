@@ -1018,89 +1018,112 @@
          REVIEW WORKSPACE - Full-screen dedicated review mode
          ===================================================================== -->
     <div id="reviewWorkspace" class="fixed inset-0 bg-surface-900 z-40 hidden flex flex-col">
-        <!-- Review Header -->
-        <header class="border-b border-gray-700/50 bg-surface-800/80 backdrop-blur-sm px-4 py-3 flex-shrink-0">
-            <div class="flex items-center justify-between max-w-7xl mx-auto">
-                <div class="flex items-center gap-4">
-                    <button onclick="closeReviewWorkspace()" class="flex items-center gap-2 text-gray-400 hover:text-white transition-colors">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
-                        </svg>
-                        <span class="text-sm">Back to Jobs</span>
-                    </button>
-                    <div class="h-6 w-px bg-gray-700"></div>
-                    <div>
-                        <div class="text-sm font-medium text-white" id="reviewJobTitle">Review Transcript</div>
+        <!-- Review Header - Two Row Layout -->
+        <header class="border-b border-gray-700/50 bg-surface-800/80 backdrop-blur-sm flex-shrink-0">
+            <!-- Row 1: Navigation + Job Info + Actions -->
+            <div class="px-4 py-2 border-b border-gray-700/30">
+                <div class="flex items-center justify-between max-w-7xl mx-auto">
+                    <!-- Left: Back + Job Info -->
+                    <div class="flex items-center gap-4">
+                        <button onclick="closeReviewWorkspace()" class="flex items-center gap-2 text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-surface-700/50">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                            </svg>
+                            <span class="text-sm">Back</span>
+                        </button>
+                        <div class="h-5 w-px bg-gray-700"></div>
+                        <div>
+                            <div class="text-sm font-medium text-white" id="reviewJobTitle">Review Transcript</div>
+                            <div class="text-[11px] text-gray-500" id="reviewJobMeta"></div>
+                        </div>
+                        <span id="reviewActiveJobBadge" class="hidden text-xs px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400"></span>
+                    </div>
+                    
+                    <!-- Right: Status + Actions -->
+                    <div class="flex items-center gap-2">
+                        <!-- Save Status -->
+                        <div id="reviewSaveStatus" class="flex items-center gap-1.5 text-xs text-gray-500 mr-2">
+                            <span id="saveStatusIcon" class="w-2 h-2 rounded-full bg-green-500"></span>
+                            <span id="saveStatusText">Saved</span>
+                        </div>
+                        <!-- Finished Toggle -->
+                        <label id="reviewFinishedToggle" class="flex items-center gap-1.5 px-2 py-1 rounded bg-surface-700/50 hover:bg-surface-700 cursor-pointer text-xs text-gray-400">
+                            <input type="checkbox" id="reviewFinishedCheckbox" class="rounded bg-surface-700 border-gray-600 text-green-500 w-3.5 h-3.5" onchange="toggleReviewJobFinished()">
+                            <span>Done</span>
+                        </label>
+                        <!-- Theme Toggle -->
+                        <button type="button" onclick="toggleTheme()" class="p-1.5 rounded bg-surface-700/50 hover:bg-surface-700 transition-colors" title="Toggle theme">
+                            <svg class="w-4 h-4 theme-icon-sun hidden text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                            <svg class="w-4 h-4 theme-icon-moon text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
+                        </button>
+                        <!-- Save Button -->
+                        <button onclick="saveReviewStateExplicit()" id="reviewSaveBtn" class="px-3 py-1.5 bg-primary-600 hover:bg-primary-500 rounded-lg text-white text-xs font-medium flex items-center gap-1.5 transition-colors">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                            </svg>
+                            Save
+                        </button>
+                        <!-- Export Dropdown -->
+                        <div class="relative" id="exportDropdown">
+                            <button onclick="toggleExportDropdown()" class="px-3 py-1.5 bg-surface-700 hover:bg-surface-600 border border-gray-600/50 rounded-lg text-gray-300 text-xs flex items-center gap-1.5 transition-colors">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+                                </svg>
+                                Export
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                            </button>
+                            <div id="exportDropdownMenu" class="export-menu hidden absolute right-0 top-full mt-1 rounded-lg shadow-lg py-1 min-w-[180px] z-50">
+                                <button onclick="exportReviewProject(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Project (.btproj)</button>
+                                <button onclick="exportReviewMd(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Markdown (.md)</button>
+                                <button onclick="exportReviewTxt(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Text (.txt)</button>
+                                <button onclick="exportReviewJson(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Timeline (.json)</button>
+                                <div class="export-menu-separator my-1"></div>
+                                <button onclick="exportReviewDocx(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Word (.docx)</button>
+                                <button onclick="exportReviewPdf(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export PDF (.pdf)</button>
+                                <div class="export-menu-separator my-1"></div>
+                                <button onclick="downloadAllFormatsFromReview(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm font-medium">Download All Formats</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Row 2: File/Batch Selectors -->
+            <div class="px-4 py-2">
+                <div class="flex items-center justify-between max-w-7xl mx-auto">
+                    <!-- Left: File + Batch selectors -->
+                    <div class="flex items-center gap-6">
+                        <!-- File Selector -->
                         <div class="flex items-center gap-2">
-                            <span class="text-xs text-gray-500" id="reviewFileName">Loading...</span>
-                            <!-- File selector for multi-file batch jobs -->
+                            <label class="text-[11px] text-gray-500 uppercase tracking-wide">File</label>
+                            <span class="text-sm text-gray-300" id="reviewFileName">Loading...</span>
                             <select id="reviewInputSelect" onchange="onReviewInputSelectChange()" 
-                                    class="hidden px-2 py-0.5 bg-surface-700/50 border border-gray-600/50 rounded text-primary-400 text-xs max-w-[220px]"
-                                    title="File in batch: switch between input files">
+                                    class="hidden px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-primary-400 text-xs max-w-[220px]"
+                                    title="Switch between input files">
                             </select>
                         </div>
-                    </div>
-                    <div class="h-6 w-px bg-gray-700 ml-2"></div>
-                    <div class="flex items-center gap-2">
-                        <label class="text-xs text-gray-500">Batch:</label>
-                        <button onclick="reviewPrevJob()" id="reviewPrevBtn" class="px-1.5 py-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 text-xs disabled:opacity-40 disabled:cursor-not-allowed" title="Previous job">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
-                        </button>
-                        <select id="reviewJobSelect" onchange="onReviewJobSelectChange()" 
-                                class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs min-w-[200px] max-w-[320px]">
-                        </select>
-                        <button onclick="reviewNextJob()" id="reviewNextBtn" class="px-1.5 py-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 text-xs disabled:opacity-40 disabled:cursor-not-allowed" title="Next job">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
-                        </button>
-                        <button onclick="loadReviewJobOptions(reviewJobData?.jobId)" class="px-1.5 py-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 text-xs" title="Refresh job list">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-                        </button>
-                    </div>
-                    <span id="reviewActiveJobBadge" class="hidden text-xs px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400"></span>
-                </div>
-                <div class="flex items-center gap-3">
-                    <!-- Theme Toggle -->
-                    <button type="button" onclick="toggleTheme()" class="flex items-center gap-1 px-2 py-1 rounded bg-surface-700/50 hover:bg-surface-700 transition-colors text-xs" title="Toggle theme">
-                        <svg class="w-3.5 h-3.5 theme-icon-sun hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
-                        <svg class="w-3.5 h-3.5 theme-icon-moon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
-                    </button>
-                    <!-- Finished Toggle -->
-                    <label id="reviewFinishedToggle" class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
-                        <input type="checkbox" id="reviewFinishedCheckbox" class="rounded bg-surface-700 border-gray-600 text-green-500" onchange="toggleReviewJobFinished()">
-                        <span>Finished</span>
-                    </label>
-                    <!-- Save Status Indicator -->
-                    <div id="reviewSaveStatus" class="flex items-center gap-1.5 text-xs text-gray-500">
-                        <span id="saveStatusIcon" class="w-2 h-2 rounded-full bg-green-500"></span>
-                        <span id="saveStatusText">Saved</span>
-                    </div>
-                    <!-- Save Button -->
-                    <button onclick="saveReviewStateExplicit()" id="reviewSaveBtn" class="px-3 py-1.5 bg-primary-600 hover:bg-primary-500 border border-primary-500/50 rounded-lg text-white text-sm flex items-center gap-2 transition-colors">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-                        </svg>
-                        Save
-                    </button>
-                    <!-- Export Dropdown -->
-                    <div class="relative" id="exportDropdown">
-                        <button onclick="toggleExportDropdown()" class="px-3 py-1.5 bg-surface-700 hover:bg-surface-600 border border-gray-600/50 rounded-lg text-gray-300 text-sm flex items-center gap-2 transition-colors">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
-                            </svg>
-                            Export
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
-                        </button>
-                        <div id="exportDropdownMenu" class="export-menu hidden absolute right-0 top-full mt-1 rounded-lg shadow-lg py-1 min-w-[180px] z-50">
-                            <button onclick="exportReviewProject(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Project (.btproj)</button>
-                            <button onclick="exportReviewMd(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Markdown (.md)</button>
-                            <button onclick="exportReviewTxt(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Text (.txt)</button>
-                            <button onclick="exportReviewJson(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Timeline (.json)</button>
-                            <div class="export-menu-separator my-1"></div>
-                            <button onclick="exportReviewDocx(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Word (.docx)</button>
-                            <button onclick="exportReviewPdf(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export PDF (.pdf)</button>
-                            <div class="export-menu-separator my-1"></div>
-                            <button onclick="downloadAllFormatsFromReview(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm font-medium">Download All Formats</button>
+                        
+                        <!-- Batch Selector -->
+                        <div class="flex items-center gap-2">
+                            <label class="text-[11px] text-gray-500 uppercase tracking-wide">Batch</label>
+                            <button onclick="reviewPrevJob()" id="reviewPrevBtn" class="p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 disabled:opacity-40 disabled:cursor-not-allowed" title="Previous job">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                            </button>
+                            <select id="reviewJobSelect" onchange="onReviewJobSelectChange()" 
+                                    class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs min-w-[180px] max-w-[280px]">
+                            </select>
+                            <button onclick="reviewNextJob()" id="reviewNextBtn" class="p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 disabled:opacity-40 disabled:cursor-not-allowed" title="Next job">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                            </button>
+                            <button onclick="loadReviewJobOptions(reviewJobData?.jobId)" class="p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400" title="Refresh job list">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                            </button>
                         </div>
+                    </div>
+                    
+                    <!-- Right: Audio duration -->
+                    <div class="text-xs text-gray-500">
+                        <span id="reviewAudioDuration"></span>
                     </div>
                 </div>
             </div>
@@ -3299,6 +3322,13 @@
             if (IS_SERVER_MODE) {
                 fetchCsrfToken();
                 loadJobHistoryAndRestore();
+                
+                // Restore active job when page becomes visible (e.g., returning from editor)
+                document.addEventListener('visibilitychange', () => {
+                    if (!document.hidden) {
+                        loadJobHistoryAndRestore();
+                    }
+                });
             }
             
             // Save language when changed
@@ -5267,15 +5297,22 @@
             
             // Update header info with job ID and creation time
             let jobTitleText = `Job ${job.jobId?.substring(0, 8) || 'Unknown'}`;
+            let jobMetaText = '';
             if (job.createdAt) {
                 try {
                     const d = new Date(job.createdAt);
-                    const dateStr = d.toLocaleDateString([], {day: '2-digit', month: 'short'}) + ' ' + 
-                                    d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-                    jobTitleText += ` • ${dateStr}`;
+                    jobMetaText = d.toLocaleDateString([], {day: '2-digit', month: 'short', year: 'numeric'}) + ' ' + 
+                                  d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
                 } catch (e) {}
             }
+            // Add model/backend info to meta
+            if (job.model) jobMetaText += ` • ${job.model}`;
+            if (job.backend) jobMetaText += ` • ${job.backend}`;
+            if (job.diarizationEnabled) jobMetaText += ' • diarization';
+            
             document.getElementById('reviewJobTitle').textContent = jobTitleText;
+            const metaEl = document.getElementById('reviewJobMeta');
+            if (metaEl) metaEl.textContent = jobMetaText;
             
             // Find the target input
             let targetInput = null;
@@ -5490,6 +5527,9 @@
             reviewTimeline = null;
             reviewSelectedChunkIndex = -1;
             document.removeEventListener('keydown', handleReviewKeydown);
+            
+            // Restore active job panel on return to main page
+            loadJobHistoryAndRestore();
         }
         
         // Alias for compatibility
