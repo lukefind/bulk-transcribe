@@ -176,7 +176,7 @@ def _cleanup_orphaned_running_jobs():
                         manifest['finishedAt'] = datetime.now(timezone.utc).isoformat()
                         manifest['error'] = {
                             'code': 'SERVER_RESTART',
-                            'message': 'Job was interrupted by server restart'
+                            'message': 'Job was interrupted by server restart. You can re-run this job using the retry button.'
                         }
                         session_store.atomic_write_json(manifest_path, manifest)
                         orphaned_count += 1

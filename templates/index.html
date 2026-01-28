@@ -5093,7 +5093,12 @@
         
         function showError(msg) {
             errorSection.classList.remove('hidden');
-            document.getElementById('errorMessage').textContent = msg;
+            // Handle both string and object errors
+            let displayMsg = msg;
+            if (typeof msg === 'object' && msg !== null) {
+                displayMsg = msg.message || msg.error || JSON.stringify(msg);
+            }
+            document.getElementById('errorMessage').textContent = displayMsg;
         }
         
         function showDiarizationTooLongError(data) {
@@ -5589,7 +5594,12 @@
 
         function showError(message) {
             errorSection.classList.remove('hidden');
-            document.getElementById('errorMessage').textContent = message;
+            // Handle both string and object errors
+            let displayMsg = message;
+            if (typeof message === 'object' && message !== null) {
+                displayMsg = message.message || message.error || JSON.stringify(message);
+            }
+            document.getElementById('errorMessage').textContent = displayMsg;
         }
 
         function hideError() {
