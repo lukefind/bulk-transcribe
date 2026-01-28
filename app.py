@@ -133,6 +133,66 @@ _request_counter = 0
 _cleanup_interval = 50  # Run cleanup every N requests
 
 
+def _cleanup_orphaned_running_jobs():
+    """
+    Mark any jobs with status='running' as failed on startup.
+    
+    This handles the case where the server was restarted while jobs were running.
+    Those jobs are now orphaned (no thread processing them) and should be marked
+    as failed so the UI doesn't show them as stuck.
+    """
+    if not session_store.is_server_mode():
+        return
+    
+    try:
+        sessions_dir = session_store.get_sessions_dir()
+        if not os.path.exists(sessions_dir):
+            return
+        
+        orphaned_count = 0
+        for session_id in os.listdir(sessions_dir):
+            session_path = os.path.join(sessions_dir, session_id)
+            if not os.path.isdir(session_path):
+                continue
+            
+            jobs_dir = os.path.join(session_path, 'jobs')
+            if not os.path.exists(jobs_dir):
+                continue
+            
+            for job_id in os.listdir(jobs_dir):
+                job_path = os.path.join(jobs_dir, job_id)
+                if not os.path.isdir(job_path):
+                    continue
+                
+                manifest_path = os.path.join(job_path, 'manifest.json')
+                if not os.path.exists(manifest_path):
+                    continue
+                
+                try:
+                    manifest = session_store.read_json(manifest_path)
+                    if manifest and manifest.get('status') == 'running':
+                        # This job was running when server stopped - mark as failed
+                        manifest['status'] = 'failed'
+                        manifest['finishedAt'] = datetime.now(timezone.utc).isoformat()
+                        manifest['error'] = {
+                            'code': 'SERVER_RESTART',
+                            'message': 'Job was interrupted by server restart'
+                        }
+                        session_store.atomic_write_json(manifest_path, manifest)
+                        orphaned_count += 1
+                except Exception:
+                    pass  # Skip jobs we can't read
+        
+        if orphaned_count > 0:
+            print(f"[startup] Marked {orphaned_count} orphaned running job(s) as failed")
+    except Exception as e:
+        print(f"[startup] Warning: Failed to cleanup orphaned jobs: {e}")
+
+
+# Run cleanup on module load (server startup)
+_cleanup_orphaned_running_jobs()
+
+
 # =============================================================================
 # Session Middleware
 # =============================================================================
