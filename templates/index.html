@@ -6045,6 +6045,7 @@
             if (job.model) jobMetaText += ` • ${job.model}`;
             if (job.backend) jobMetaText += ` • ${job.backend}`;
             if (job.diarizationEnabled) jobMetaText += ' • diarization';
+            if (job.vadEnabled) jobMetaText += ' • VAD';
             
             document.getElementById('reviewJobTitle').textContent = jobTitleText;
             const metaEl = document.getElementById('reviewJobMeta');
