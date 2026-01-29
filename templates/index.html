@@ -7185,13 +7185,25 @@
         
         function highlightCurrentChunk(currentTime) {
             if (!reviewTimeline?.chunks) return;
-            
+
             // Find chunk that contains current time
+            // First try to find a chunk where currentTime is within [start, end)
             let matchIndex = -1;
-            for (let i = reviewTimeline.chunks.length - 1; i >= 0; i--) {
-                if (reviewTimeline.chunks[i].start <= currentTime) {
+            for (let i = 0; i < reviewTimeline.chunks.length; i++) {
+                const chunk = reviewTimeline.chunks[i];
+                if (chunk.start <= currentTime && currentTime < chunk.end) {
                     matchIndex = i;
                     break;
+                }
+            }
+
+            // If no exact match (gaps between chunks), find the last chunk that started
+            if (matchIndex === -1) {
+                for (let i = reviewTimeline.chunks.length - 1; i >= 0; i--) {
+                    if (reviewTimeline.chunks[i].start <= currentTime) {
+                        matchIndex = i;
+                        break;
+                    }
                 }
             }
             
