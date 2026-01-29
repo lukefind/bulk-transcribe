@@ -7971,10 +7971,13 @@
         }
         
         function handleReviewKeydown(e) {
-            // Prevent Space from toggling checkboxes - blur and let audio handle it
+            // Prevent Space from toggling checkboxes or activating buttons - blur and let audio handle it
             if (e.code === 'Space') {
                 const active = document.activeElement;
-                if (active?.tagName === 'INPUT' && active.type === 'checkbox') {
+                // Blur checkboxes and buttons so Space controls audio playback
+                if ((active?.tagName === 'INPUT' && active.type === 'checkbox') || 
+                    active?.tagName === 'BUTTON' ||
+                    active?.tagName === 'INPUT' && active.type === 'range') {
                     active.blur();
                     e.preventDefault();
                     toggleAudioPlayback();
