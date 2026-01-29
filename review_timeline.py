@@ -682,7 +682,8 @@ class TimelineParser:
                 'end': ts_end,
                 'speaker_id': speaker_id,
                 'text': text,
-                'segment_id': segment_id
+                'segment_id': segment_id,
+                'hallucination_warning': ts.get('hallucination_warning')
             })
         
         # E) Speaker smoothing pass - reduce rapid speaker flips on short segments
@@ -723,7 +724,7 @@ class TimelineParser:
         # Each labeled_segment becomes one raw chunk
         raw_chunks = []
         for idx, seg in enumerate(labeled_segments):
-            raw_chunks.append({
+            chunk = {
                 'chunk_id': f'r_{idx:06d}',
                 'start': seg['start'],
                 'end': seg['end'],
@@ -734,7 +735,11 @@ class TimelineParser:
                     'speakerAssignedBy': 'diarization_overlap',
                     'merged': False
                 }
-            })
+            }
+            # Include hallucination warning if present
+            if seg.get('hallucination_warning'):
+                chunk['hallucination_warning'] = seg['hallucination_warning']
+            raw_chunks.append(chunk)
         
         # Store raw chunks on timeline for later use
         if not hasattr(timeline, '_unmerged_chunks'):
@@ -742,25 +747,27 @@ class TimelineParser:
         timeline._unmerged_chunks.extend(raw_chunks)
         
         chunks = []
+        first_seg = labeled_segments[0]
         current = {
-            'start': labeled_segments[0]['start'],
-            'end': labeled_segments[0]['end'],
-            'speaker_id': labeled_segments[0]['speaker_id'],
-            'text': labeled_segments[0]['text'],
-            'segment_ids': [labeled_segments[0]['segment_id']]
+            'start': first_seg['start'],
+            'end': first_seg['end'],
+            'speaker_id': first_seg['speaker_id'],
+            'text': first_seg['text'],
+            'segment_ids': [first_seg['segment_id']],
+            'hallucination_warnings': [first_seg['hallucination_warning']] if first_seg.get('hallucination_warning') else []
         }
-        
+
         for i in range(1, len(labeled_segments)):
             seg = labeled_segments[i]
             gap = seg['start'] - current['end']
             combined_duration = seg['end'] - current['start']
             combined_text_len = len(current['text']) + len(seg['text']) + 1
-            
+
             # Check hard boundary (sentence end + gap)
             cur_text_stripped = current['text'].rstrip()
             ends_with_punct = cur_text_stripped and cur_text_stripped[-1] in '.?!'
             hard_boundary = ends_with_punct and gap > 0.4
-            
+
             # Merge conditions
             should_merge = (
                 seg['speaker_id'] == current['speaker_id'] and
@@ -769,12 +776,14 @@ class TimelineParser:
                 combined_text_len <= MAX_CHUNK_CHARS and
                 not hard_boundary
             )
-            
+
             if should_merge:
                 current['end'] = seg['end']
                 current['text'] = (current['text'].rstrip() + ' ' + seg['text'].lstrip()).strip()
                 if seg['segment_id'] is not None:
                     current['segment_ids'].append(seg['segment_id'])
+                if seg.get('hallucination_warning'):
+                    current['hallucination_warnings'].append(seg['hallucination_warning'])
             else:
                 chunks.append(current)
                 current = {
@@ -782,14 +791,32 @@ class TimelineParser:
                     'end': seg['end'],
                     'speaker_id': seg['speaker_id'],
                     'text': seg['text'],
-                    'segment_ids': [seg['segment_id']] if seg['segment_id'] is not None else []
+                    'segment_ids': [seg['segment_id']] if seg['segment_id'] is not None else [],
+                    'hallucination_warnings': [seg['hallucination_warning']] if seg.get('hallucination_warning') else []
                 }
-        
+
         # Don't forget the last chunk
         chunks.append(current)
         
         # G) Create Chunk objects
         for idx, c in enumerate(chunks):
+            # Combine hallucination warnings if multiple segments had them
+            warnings = c.get('hallucination_warnings', [])
+            combined_warning = None
+            if warnings:
+                all_reasons = []
+                max_confidence = 0
+                for w in warnings:
+                    if w:
+                        max_confidence = max(max_confidence, w.get('confidence', 0))
+                        all_reasons.extend(w.get('reasons', []))
+                if all_reasons:
+                    combined_warning = {
+                        'confidence': max_confidence,
+                        'reasons': list(set(all_reasons)),
+                        'segment_count': len([w for w in warnings if w])
+                    }
+
             chunk = Chunk(
                 chunk_id=f't_{idx:06d}',
                 start=c['start'],
@@ -800,7 +827,8 @@ class TimelineParser:
                     'transcriptSegmentIds': c['segment_ids'],
                     'speakerAssignedBy': 'diarization_overlap',
                     'speakerSmoothing': True
-                }
+                },
+                hallucination_warning=combined_warning
             )
             timeline.chunks.append(chunk)
     
