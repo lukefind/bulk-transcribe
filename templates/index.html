@@ -6452,8 +6452,9 @@
         }
 
         function updateHallucinationsToggleState() {
-            // Count hallucinated chunks
-            const hallucinationCount = (reviewTimeline?.chunks || []).filter(c => c.hallucination_warning).length;
+            // Count hallucinated chunks (total and dismissed)
+            const allFlagged = (reviewTimeline?.chunks || []).filter(c => c.hallucination_warning);
+            const hallucinationCount = allFlagged.length;
             const label = document.getElementById('showHallucinationsLabel');
 
             if (hallucinationCount > 0) {
@@ -6466,12 +6467,21 @@
 
         function updateHallucinationsToggleText() {
             const textSpan = document.getElementById('showHallucinationsText');
-            const hallucinationCount = (reviewTimeline?.chunks || []).filter(c => c.hallucination_warning).length;
+            const allFlagged = (reviewTimeline?.chunks || []).filter(c => c.hallucination_warning);
+            const dismissedCount = allFlagged.filter(c =>
+                reviewState.chunkEdits?.[c.chunk_id]?.hallucinationDismissed
+            ).length;
+            const stillFlagged = allFlagged.length - dismissedCount;
+
             if (textSpan) {
-                if (reviewShowHallucinations) {
-                    textSpan.textContent = `⚠️ Flagged (${hallucinationCount})`;
-                } else {
-                    textSpan.textContent = `⚠️ Hidden (${hallucinationCount})`;
+                if (dismissedCount > 0 && stillFlagged > 0) {
+                    textSpan.textContent = `⚠️ ${stillFlagged} flagged, ✓ ${dismissedCount} ok`;
+                } else if (dismissedCount > 0) {
+                    textSpan.textContent = `✓ ${dismissedCount} marked ok`;
+                } else if (stillFlagged > 0) {
+                    textSpan.textContent = reviewShowHallucinations
+                        ? `⚠️ Flagged (${stillFlagged})`
+                        : `⚠️ Hidden (${stillFlagged})`;
                 }
             }
         }
@@ -6596,8 +6606,9 @@
             }
             
             chunks.forEach((chunk, idx) => {
-                // Filter by hallucination toggle
-                if (!reviewShowHallucinations && chunk.hallucination_warning) {
+                // Filter by hallucination toggle (but always show dismissed ones)
+                const isDismissed = reviewState.chunkEdits?.[chunk.chunk_id]?.hallucinationDismissed;
+                if (!reviewShowHallucinations && chunk.hallucination_warning && !isDismissed) {
                     return;
                 }
 
@@ -6625,10 +6636,22 @@
                 const displayText = editedText !== undefined ? editedText : chunk.text;
                 const isEdited = editedText !== undefined;
                 
-                // Hallucination warning badge
-                const hallucinationBadge = chunk.hallucination_warning ? 
-                    `<span class="hallucination-badge ml-1 cursor-help text-amber-500" 
-                           title="Possible hallucination: ${(chunk.hallucination_warning.reasons || []).join(', ')}">⚠️</span>` : '';
+                // Hallucination warning badge (with dismiss option)
+                const isDismissed = reviewState.chunkEdits?.[chunk.chunk_id]?.hallucinationDismissed;
+                let hallucinationBadge = '';
+                if (chunk.hallucination_warning) {
+                    if (isDismissed) {
+                        // Dismissed - show green checkmark, click to un-dismiss
+                        hallucinationBadge = `<span class="hallucination-badge ml-1 cursor-pointer text-green-500 hover:text-green-400"
+                               onclick="event.stopPropagation(); toggleHallucinationDismiss('${chunk.chunk_id}', false)"
+                               title="Marked as NOT a hallucination (click to undo)">✓</span>`;
+                    } else {
+                        // Not dismissed - show warning, click to dismiss
+                        hallucinationBadge = `<span class="hallucination-badge ml-1 cursor-pointer text-amber-500 hover:text-amber-400"
+                               onclick="event.stopPropagation(); toggleHallucinationDismiss('${chunk.chunk_id}', true)"
+                               title="Possible hallucination: ${(chunk.hallucination_warning.reasons || []).join(', ')} (click to mark as valid)">⚠️</span>`;
+                    }
+                }
                 
                 div.innerHTML = `
                     <div class="flex-shrink-0 w-16">
@@ -6842,7 +6865,36 @@
                 deleteSelectedChunk();
             }
         }
-        
+
+        function toggleHallucinationDismiss(chunkId, dismiss) {
+            if (!reviewState.chunkEdits) {
+                reviewState.chunkEdits = {};
+            }
+            if (!reviewState.chunkEdits[chunkId]) {
+                reviewState.chunkEdits[chunkId] = {};
+            }
+
+            if (dismiss) {
+                reviewState.chunkEdits[chunkId].hallucinationDismissed = true;
+                showReviewToast('Marked as valid (not a hallucination)', 'success');
+            } else {
+                delete reviewState.chunkEdits[chunkId].hallucinationDismissed;
+                // Clean up empty edit objects
+                if (Object.keys(reviewState.chunkEdits[chunkId]).length === 0) {
+                    delete reviewState.chunkEdits[chunkId];
+                }
+                showReviewToast('Restored hallucination warning', 'info');
+            }
+
+            // Update counts and re-render
+            updateHallucinationsToggleState();
+            renderTimeline();
+
+            // Mark as changed and save
+            reviewHasUnsavedChanges = true;
+            debounceSave();
+        }
+
         function showReviewToast(message, type = 'info') {
             // Simple toast notification
             const existing = document.getElementById('reviewToast');
