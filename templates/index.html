@@ -6701,7 +6701,7 @@
                 const isEdited = editedText !== undefined;
                 
                 // Hallucination warning badge (with dismiss option)
-                const isDismissed = reviewState.chunkEdits?.[chunk.chunk_id]?.hallucinationDismissed;
+                // isDismissed already declared above for filtering
                 let hallucinationBadge = '';
                 if (chunk.hallucination_warning) {
                     if (isDismissed) {
