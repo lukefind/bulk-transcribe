@@ -1149,8 +1149,8 @@
                         <div class="flex items-center gap-2">
                             <label class="text-[11px] text-gray-500 uppercase tracking-wide">File</label>
                             <span class="text-sm text-gray-300" id="reviewFileName">Loading...</span>
-                            <select id="reviewInputSelect" onchange="onReviewInputSelectChange()" 
-                                    class="hidden px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-primary-400 text-xs max-w-[220px]"
+                            <select id="reviewInputSelect" onchange="onReviewInputSelectChange()"
+                                    class="hidden px-2 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded text-primary-400 text-xs max-w-[350px]"
                                     title="Switch between input files">
                             </select>
                         </div>
@@ -1161,8 +1161,8 @@
                             <button onclick="reviewPrevJob()" id="reviewPrevBtn" class="p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 disabled:opacity-40 disabled:cursor-not-allowed" title="Previous job">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
                             </button>
-                            <select id="reviewJobSelect" onchange="onReviewJobSelectChange()" 
-                                    class="px-2 py-1 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs min-w-[180px] max-w-[280px]">
+                            <select id="reviewJobSelect" onchange="onReviewJobSelectChange()"
+                                    class="px-2 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs min-w-[200px] max-w-[400px]">
                             </select>
                             <button onclick="reviewNextJob()" id="reviewNextBtn" class="p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 disabled:opacity-40 disabled:cursor-not-allowed" title="Next job">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
@@ -5787,11 +5787,8 @@
                     }
                 }
                 
-                // Limit to recent jobs
-                const recentJobs = dedupedJobs.slice(0, 20);
-                
-                // Store ordered list for prev/next navigation
-                reviewJobOptionsOrdered = recentJobs.map(j => j.jobId);
+                // Store ordered list for prev/next navigation (no artificial limit)
+                reviewJobOptionsOrdered = dedupedJobs.map(j => j.jobId);
                 
                 // Check for any running/queued jobs and show badge
                 const activeJob = reviewJobList.find(j => j.status === 'running' || j.status === 'queued');
@@ -5805,37 +5802,36 @@
                     }
                 }
                 
-                for (const job of recentJobs) {
+                for (const job of dedupedJobs) {
                     const option = document.createElement('option');
                     option.value = job.jobId;
-                    
-                    // Rich label: date time • N files • primary filename
+
+                    // Rich label: date time • N files • primary filename (no truncation)
                     const filename = job.primaryFilename || 'Unknown';
-                    const truncated = filename.length > 25 ? filename.substring(0, 22) + '...' : filename;
                     const fileCount = job.inputCount || 1;
                     const filesLabel = fileCount > 1 ? `${fileCount} files` : '1 file';
-                    
+
                     let dateTimeStr = '';
                     if (job.createdAt) {
                         try {
                             const d = new Date(job.createdAt);
-                            dateTimeStr = d.toLocaleDateString([], {day: '2-digit', month: 'short'}) + ' ' + 
+                            dateTimeStr = d.toLocaleDateString([], {day: '2-digit', month: 'short'}) + ' ' +
                                           d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
                         } catch (e) {}
                     }
-                    
+
                     const labelParts = [];
                     if (dateTimeStr) labelParts.push(dateTimeStr);
                     labelParts.push(filesLabel);
-                    labelParts.push(truncated);
-                    
+                    labelParts.push(filename);
+
                     option.textContent = labelParts.join(' • ');
                     option.title = `${filename}\nJob: ${job.jobId}\nFiles: ${fileCount}\nCreated: ${job.createdAt || 'unknown'}`;
-                    
+
                     if (job.jobId === selectedJobId) {
                         option.selected = true;
                     }
-                    
+
                     select.appendChild(option);
                 }
                 
