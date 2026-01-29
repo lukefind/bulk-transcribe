@@ -633,12 +633,13 @@ def process_job(worker_job_id: str):
                     totalFiles=len(downloaded_files))
             
             transcript_result = transcribe_file(
-                model, 
+                model,
                 file_info['localPath'],
                 options.get('language'),
                 worker_job_id,
                 vad_enabled=options.get('vadEnabled', False),
                 hallucination_detection=options.get('hallucinationDetection', True),
+                hallucination_sensitivity=int(options.get('hallucinationSensitivity', 50)),
                 no_speech_threshold=float(options.get('noSpeechThreshold', 0.6))
             )
             
@@ -848,17 +849,18 @@ def _convert_to_wav_for_vad(audio_path: str, worker_job_id: str) -> str:
 
 
 def transcribe_file(
-    model, 
-    audio_path: str, 
-    language: Optional[str], 
+    model,
+    audio_path: str,
+    language: Optional[str],
     worker_job_id: str,
     vad_enabled: bool = False,
     hallucination_detection: bool = True,
+    hallucination_sensitivity: int = 50,
     no_speech_threshold: float = 0.6
 ) -> dict:
     """
     Transcribe a single audio file with optional VAD pre-filtering and hallucination detection.
-    
+
     Args:
         model: Loaded Whisper model
         audio_path: Path to audio file
@@ -866,6 +868,7 @@ def transcribe_file(
         worker_job_id: Job ID for logging
         vad_enabled: If True, use Silero VAD to filter silence before transcription
         hallucination_detection: If True, flag likely hallucinations in output
+        hallucination_sensitivity: 0-100, higher = more aggressive filtering
         no_speech_threshold: Whisper's no_speech_threshold parameter
     """
     import whisper
@@ -949,12 +952,18 @@ def transcribe_file(
     if hallucination_detection and result.get('segments'):
         try:
             from hallucination_filter import filter_hallucinations, get_hallucination_summary
-            
+
+            # Convert sensitivity (0-100) to confidence threshold (0.3-0.9)
+            # sensitivity 0 = threshold 0.9 (very permissive, keeps more)
+            # sensitivity 100 = threshold 0.3 (very aggressive, filters more)
+            confidence_threshold = 0.9 - (hallucination_sensitivity / 100) * 0.6
+
             filtered_segments, stats = filter_hallucinations(
                 result['segments'],
                 remove=False,  # Don't remove, just flag
                 flag_only=True,
-                repetition_threshold=3
+                repetition_threshold=3,
+                confidence_threshold=confidence_threshold
             )
             
             result['segments'] = filtered_segments

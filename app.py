@@ -1009,6 +1009,7 @@ def start_transcription():
         'max_segment_duration': data.get('max_segment_duration'),
         'vad_enabled': data.get('vad_enabled', False),
         'hallucination_detection': data.get('hallucination_detection', True),
+        'hallucination_sensitivity': data.get('hallucination_sensitivity', 50),
     }
     
     if not input_folder:
@@ -1770,6 +1771,7 @@ def api_create_job():
             'diarizationWarnings': diarization_warnings,
             'vadEnabled': options.get('vadEnabled', False),
             'hallucinationDetection': options.get('hallucinationDetection', True),
+            'hallucinationSensitivity': options.get('hallucinationSensitivity', 50),
             'noSpeechThreshold': options.get('noSpeechThreshold', 0.6),
         },
         'inputs': inputs,
@@ -3117,6 +3119,7 @@ def api_rerun_job(job_id):
             # VAD and hallucination detection - preserve from original job
             'vadEnabled': options.get('vadEnabled', False),
             'hallucinationDetection': options.get('hallucinationDetection', True),
+            'hallucinationSensitivity': options.get('hallucinationSensitivity', 50),
             'noSpeechThreshold': options.get('noSpeechThreshold', 0.6),
         },
         'inputs': inputs,

@@ -162,26 +162,28 @@ def filter_hallucinations(
     segments: List[Dict[str, Any]],
     remove: bool = False,
     flag_only: bool = True,
-    repetition_threshold: int = REPETITION_THRESHOLD
+    repetition_threshold: int = REPETITION_THRESHOLD,
+    confidence_threshold: float = 0.6
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Filter or flag hallucinations in a transcript.
-    
+
     Args:
         segments: List of Whisper segments
         remove: If True, remove likely hallucinations entirely
         flag_only: If True, add 'hallucination_warning' field but keep segments
         repetition_threshold: Threshold for repetition detection
-    
+        confidence_threshold: Minimum confidence to flag as hallucination (0.3-0.9)
+
     Returns:
         Tuple of (filtered_segments, stats)
     """
     if not segments:
         return segments, {'total': 0, 'flagged': 0, 'removed': 0}
-    
+
     # Detect repetition hallucinations
     repetition_indices = set(detect_repetition_hallucinations(segments, repetition_threshold))
-    
+
     filtered = []
     stats = {
         'total': len(segments),
@@ -189,18 +191,20 @@ def filter_hallucinations(
         'removed': 0,
         'reasons': Counter()
     }
-    
+
     for i, segment in enumerate(segments):
         indicators = detect_hallucination_indicators(segment)
-        
+
         # Also check if this is a repetition hallucination
         if i in repetition_indices:
-            indicators['is_likely_hallucination'] = True
             indicators['confidence'] = max(indicators['confidence'], 0.85)
             if 'repetition' not in indicators['reasons']:
                 indicators['reasons'].append('repetition')
-        
-        if indicators['is_likely_hallucination']:
+
+        # Apply configurable confidence threshold
+        is_hallucination = indicators['confidence'] > confidence_threshold
+
+        if is_hallucination:
             stats['flagged'] += 1
             for reason in indicators['reasons']:
                 stats['reasons'][reason] += 1

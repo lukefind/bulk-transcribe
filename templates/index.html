@@ -842,10 +842,25 @@
                             </div>
                             <div class="flex items-center justify-between mb-2">
                                 <label class="text-sm text-gray-300 flex items-center gap-2" title="Detect and flag likely hallucinations (repeated phrases, foreign text, low confidence)">
-                                    <input type="checkbox" id="hallucinationDetection" onchange="saveUIState()" class="rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500" checked>
+                                    <input type="checkbox" id="hallucinationDetection" onchange="toggleHallucinationOptions(); saveUIState()" class="rounded bg-surface-700 border-gray-600 text-primary-500 focus:ring-primary-500" checked>
                                     <span>Hallucination detection</span>
                                 </label>
                                 <span class="text-xs text-gray-500">Flags suspicious segments</span>
+                            </div>
+                            <!-- Hallucination sensitivity slider -->
+                            <div id="hallucinationOptions" class="ml-6 mb-2 p-3 bg-surface-800/50 rounded-lg">
+                                <div class="flex items-center justify-between mb-1">
+                                    <label class="text-xs text-gray-400">Sensitivity</label>
+                                    <span id="hallucinationSensitivityValue" class="text-xs text-primary-400 font-mono">50%</span>
+                                </div>
+                                <input type="range" id="hallucinationSensitivity" min="0" max="100" value="50"
+                                       onchange="updateHallucinationSensitivity(); saveUIState()"
+                                       oninput="updateHallucinationSensitivityDisplay()"
+                                       class="w-full h-2 bg-surface-700 rounded-lg appearance-none cursor-pointer accent-primary-500">
+                                <div class="flex justify-between text-xs text-gray-500 mt-1">
+                                    <span>Keep more</span>
+                                    <span>Filter more</span>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1683,6 +1698,7 @@
             maxSegmentDuration: 'bulk_transcribe_max_segment_duration',
             vadEnabled: 'bulk_transcribe_vad_enabled',
             hallucinationDetection: 'bulk_transcribe_hallucination_detection',
+            hallucinationSensitivity: 'bulk_transcribe_hallucination_sensitivity',
             speakerColorsByLabel: 'bulk_transcribe_speaker_colors_by_label'
         };
 
@@ -1782,6 +1798,15 @@
             _restoreCheckbox('vadEnabled', STORAGE_KEYS.vadEnabled);
             _restoreCheckbox('hallucinationDetection', STORAGE_KEYS.hallucinationDetection);
 
+            // Restore hallucination sensitivity
+            const savedSensitivity = loadFromStorage(STORAGE_KEYS.hallucinationSensitivity);
+            if (savedSensitivity) {
+                const slider = document.getElementById('hallucinationSensitivity');
+                if (slider) slider.value = savedSensitivity;
+            }
+            updateHallucinationSensitivityDisplay();
+            toggleHallucinationOptions();
+
             updateDiarizationOptions();
             updateDiarizationPolicy();
         }
@@ -1839,8 +1864,10 @@
                     // VAD and hallucination detection
                     const vadEnabled = document.getElementById('vadEnabled')?.checked;
                     const hallucinationDetection = document.getElementById('hallucinationDetection')?.checked;
+                    const hallucinationSensitivity = document.getElementById('hallucinationSensitivity')?.value;
                     saveToStorage(STORAGE_KEYS.vadEnabled, vadEnabled ? 'true' : 'false');
                     saveToStorage(STORAGE_KEYS.hallucinationDetection, hallucinationDetection ? 'true' : 'false');
+                    if (hallucinationSensitivity) saveToStorage(STORAGE_KEYS.hallucinationSensitivity, hallucinationSensitivity);
                     
                     showSettingsSaved();
                 } catch (e) {
@@ -1858,6 +1885,27 @@
                 indicator.classList.remove('opacity-100');
                 indicator.classList.add('opacity-0');
             }, 1500);
+        }
+
+        // Hallucination detection options
+        function toggleHallucinationOptions() {
+            const checkbox = document.getElementById('hallucinationDetection');
+            const options = document.getElementById('hallucinationOptions');
+            if (options) {
+                options.style.display = checkbox?.checked ? 'block' : 'none';
+            }
+        }
+
+        function updateHallucinationSensitivityDisplay() {
+            const slider = document.getElementById('hallucinationSensitivity');
+            const display = document.getElementById('hallucinationSensitivityValue');
+            if (slider && display) {
+                display.textContent = slider.value + '%';
+            }
+        }
+
+        function updateHallucinationSensitivity() {
+            updateHallucinationSensitivityDisplay();
         }
 
         // Toggle worker options based on processing mode
@@ -4247,6 +4295,7 @@
             // VAD and hallucination detection options
             options.vadEnabled = document.getElementById('vadEnabled')?.checked || false;
             options.hallucinationDetection = document.getElementById('hallucinationDetection')?.checked !== false;
+            options.hallucinationSensitivity = parseInt(document.getElementById('hallucinationSensitivity')?.value || '50', 10);
             
             // Silence threshold
             const noSpeechThreshold = document.getElementById('noSpeechThreshold')?.value;
