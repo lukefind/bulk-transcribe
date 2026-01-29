@@ -1224,7 +1224,11 @@ def generate_speaker_markdown(transcript: dict, diarization: list, filename: str
             last['text'] = last['text'] + ' ' + seg['text']
         else:
             merged_segments.append(seg.copy())
-    
+
+    # Sort by start time to ensure chronological order
+    # (Whisper may produce segments out of order when using chunked processing)
+    merged_segments.sort(key=lambda s: (s['start'], s['end']))
+
     # Output merged segments
     for seg in merged_segments:
         ts = format_timestamp(seg['start'])

@@ -583,6 +583,11 @@ class TimelineParser:
                 timeline.chunks_raw = chunks_before
             else:
                 timeline.chunks_raw = [c.to_dict() for c in timeline.chunks]
+
+        # Sort chunks_raw by start time to ensure chronological order
+        # (Whisper may produce segments out of order when using chunked processing)
+        timeline.chunks_raw.sort(key=lambda c: (c.get('start', 0), c.get('end', 0)))
+
         timeline.chunks_merged = [c.to_dict() for c in timeline.chunks]
         
         # Debug log

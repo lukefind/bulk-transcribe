@@ -519,13 +519,17 @@ def merge_transcript_with_speakers(
             last["text"] = last["text"] + " " + seg["text"]
         else:
             merged.append(seg.copy())
-    
-    log_event('info', 'merge_finished', 
+
+    # Sort by start time to ensure chronological order
+    # (Whisper may produce segments out of order when using chunked processing)
+    merged.sort(key=lambda s: (s["start"], s["end"]))
+
+    log_event('info', 'merge_finished',
              numMergedSegments=len(merged),
              numDedupedSegments=len(deduped),
              numOriginalSegments=len(assigned_segments),
              **log_fields)
-    
+
     return merged
 
 
