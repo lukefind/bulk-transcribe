@@ -19,12 +19,8 @@ from typing import List, Dict, Any, Tuple, Optional
 from collections import Counter
 
 
-# Common hallucination phrases (case-insensitive patterns)
-HALLUCINATION_PHRASES = [
-    r'^thank you\.?$',
-    r'^thanks\.?$',
-    r'^bye\.?$',
-    r'^goodbye\.?$',
+# Phrases that are ALWAYS suspicious (rarely real speech in normal recordings)
+ALWAYS_SUSPICIOUS_PHRASES = [
     r'^please subscribe\.?$',
     r'^subscribe\.?$',
     r'^like and subscribe\.?$',
@@ -38,8 +34,20 @@ HALLUCINATION_PHRASES = [
     r'^\s*$',  # Empty/whitespace
 ]
 
+# Phrases that are only suspicious if Whisper metrics are also bad
+# (these are common in real speech, so need corroborating evidence)
+SUSPICIOUS_WITH_BAD_METRICS = [
+    r'^thank you\.?$',
+    r'^thanks\.?$',
+    r'^bye\.?$',
+    r'^goodbye\.?$',
+    r'^okay\.?$',
+    r'^ok\.?$',
+]
+
 # Compile patterns for efficiency
-_HALLUCINATION_PATTERNS = [re.compile(p, re.IGNORECASE) for p in HALLUCINATION_PHRASES]
+_ALWAYS_SUSPICIOUS_PATTERNS = [re.compile(p, re.IGNORECASE) for p in ALWAYS_SUSPICIOUS_PHRASES]
+_SUSPICIOUS_WITH_METRICS_PATTERNS = [re.compile(p, re.IGNORECASE) for p in SUSPICIOUS_WITH_BAD_METRICS]
 
 # Characters that indicate foreign language hallucination in English audio
 FOREIGN_CHARS = set('你好谢谢再见こんにちはありがとうさようなら안녕하세요감사합니다')
@@ -70,37 +78,57 @@ def detect_hallucination_indicators(segment: Dict[str, Any]) -> Dict[str, Any]:
     if len(text) < 2:
         reasons.append('empty_or_very_short')
         confidence = max(confidence, 0.9)
-    
-    # Check for known hallucination phrases
-    for pattern in _HALLUCINATION_PATTERNS:
+
+    # Check Whisper's own confidence metrics first (needed for conditional phrase detection)
+    no_speech_prob = segment.get('no_speech_prob', 0)
+    avg_logprob = segment.get('avg_logprob', 0)
+    compression_ratio = segment.get('compression_ratio', 1.0)
+    duration = segment.get('end', 0) - segment.get('start', 0)
+
+    # Determine if Whisper metrics are suspicious
+    has_bad_metrics = (
+        no_speech_prob > 0.5 or  # Whisper somewhat uncertain if speech
+        avg_logprob < -1.2 or    # Low confidence
+        compression_ratio > 2.0   # Repetitive
+    )
+
+    # Check for always-suspicious phrases (rarely real speech)
+    for pattern in _ALWAYS_SUSPICIOUS_PATTERNS:
         if pattern.match(text):
             reasons.append('known_hallucination_phrase')
-            confidence = max(confidence, 0.8)
+            confidence = max(confidence, 0.85)
             break
-    
+
+    # Check for phrases that need corroborating bad metrics
+    # (common in real speech, only flag if Whisper is uncertain)
+    if has_bad_metrics:
+        for pattern in _SUSPICIOUS_WITH_METRICS_PATTERNS:
+            if pattern.match(text):
+                reasons.append('suspicious_phrase_with_bad_metrics')
+                confidence = max(confidence, 0.7)
+                break
+
     # Check for foreign characters in supposedly English audio
     if any(c in FOREIGN_CHARS for c in text):
         reasons.append('foreign_characters')
         confidence = max(confidence, 0.85)
-    
-    # Check Whisper's own confidence metrics if available
-    no_speech_prob = segment.get('no_speech_prob', 0)
+
+    # Flag high no_speech_prob on its own
     if no_speech_prob > 0.8:
         reasons.append('high_no_speech_prob')
         confidence = max(confidence, 0.7 + (no_speech_prob - 0.8) * 0.5)
-    
-    avg_logprob = segment.get('avg_logprob', 0)
+
+    # Flag very low logprob
     if avg_logprob < -1.5:
         reasons.append('low_avg_logprob')
         confidence = max(confidence, 0.6)
-    
-    compression_ratio = segment.get('compression_ratio', 1.0)
+
+    # Flag high compression ratio
     if compression_ratio > 2.5:
         reasons.append('high_compression_ratio')
         confidence = max(confidence, 0.7)
-    
+
     # Check for very short duration with text
-    duration = segment.get('end', 0) - segment.get('start', 0)
     if duration < 0.3 and len(text) > 10:
         reasons.append('too_much_text_for_duration')
         confidence = max(confidence, 0.6)
