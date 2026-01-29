@@ -856,7 +856,8 @@ def transcribe_file(
     vad_enabled: bool = False,
     hallucination_detection: bool = True,
     hallucination_sensitivity: int = 50,
-    no_speech_threshold: float = 0.6
+    no_speech_threshold: float = 0.6,
+    word_timestamps: bool = True
 ) -> dict:
     """
     Transcribe a single audio file with optional VAD pre-filtering and hallucination detection.
@@ -870,11 +871,13 @@ def transcribe_file(
         hallucination_detection: If True, flag likely hallucinations in output
         hallucination_sensitivity: 0-100, higher = more aggressive filtering
         no_speech_threshold: Whisper's no_speech_threshold parameter
+        word_timestamps: If True, use word-level timestamps for better accuracy (default True)
     """
     import whisper
     
     options = {
-        'no_speech_threshold': no_speech_threshold
+        'no_speech_threshold': no_speech_threshold,
+        'word_timestamps': word_timestamps,  # Enable word-level timestamps for accurate timing
     }
     if language:
         options['language'] = language
