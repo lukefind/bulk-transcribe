@@ -1411,18 +1411,40 @@
                 <p class="text-sm text-gray-400 mb-4">Add a chunk that was missed by transcription (e.g., dismissed hallucination that was real speech).</p>
                 
                 <div class="space-y-4">
-                    <div class="grid grid-cols-2 gap-3">
+                    <div class="grid grid-cols-2 gap-4">
                         <div>
-                            <label class="text-xs text-gray-400 mb-1 block">Start time (seconds)</label>
-                            <input type="number" id="addChunkStart" step="0.1" min="0" 
-                                   class="w-full px-3 py-2 bg-surface-700 border border-gray-600 rounded-lg text-white text-sm"
-                                   placeholder="0.0">
+                            <label class="text-xs text-gray-400 mb-1 block">Start time</label>
+                            <div class="flex items-center gap-1">
+                                <input type="number" id="addChunkStartH" min="0" max="99" 
+                                       class="w-12 px-2 py-2 bg-surface-700 border border-gray-600 rounded-lg text-white text-sm text-center"
+                                       placeholder="0" value="0">
+                                <span class="text-gray-500">:</span>
+                                <input type="number" id="addChunkStartM" min="0" max="59" 
+                                       class="w-12 px-2 py-2 bg-surface-700 border border-gray-600 rounded-lg text-white text-sm text-center"
+                                       placeholder="0" value="0">
+                                <span class="text-gray-500">:</span>
+                                <input type="number" id="addChunkStartS" min="0" max="59" step="0.1"
+                                       class="w-16 px-2 py-2 bg-surface-700 border border-gray-600 rounded-lg text-white text-sm text-center"
+                                       placeholder="0.0" value="0">
+                            </div>
+                            <span class="text-xs text-gray-500">h : m : s</span>
                         </div>
                         <div>
-                            <label class="text-xs text-gray-400 mb-1 block">End time (seconds)</label>
-                            <input type="number" id="addChunkEnd" step="0.1" min="0"
-                                   class="w-full px-3 py-2 bg-surface-700 border border-gray-600 rounded-lg text-white text-sm"
-                                   placeholder="0.0">
+                            <label class="text-xs text-gray-400 mb-1 block">End time</label>
+                            <div class="flex items-center gap-1">
+                                <input type="number" id="addChunkEndH" min="0" max="99" 
+                                       class="w-12 px-2 py-2 bg-surface-700 border border-gray-600 rounded-lg text-white text-sm text-center"
+                                       placeholder="0" value="0">
+                                <span class="text-gray-500">:</span>
+                                <input type="number" id="addChunkEndM" min="0" max="59" 
+                                       class="w-12 px-2 py-2 bg-surface-700 border border-gray-600 rounded-lg text-white text-sm text-center"
+                                       placeholder="0" value="0">
+                                <span class="text-gray-500">:</span>
+                                <input type="number" id="addChunkEndS" min="0" max="59" step="0.1"
+                                       class="w-16 px-2 py-2 bg-surface-700 border border-gray-600 rounded-lg text-white text-sm text-center"
+                                       placeholder="0.0" value="0">
+                            </div>
+                            <span class="text-xs text-gray-500">h : m : s</span>
                         </div>
                     </div>
                     
@@ -7404,50 +7426,68 @@
         function highlightCurrentChunk(currentTime) {
             if (!reviewTimeline?.chunks) return;
 
-            // Find chunk that contains current time
-            // First try to find a chunk where currentTime is within [start, end)
-            let matchIndex = -1;
-            for (let i = 0; i < reviewTimeline.chunks.length; i++) {
-                const chunk = reviewTimeline.chunks[i];
-                if (chunk.start <= currentTime && currentTime < chunk.end) {
-                    matchIndex = i;
+            // Find the matching DOM element by checking data-start attributes
+            // This handles filtered views (hallucinations hidden, search, etc.)
+            const chunkRows = document.querySelectorAll('.chunk-row');
+            if (chunkRows.length === 0) return;
+            
+            let matchEl = null;
+            let matchDomIndex = -1;
+            
+            // Find chunk where currentTime is within [start, end) or the last chunk that started before currentTime
+            for (let i = 0; i < chunkRows.length; i++) {
+                const el = chunkRows[i];
+                const start = parseFloat(el.dataset.start);
+                const chunkIndex = parseInt(el.dataset.chunkIndex);
+                const chunk = reviewTimeline.chunks[chunkIndex];
+                const end = chunk?.end || start + 1;
+                
+                if (start <= currentTime && currentTime < end) {
+                    matchEl = el;
+                    matchDomIndex = i;
                     break;
                 }
             }
-
-            // If no exact match (gaps between chunks), find the last chunk that started
-            if (matchIndex === -1) {
-                for (let i = reviewTimeline.chunks.length - 1; i >= 0; i--) {
-                    if (reviewTimeline.chunks[i].start <= currentTime) {
-                        matchIndex = i;
+            
+            // If no exact match, find the last chunk that started before currentTime
+            if (!matchEl) {
+                for (let i = chunkRows.length - 1; i >= 0; i--) {
+                    const start = parseFloat(chunkRows[i].dataset.start);
+                    if (start <= currentTime) {
+                        matchEl = chunkRows[i];
+                        matchDomIndex = i;
                         break;
                     }
                 }
             }
             
-            if (matchIndex === reviewCurrentChunkIndex) return;
-            reviewCurrentChunkIndex = matchIndex;
+            // Get the data index for state tracking
+            const matchDataIndex = matchEl ? parseInt(matchEl.dataset.chunkIndex) : -1;
+            
+            if (matchDataIndex === reviewCurrentChunkIndex) return;
+            reviewCurrentChunkIndex = matchDataIndex;
             
             // Auto-select the current chunk while playing (if auto-scroll enabled and not editing)
             const autoScrollEnabled = document.getElementById('autoScrollCheckbox')?.checked;
             const isPlaying = reviewAudioElement && !reviewAudioElement.paused;
             const notEditing = reviewEditingChunkIndex === null;
             
-            if (isPlaying && autoScrollEnabled && notEditing && matchIndex >= 0) {
+            if (isPlaying && autoScrollEnabled && notEditing && matchDataIndex >= 0) {
                 // Update selection to follow playback (silent = don't seek, we're already playing)
-                if (reviewSelectedChunkIndex !== matchIndex) {
-                    selectChunk(matchIndex, { silent: true });
+                if (reviewSelectedChunkIndex !== matchDataIndex) {
+                    selectChunk(matchDataIndex, { silent: true });
                 }
             }
             
-            const chunks = document.querySelectorAll('.chunk-row');
-            chunks.forEach((el, idx) => {
-                if (idx === matchIndex) {
+            // Update visual highlighting
+            chunkRows.forEach((el) => {
+                const elDataIndex = parseInt(el.dataset.chunkIndex);
+                if (el === matchEl) {
                     el.classList.add('bg-surface-700/50');
                     if (autoScrollEnabled) {
                         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     }
-                } else if (idx !== reviewSelectedChunkIndex) {
+                } else if (elDataIndex !== reviewSelectedChunkIndex) {
                     el.classList.remove('bg-surface-700/50');
                 }
             });
@@ -8060,15 +8100,12 @@
             }
             
             // Pre-fill with current audio time if available
-            const startInput = document.getElementById('addChunkStart');
-            const endInput = document.getElementById('addChunkEnd');
-            
             if (reviewAudioElement && !isNaN(reviewAudioElement.currentTime)) {
-                startInput.value = reviewAudioElement.currentTime.toFixed(1);
-                endInput.value = (reviewAudioElement.currentTime + 5).toFixed(1); // Default 5 second chunk
+                setAddChunkTime('Start', reviewAudioElement.currentTime);
+                setAddChunkTime('End', reviewAudioElement.currentTime + 5); // Default 5 second chunk
             } else {
-                startInput.value = '';
-                endInput.value = '';
+                setAddChunkTime('Start', 0);
+                setAddChunkTime('End', 0);
             }
             
             document.getElementById('addChunkText').value = '';
@@ -8080,23 +8117,39 @@
             document.getElementById('addChunkModal').classList.add('hidden');
         }
         
+        function setAddChunkTime(prefix, totalSeconds) {
+            const h = Math.floor(totalSeconds / 3600);
+            const m = Math.floor((totalSeconds % 3600) / 60);
+            const s = totalSeconds % 60;
+            document.getElementById(`addChunk${prefix}H`).value = h;
+            document.getElementById(`addChunk${prefix}M`).value = m;
+            document.getElementById(`addChunk${prefix}S`).value = s.toFixed(1);
+        }
+        
+        function getAddChunkTime(prefix) {
+            const h = parseInt(document.getElementById(`addChunk${prefix}H`).value) || 0;
+            const m = parseInt(document.getElementById(`addChunk${prefix}M`).value) || 0;
+            const s = parseFloat(document.getElementById(`addChunk${prefix}S`).value) || 0;
+            return h * 3600 + m * 60 + s;
+        }
+        
         function useCurrentTimeForAddChunk() {
             if (!reviewAudioElement || isNaN(reviewAudioElement.currentTime)) {
                 showReviewToast('No audio loaded', 'error');
                 return;
             }
             
-            document.getElementById('addChunkStart').value = reviewAudioElement.currentTime.toFixed(1);
+            setAddChunkTime('Start', reviewAudioElement.currentTime);
             // Set end time to 5 seconds after start by default
-            document.getElementById('addChunkEnd').value = (reviewAudioElement.currentTime + 5).toFixed(1);
+            setAddChunkTime('End', reviewAudioElement.currentTime + 5);
         }
         
         function insertNewChunk() {
             const errorEl = document.getElementById('addChunkError');
             errorEl.classList.add('hidden');
             
-            const startTime = parseFloat(document.getElementById('addChunkStart').value);
-            const endTime = parseFloat(document.getElementById('addChunkEnd').value);
+            const startTime = getAddChunkTime('Start');
+            const endTime = getAddChunkTime('End');
             const speakerId = document.getElementById('addChunkSpeaker').value;
             const text = document.getElementById('addChunkText').value.trim();
             
