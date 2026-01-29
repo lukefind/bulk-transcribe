@@ -7434,30 +7434,19 @@
             let matchEl = null;
             let matchDomIndex = -1;
             
-            // Find chunk where currentTime is within [start, end) or the last chunk that started before currentTime
+            // Find the chunk with the highest start time that is <= currentTime
+            // This ensures we always highlight the most recent chunk that has started
+            // (handles overlapping chunks, same timestamps, and gaps correctly)
+            // Use >= to prefer later chunks when start times are equal
+            let bestStart = -Infinity;
             for (let i = 0; i < chunkRows.length; i++) {
                 const el = chunkRows[i];
                 const start = parseFloat(el.dataset.start);
-                const chunkIndex = parseInt(el.dataset.chunkIndex);
-                const chunk = reviewTimeline.chunks[chunkIndex];
-                const end = chunk?.end || start + 1;
                 
-                if (start <= currentTime && currentTime < end) {
+                if (start <= currentTime && start >= bestStart) {
+                    bestStart = start;
                     matchEl = el;
                     matchDomIndex = i;
-                    break;
-                }
-            }
-            
-            // If no exact match, find the last chunk that started before currentTime
-            if (!matchEl) {
-                for (let i = chunkRows.length - 1; i >= 0; i--) {
-                    const start = parseFloat(chunkRows[i].dataset.start);
-                    if (start <= currentTime) {
-                        matchEl = chunkRows[i];
-                        matchDomIndex = i;
-                        break;
-                    }
                 }
             }
             
