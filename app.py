@@ -2821,7 +2821,11 @@ def api_bulk_delete_jobs():
         # Delete job directory
         try:
             shutil.rmtree(job_dir)
-            deleted.append(job_id)
+            # Verify deletion actually happened
+            if os.path.exists(job_dir):
+                errors.append({'jobId': job_id, 'error': f'Directory still exists after rmtree: {job_dir}'})
+            else:
+                deleted.append(job_id)
         except Exception as e:
             errors.append({'jobId': job_id, 'error': str(e)[:200]})
     
