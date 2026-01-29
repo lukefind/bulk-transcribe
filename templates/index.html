@@ -1278,6 +1278,10 @@
                         <input type="checkbox" id="autoScrollCheckbox" checked class="rounded bg-surface-700 border-gray-600 text-primary-500">
                         Auto-scroll
                     </label>
+                    <label id="showHallucinationsLabel" class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer whitespace-nowrap hidden" title="Show segments flagged as possible hallucinations">
+                        <input type="checkbox" id="showHallucinationsCheckbox" checked class="rounded bg-surface-700 border-gray-600 text-amber-500" onchange="toggleHallucinationsView()">
+                        <span id="showHallucinationsText">⚠️ Show flagged</span>
+                    </label>
                     <button onclick="showReviewInfoModal()" class="text-gray-400 hover:text-white transition-colors" title="Help">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
@@ -6356,11 +6360,14 @@
                 
                 // Apply view mode to chunks
                 applyChunkViewMode();
-                
+
                 // Update toggle checkbox to match restored state
                 const mergedCheckbox = document.getElementById('mergedViewCheckbox');
                 if (mergedCheckbox) mergedCheckbox.checked = (reviewChunkViewMode === 'merged');
-                
+
+                // Update hallucinations toggle visibility
+                updateHallucinationsToggleState();
+
                 renderTimeline();
                 renderSpeakerLegend();
                 
@@ -6419,20 +6426,55 @@
         function toggleChunkViewMode() {
             const checkbox = document.getElementById('mergedViewCheckbox');
             reviewChunkViewMode = checkbox?.checked ? 'merged' : 'raw';
-            
+
             // Apply the view mode
             applyChunkViewMode();
-            
+
             // Save preference
             if (!reviewState.uiPrefs) reviewState.uiPrefs = {};
             reviewState.uiPrefs.chunkView = reviewChunkViewMode;
             markUnsaved();
             debounceSave();
-            
+
             // Re-render
             renderTimeline();
         }
-        
+
+        // Track whether to show hallucinated chunks
+        let reviewShowHallucinations = true;
+
+        function toggleHallucinationsView() {
+            const checkbox = document.getElementById('showHallucinationsCheckbox');
+            reviewShowHallucinations = checkbox?.checked !== false;
+            updateHallucinationsToggleText();
+            renderTimeline();
+        }
+
+        function updateHallucinationsToggleState() {
+            // Count hallucinated chunks
+            const hallucinationCount = (reviewTimeline?.chunks || []).filter(c => c.hallucination_warning).length;
+            const label = document.getElementById('showHallucinationsLabel');
+
+            if (hallucinationCount > 0) {
+                label?.classList.remove('hidden');
+                updateHallucinationsToggleText();
+            } else {
+                label?.classList.add('hidden');
+            }
+        }
+
+        function updateHallucinationsToggleText() {
+            const textSpan = document.getElementById('showHallucinationsText');
+            const hallucinationCount = (reviewTimeline?.chunks || []).filter(c => c.hallucination_warning).length;
+            if (textSpan) {
+                if (reviewShowHallucinations) {
+                    textSpan.textContent = `⚠️ Flagged (${hallucinationCount})`;
+                } else {
+                    textSpan.textContent = `⚠️ Hidden (${hallucinationCount})`;
+                }
+            }
+        }
+
         async function regenerateTimeline() {
             if (!reviewJobData) return;
             
@@ -6522,9 +6564,14 @@
             
             const searchTerm = document.getElementById('reviewSearchInput').value.toLowerCase();
             const chunks = reviewTimeline.chunks || [];
-            
+
+            // Count visible chunks (excluding hidden hallucinations)
+            const hallucinationCount = chunks.filter(c => c.hallucination_warning).length;
+            const visibleCount = reviewShowHallucinations ? chunks.length : (chunks.length - hallucinationCount);
+
             const viewLabel = reviewChunkViewMode === 'raw' ? 'raw' : 'merged';
-            document.getElementById('reviewChunkCount').textContent = `${chunks.length} chunks (${viewLabel})`;
+            const hiddenNote = (!reviewShowHallucinations && hallucinationCount > 0) ? `, ${hallucinationCount} hidden` : '';
+            document.getElementById('reviewChunkCount').textContent = `${visibleCount} chunks (${viewLabel}${hiddenNote})`;
             
             if (chunks.length === 0) {
                 const source = reviewTimeline.source || {};
@@ -6548,14 +6595,19 @@
             }
             
             chunks.forEach((chunk, idx) => {
+                // Filter by hallucination toggle
+                if (!reviewShowHallucinations && chunk.hallucination_warning) {
+                    return;
+                }
+
                 // Filter by search
                 const speaker = getSpeakerForChunk(chunk);
-                if (searchTerm && 
-                    !chunk.text.toLowerCase().includes(searchTerm) && 
+                if (searchTerm &&
+                    !chunk.text.toLowerCase().includes(searchTerm) &&
                     !(speaker?.label?.toLowerCase().includes(searchTerm))) {
                     return;
                 }
-                
+
                 const div = document.createElement('div');
                 div.className = 'chunk-row flex items-start gap-3 p-3 hover:bg-surface-700/30 cursor-pointer transition-colors';
                 div.dataset.chunkIndex = idx;
