@@ -238,26 +238,8 @@ def remap_timestamps(
         seg_start = seg.get('start', 0)
         seg_end = seg.get('end', 0)
         
-        # Find which mapping entry this segment falls into
-        new_start = None
-        new_end = None
-        
-        for m in timestamp_mapping:
-            # Check if segment start falls in this mapping
-            if m['filtered_start'] <= seg_start <= m['filtered_end']:
-                offset = seg_start - m['filtered_start']
-                new_start = m['original_start'] + offset
-            
-            # Check if segment end falls in this mapping
-            if m['filtered_start'] <= seg_end <= m['filtered_end']:
-                offset = seg_end - m['filtered_start']
-                new_end = m['original_start'] + offset
-        
-        # If we couldn't map, use original (shouldn't happen normally)
-        if new_start is None:
-            new_start = seg_start
-        if new_end is None:
-            new_end = seg_end
+        new_start = _remap_single_timestamp(seg_start, timestamp_mapping)
+        new_end = _remap_single_timestamp(seg_end, timestamp_mapping)
         
         remapped_seg = seg.copy()
         remapped_seg['start'] = new_start
@@ -270,3 +252,60 @@ def remap_timestamps(
         remapped.append(remapped_seg)
     
     return remapped
+
+
+def _remap_single_timestamp(
+    filtered_time: float,
+    timestamp_mapping: List[Dict[str, Any]]
+) -> float:
+    """
+    Remap a single timestamp from filtered audio time to original audio time.
+    
+    Handles edge cases:
+    - Timestamp falls exactly within a mapped segment
+    - Timestamp falls in a gap between segments (maps to nearest boundary)
+    - Timestamp is before first segment or after last segment
+    """
+    if not timestamp_mapping:
+        return filtered_time
+    
+    # Check if timestamp falls within any mapped segment
+    for m in timestamp_mapping:
+        if m['filtered_start'] <= filtered_time <= m['filtered_end']:
+            offset = filtered_time - m['filtered_start']
+            return m['original_start'] + offset
+    
+    # Timestamp is in a gap or outside all segments
+    # Find the closest segment boundary and map to it
+    
+    # Before first segment
+    if filtered_time < timestamp_mapping[0]['filtered_start']:
+        # Map proportionally from start
+        return timestamp_mapping[0]['original_start']
+    
+    # After last segment
+    if filtered_time > timestamp_mapping[-1]['filtered_end']:
+        # Map to end of last segment
+        return timestamp_mapping[-1]['original_end']
+    
+    # In a gap between segments - find which gap and interpolate
+    for i in range(len(timestamp_mapping) - 1):
+        curr_end = timestamp_mapping[i]['filtered_end']
+        next_start = timestamp_mapping[i + 1]['filtered_start']
+        
+        if curr_end < filtered_time < next_start:
+            # Timestamp is in the gap between segment i and i+1
+            # Map to the original time at the boundary
+            # Use the end of the current original segment as the reference
+            gap_duration = next_start - curr_end
+            gap_offset = filtered_time - curr_end
+            gap_ratio = gap_offset / gap_duration if gap_duration > 0 else 0
+            
+            # Interpolate between end of current original segment and start of next
+            orig_curr_end = timestamp_mapping[i]['original_end']
+            orig_next_start = timestamp_mapping[i + 1]['original_start']
+            
+            return orig_curr_end + gap_ratio * (orig_next_start - orig_curr_end)
+    
+    # Fallback (shouldn't reach here)
+    return filtered_time
