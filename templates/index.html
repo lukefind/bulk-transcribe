@@ -7066,10 +7066,11 @@
             if (reviewTimeline && snapshot.chunks) {
                 reviewTimeline.chunks = snapshot.chunks;
             }
-            
+
             // Re-render
             renderTimeline();
             renderSpeakerLegend();
+            updateHallucinationsToggleState();
             
             // Restore selection if valid
             if (snapshot.selectedChunkIndex >= 0 && snapshot.selectedChunkIndex < (reviewTimeline?.chunks?.length || 0)) {
@@ -7318,6 +7319,15 @@
         }
 
         function toggleHallucinationDismiss(chunkId, dismiss) {
+            // Find the chunk for better undo description
+            const chunk = reviewTimeline?.chunks?.find(c => c.chunk_id === chunkId);
+            const timeStr = chunk ? formatTime(chunk.start) : chunkId;
+
+            // Save undo snapshot before making changes
+            pushUndoSnapshot('hallucination_dismiss', dismiss
+                ? `Mark valid at ${timeStr}`
+                : `Restore warning at ${timeStr}`);
+
             if (!reviewState.chunkEdits) {
                 reviewState.chunkEdits = {};
             }
@@ -7327,14 +7337,14 @@
 
             if (dismiss) {
                 reviewState.chunkEdits[chunkId].hallucinationDismissed = true;
-                showReviewToast('Marked as valid (not a hallucination)', 'success');
+                showReviewToast('Marked as valid (not a hallucination). Ctrl+Z to undo.', 'success');
             } else {
                 delete reviewState.chunkEdits[chunkId].hallucinationDismissed;
                 // Clean up empty edit objects
                 if (Object.keys(reviewState.chunkEdits[chunkId]).length === 0) {
                     delete reviewState.chunkEdits[chunkId];
                 }
-                showReviewToast('Restored hallucination warning', 'info');
+                showReviewToast('Restored hallucination warning. Ctrl+Z to undo.', 'info');
             }
 
             // Update counts and re-render
