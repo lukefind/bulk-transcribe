@@ -4686,8 +4686,13 @@ def api_export_review_docx(job_id):
         include_highlights = request.args.get('includeHighlights', 'true').lower() == 'true'
         timeline, review_state = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
         
-        # Get chunk edits for highlight info
-        chunk_edits = review_state.get('chunkEdits', {}) if review_state else {}
+        # Get chunk edits for highlight info (handle perInput format)
+        chunk_edits = {}
+        if review_state:
+            if 'perInput' in review_state and input_id:
+                chunk_edits = review_state.get('perInput', {}).get(input_id, {}).get('chunkEdits', {})
+            else:
+                chunk_edits = review_state.get('chunkEdits', {})
         
         # Format time helper
         def fmt_time(seconds):
@@ -4952,8 +4957,13 @@ def api_export_review_pdf(job_id):
         include_highlights = request.args.get('includeHighlights', 'true').lower() == 'true'
         timeline, review_state = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
         
-        # Get chunk edits for highlight info
-        chunk_edits = review_state.get('chunkEdits', {}) if review_state else {}
+        # Get chunk edits for highlight info (handle perInput format)
+        chunk_edits = {}
+        if review_state:
+            if 'perInput' in review_state and input_id:
+                chunk_edits = review_state.get('perInput', {}).get(input_id, {}).get('chunkEdits', {})
+            else:
+                chunk_edits = review_state.get('chunkEdits', {})
         
         # Format time helper
         def fmt_time(seconds):
