@@ -1212,6 +1212,8 @@
                 <span id="summaryDiarization" class="hidden"><span class="text-gray-500">Diarization:</span> <span class="text-gray-300"></span></span>
                 <span id="summaryAutoSplit" class="hidden"><span class="text-gray-500">Auto-split:</span> <span class="text-gray-300"></span></span>
                 <span id="summaryFastSwitching" class="hidden"><span class="text-gray-500">Fast-switch:</span> <span class="text-gray-300"></span></span>
+                <span id="summaryVAD" class="hidden"><span class="text-gray-500">VAD:</span> <span class="text-gray-300"></span></span>
+                <span id="summaryHallucination" class="hidden"><span class="text-gray-500">Halluc-detect:</span> <span class="text-gray-300"></span></span>
                 <span id="summaryChunking" class="hidden"><span class="text-gray-500">Chunking:</span> <span class="text-gray-300"></span></span>
                 <span id="summaryCreated" class="hidden"><span class="text-gray-500">Created:</span> <span class="text-gray-300"></span></span>
             </div>
@@ -6441,7 +6443,15 @@
                 setField('summaryAutoSplit', null);
                 setField('summaryFastSwitching', null);
             }
-            
+
+            // VAD pre-filtering
+            const vadEnabled = job.vadEnabled || job.options?.vadEnabled;
+            setField('summaryVAD', vadEnabled ? 'Yes' : 'No');
+
+            // Hallucination detection
+            const hallucinationDetection = job.hallucinationDetection ?? job.options?.hallucinationDetection ?? true;
+            setField('summaryHallucination', hallucinationDetection ? 'Yes' : 'No');
+
             // Chunking
             if (job.chunkSeconds || job.overlapSeconds) {
                 const chunkInfo = `${job.chunkSeconds || '—'}s / ${job.overlapSeconds || '0'}s overlap`;
