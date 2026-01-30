@@ -35,9 +35,17 @@ class Speaker:
     id: str
     label: str
     color: str
-    
+
     def to_dict(self) -> dict:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Speaker':
+        return cls(
+            id=data.get('id', ''),
+            label=data.get('label', ''),
+            color=data.get('color', '#888888'),
+        )
 
 
 @dataclass
@@ -51,9 +59,22 @@ class Chunk:
     confidence: Optional[float] = None
     origin: Optional[Dict[str, Any]] = None
     hallucination_warning: Optional[Dict[str, Any]] = None  # From Whisper segment if flagged
-    
+
     def to_dict(self) -> dict:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Chunk':
+        return cls(
+            chunk_id=data.get('chunk_id', ''),
+            start=float(data.get('start', 0)),
+            end=float(data.get('end', 0)),
+            speaker_id=data.get('speaker_id'),
+            text=data.get('text', ''),
+            confidence=data.get('confidence'),
+            origin=data.get('origin'),
+            hallucination_warning=data.get('hallucination_warning'),
+        )
 
 
 @dataclass
@@ -82,7 +103,31 @@ class ReviewTimeline:
     
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2)
-    
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'ReviewTimeline':
+        """Reconstruct a ReviewTimeline from a dictionary (e.g., loaded from JSON)."""
+        speakers = [Speaker.from_dict(s) for s in data.get('speakers', [])]
+        chunks = [Chunk.from_dict(c) for c in data.get('chunks', [])]
+        timeline = cls(
+            version=data.get('version', 1),
+            source=data.get('source', {}),
+            speakers=speakers,
+            chunks=chunks,
+        )
+        # Restore raw/merged chunk lists if present
+        if 'chunks_raw' in data:
+            timeline.chunks_raw = data['chunks_raw']
+        if 'chunks_merged' in data:
+            timeline.chunks_merged = data['chunks_merged']
+        return timeline
+
+    @classmethod
+    def from_json(cls, json_str: str) -> 'ReviewTimeline':
+        """Load a ReviewTimeline from a JSON string."""
+        data = json.loads(json_str)
+        return cls.from_dict(data)
+
     def get_speaker(self, speaker_id: str) -> Optional[Speaker]:
         for s in self.speakers:
             if s.id == speaker_id:

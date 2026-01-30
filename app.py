@@ -4228,7 +4228,19 @@ def api_regenerate_review_timeline(job_id):
               matchedFiles=matched_files,
               numChunks=len(timeline.chunks),
               numSpeakers=len(timeline.speakers))
-    
+
+    # Clear any cached timeline files so future loads use fresh data
+    if input_id:
+        cached_dir = os.path.join(job_dir, 'review', input_id)
+        if os.path.isdir(cached_dir):
+            for cached_file in ['timeline_merged.json', 'timeline_raw.json']:
+                cached_path = os.path.join(cached_dir, cached_file)
+                try:
+                    if os.path.exists(cached_path):
+                        os.remove(cached_path)
+                except Exception:
+                    pass
+
     # Apply saved review state if exists
     state_path = os.path.join(job_dir, 'review', 'review_state.json')
     review_state = session_store.read_json(state_path)
@@ -4497,34 +4509,59 @@ def api_export_review_timeline_json(job_id):
     )
 
 
-def _build_review_timeline(session_id: str, job_id: str, input_id: str, filename: str, manifest: dict, view_mode: str = 'merged'):
+def _build_review_timeline(session_id: str, job_id: str, input_id: str, filename: str, manifest: dict, view_mode: str = 'merged', force_rebuild: bool = False):
     """Build timeline with review state applied. Returns (timeline, review_state).
-    
+
     Args:
         view_mode: 'merged' (default) or 'raw' - controls which chunk view to use for export
+        force_rebuild: If True, skip cached timeline and rebuild from outputs
     """
-    from review_timeline import TimelineParser, apply_review_state
-    
+    from review_timeline import TimelineParser, ReviewTimeline, Chunk, apply_review_state
+
+    job_dir = session_store.job_dir(session_id, job_id)
+    state_path = os.path.join(job_dir, 'review', 'review_state.json')
+    review_state = session_store.read_json(state_path) or {}
+
+    # Check for cached timeline file (from session import or previous export)
+    if not force_rebuild and input_id:
+        timeline_filename = 'timeline_merged.json' if view_mode == 'merged' else 'timeline_raw.json'
+        cached_path = os.path.join(job_dir, 'review', input_id, timeline_filename)
+        if os.path.exists(cached_path):
+            try:
+                with open(cached_path, 'r', encoding='utf-8') as f:
+                    cached_json = f.read()
+                timeline = ReviewTimeline.from_json(cached_json)
+                # Apply view mode from cached data
+                if view_mode == 'raw' and timeline.chunks_raw:
+                    timeline.chunks = [Chunk.from_dict(c) if isinstance(c, dict) else c for c in timeline.chunks_raw]
+                elif timeline.chunks_merged:
+                    timeline.chunks = [Chunk.from_dict(c) if isinstance(c, dict) else c for c in timeline.chunks_merged]
+                return timeline, review_state
+            except Exception:
+                # Fall through to rebuild if cache is invalid
+                pass
+
+    # Build from output files
     outputs = manifest.get('outputs', [])
     transcript_json = None
     diarization_json = None
     speaker_md = None
     transcript_md = None
-    
+
     for output in outputs:
         if output.get('forUploadId') != input_id and output.get('forUploadId'):
             continue
-        
+
         output_type = output.get('type', '')
         output_path = output.get('path')
-        
+
         if not output_path or not os.path.exists(output_path):
             continue
-        
+
         try:
             with open(output_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            
+
             if output_type == 'json':
                 transcript_json = content
             elif output_type == 'diarization-json':
@@ -4535,7 +4572,7 @@ def _build_review_timeline(session_id: str, job_id: str, input_id: str, filename
                 transcript_md = content
         except Exception:
             continue
-    
+
     parser = TimelineParser(job_id, input_id, filename)
     timeline = parser.parse(
         transcript_json=transcript_json,
@@ -4543,20 +4580,16 @@ def _build_review_timeline(session_id: str, job_id: str, input_id: str, filename
         speaker_md=speaker_md,
         transcript_md=transcript_md
     )
-    
-    job_dir = session_store.job_dir(session_id, job_id)
-    state_path = os.path.join(job_dir, 'review', 'review_state.json')
-    review_state = session_store.read_json(state_path) or {}
-    
+
     if review_state:
         timeline = apply_review_state(timeline, review_state)
-    
+
     # Apply view mode: use raw or merged chunks
     if view_mode == 'raw' and hasattr(timeline, 'chunks_raw') and timeline.chunks_raw:
         timeline.chunks = timeline.chunks_raw
     elif hasattr(timeline, 'chunks_merged') and timeline.chunks_merged:
         timeline.chunks = timeline.chunks_merged
-    
+
     return timeline, review_state
 
 
@@ -5165,6 +5198,49 @@ def _run_session_export(export_id: str, session_id: str):
                                 except Exception:
                                     pass
 
+                    # Generate and export timelines for each input file
+                    # Each input gets its own subdirectory under review/
+                    if manifest:
+                        inputs = manifest.get('inputs', [])
+                        for input_info in inputs:
+                            input_id = input_info.get('uploadId', '')
+                            if not input_id:
+                                continue
+                            input_filename = input_info.get('originalFilename', input_info.get('filename', 'unknown'))
+
+                            try:
+                                # Build and export merged timeline
+                                timeline_merged, review_state_for_input = _build_review_timeline(
+                                    session_id, job_id, input_id, input_filename, manifest, 'merged'
+                                )
+                                if timeline_merged:
+                                    timeline_path = f'{job_folder}/review/{input_id}/timeline_merged.json'
+                                    zf.writestr(timeline_path, timeline_merged.to_json().encode('utf-8'))
+                                    files_total += 1
+
+                                # Build and export raw timeline
+                                timeline_raw, _ = _build_review_timeline(
+                                    session_id, job_id, input_id, input_filename, manifest, 'raw'
+                                )
+                                if timeline_raw:
+                                    timeline_path = f'{job_folder}/review/{input_id}/timeline_raw.json'
+                                    zf.writestr(timeline_path, timeline_raw.to_json().encode('utf-8'))
+                                    files_total += 1
+
+                                # Export input metadata for easier identification
+                                input_meta = {
+                                    'inputId': input_id,
+                                    'filename': input_filename,
+                                    'exportedAt': datetime.now(timezone.utc).isoformat(),
+                                }
+                                zf.writestr(f'{job_folder}/review/{input_id}/input.json',
+                                           json.dumps(input_meta, indent=2).encode('utf-8'))
+                                files_total += 1
+
+                            except Exception as timeline_err:
+                                # Log but don't fail the whole job export
+                                pass
+
                     # Export all files from outputs directory (scan directly, not just manifest)
                     outputs_dir = os.path.join(job_dir, 'outputs')
                     if os.path.isdir(outputs_dir):
@@ -5426,15 +5502,20 @@ def api_import_session():
                         with open(timeline_dest, 'w', encoding='utf-8') as f:
                             f.write(timeline_content)
 
-                    # Restore any other review files from review/ subdirectory
+                    # Restore any other review files from review/ subdirectory (including nested dirs)
+                    review_prefix = f'{job_prefix}review/'
                     for name in namelist:
-                        if name.startswith(f'{job_prefix}review/') and not name.endswith('/'):
-                            filename = name.split('/')[-1]
-                            # Skip files we already handled explicitly
-                            if filename in ('review_state.json', 'timeline.json'):
+                        if name.startswith(review_prefix) and not name.endswith('/'):
+                            # Get relative path within review/
+                            rel_path = name[len(review_prefix):]
+                            filename = rel_path.split('/')[-1]
+                            # Skip files we already handled explicitly at root level
+                            if rel_path in ('review_state.json', 'timeline.json'):
                                 continue
                             if filename:
-                                review_dest = os.path.join(job_dir, 'review', filename)
+                                review_dest = os.path.join(job_dir, 'review', rel_path)
+                                # Create subdirectories if needed (e.g., review/{input_id}/)
+                                os.makedirs(os.path.dirname(review_dest), exist_ok=True)
                                 with open(review_dest, 'wb') as f:
                                     f.write(zf.read(name))
 
