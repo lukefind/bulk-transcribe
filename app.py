@@ -4573,11 +4573,11 @@ def api_export_review_docx(job_id):
         
         # Build timeline with review state (respect view mode)
         view_mode = request.args.get('viewMode', 'merged')
-        timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
+        include_highlights = request.args.get('includeHighlights', 'true').lower() == 'true'
+        timeline, review_state = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
         
-        # Create DOCX document
-        doc = Document()
-        doc.add_heading(filename, 0)
+        # Get chunk edits for highlight info
+        chunk_edits = review_state.get('chunkEdits', {}) if review_state else {}
         
         # Format time helper
         def fmt_time(seconds):
@@ -4586,6 +4586,48 @@ def api_export_review_docx(job_id):
             if h > 0:
                 return f"{h}:{m:02d}:{s:02d}"
             return f"{m}:{s:02d}"
+        
+        # Build highlight sections (group consecutive highlighted chunks)
+        def get_highlight_sections():
+            highlighted = []
+            for chunk in (timeline.chunks or []):
+                cid = val(chunk, 'chunk_id', '')
+                if chunk_edits.get(cid, {}).get('highlighted', False):
+                    highlighted.append(chunk)
+            if not highlighted:
+                return []
+            
+            # Sort by start time
+            sorted_chunks = sorted(highlighted, key=lambda c: val(c, 'start', 0))
+            sections = []
+            current = {'start': val(sorted_chunks[0], 'start', 0), 'end': val(sorted_chunks[0], 'end', 0), 'count': 1}
+            
+            for i in range(1, len(sorted_chunks)):
+                chunk = sorted_chunks[i]
+                prev = sorted_chunks[i - 1]
+                # Consecutive if within 1 second
+                if val(chunk, 'start', 0) - val(prev, 'end', 0) < 1.0:
+                    current['end'] = val(chunk, 'end', 0)
+                    current['count'] += 1
+                else:
+                    sections.append(current)
+                    current = {'start': val(chunk, 'start', 0), 'end': val(chunk, 'end', 0), 'count': 1}
+            sections.append(current)
+            return sections
+        
+        highlight_sections = get_highlight_sections() if include_highlights else []
+        
+        # Create DOCX document
+        doc = Document()
+        doc.add_heading(filename, 0)
+        
+        # Add highlight summary if there are highlights
+        if highlight_sections:
+            summary_para = doc.add_paragraph()
+            summary_para.add_run(f"🔆 {len(highlight_sections)} Highlighted Section(s): ").bold = True
+            times = [f"[{fmt_time(s['start'])}]" for s in highlight_sections]
+            summary_para.add_run(", ".join(times))
+            doc.add_paragraph()  # Spacer
         
         # Build speaker lookup (handles both dict and object)
         speakers = {}
@@ -4596,6 +4638,7 @@ def api_export_review_docx(job_id):
         
         # Timestamped mode: [mm:ss] Speaker: text for each chunk
         for chunk in (timeline.chunks or []):
+            chunk_id = val(chunk, 'chunk_id', '')
             sid = val(chunk, 'speaker_id')
             speaker = speakers.get(sid)
             label = val(speaker, 'label', sid or 'Unknown') or sid or 'Unknown'
@@ -4604,12 +4647,23 @@ def api_export_review_docx(job_id):
             text = val(chunk, 'text', '') or ''
             timestamp = fmt_time(start)
             
+            # Check if chunk is highlighted
+            is_highlighted = chunk_edits.get(chunk_id, {}).get('highlighted', False) if include_highlights else False
+            
             para = doc.add_paragraph()
             run = para.add_run(f"[{timestamp}] {label}: ")
             run.bold = True
             red, green, blue = hex_to_rgb(color)
             run.font.color.rgb = RGBColor(red, green, blue)
-            para.add_run(text)
+            
+            # Add text with highlight if applicable
+            text_run = para.add_run(text)
+            if is_highlighted:
+                from docx.shared import RGBColor as DocxRGBColor
+                from docx.oxml.ns import nsdecls
+                from docx.oxml import parse_xml
+                # Apply yellow highlight
+                text_run.font.highlight_color = 7  # WD_COLOR_INDEX.YELLOW = 7
         
         # Write to buffer
         buffer = io.BytesIO()
@@ -4780,7 +4834,11 @@ def api_export_review_pdf(job_id):
         
         # Build timeline with review state (respect view mode)
         view_mode = request.args.get('viewMode', 'merged')
-        timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
+        include_highlights = request.args.get('includeHighlights', 'true').lower() == 'true'
+        timeline, review_state = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
+        
+        # Get chunk edits for highlight info
+        chunk_edits = review_state.get('chunkEdits', {}) if review_state else {}
         
         # Format time helper
         def fmt_time(seconds):
@@ -4789,6 +4847,34 @@ def api_export_review_pdf(job_id):
             if h > 0:
                 return f"{h}:{m:02d}:{s:02d}"
             return f"{m}:{s:02d}"
+        
+        # Build highlight sections (group consecutive highlighted chunks)
+        def get_highlight_sections():
+            highlighted = []
+            for chunk in (timeline.chunks or []):
+                cid = val(chunk, 'chunk_id', '')
+                if chunk_edits.get(cid, {}).get('highlighted', False):
+                    highlighted.append(chunk)
+            if not highlighted:
+                return []
+            
+            sorted_chunks = sorted(highlighted, key=lambda c: val(c, 'start', 0))
+            sections = []
+            current = {'start': val(sorted_chunks[0], 'start', 0), 'end': val(sorted_chunks[0], 'end', 0), 'count': 1}
+            
+            for i in range(1, len(sorted_chunks)):
+                chunk = sorted_chunks[i]
+                prev = sorted_chunks[i - 1]
+                if val(chunk, 'start', 0) - val(prev, 'end', 0) < 1.0:
+                    current['end'] = val(chunk, 'end', 0)
+                    current['count'] += 1
+                else:
+                    sections.append(current)
+                    current = {'start': val(chunk, 'start', 0), 'end': val(chunk, 'end', 0), 'count': 1}
+            sections.append(current)
+            return sections
+        
+        highlight_sections = get_highlight_sections() if include_highlights else []
         
         # Build speaker lookup (handles both dict and object)
         speakers = {}
@@ -4804,9 +4890,18 @@ def api_export_review_pdf(job_id):
         styles = getSampleStyleSheet()
         title_style = styles['Heading1']
         body_style = ParagraphStyle('Body', parent=styles['Normal'], fontSize=10, leading=14, spaceAfter=8)
+        highlight_style = ParagraphStyle('Highlight', parent=styles['Normal'], fontSize=10, leading=14, spaceAfter=8, backColor='#FFFF99')
+        summary_style = ParagraphStyle('Summary', parent=styles['Normal'], fontSize=10, leading=14, spaceAfter=12, textColor='#B8860B')
         
         story = []
         story.append(Paragraph(filename, title_style))
+        
+        # Add highlight summary if there are highlights
+        if highlight_sections:
+            times = [f"[{fmt_time(s['start'])}]" for s in highlight_sections]
+            summary_text = f"<b>🔆 {len(highlight_sections)} Highlighted Section(s):</b> {', '.join(times)}"
+            story.append(Paragraph(summary_text, summary_style))
+        
         story.append(Spacer(1, 0.25 * inch))
         
         def escape_xml(text):
@@ -4814,6 +4909,7 @@ def api_export_review_pdf(job_id):
         
         # Timestamped mode: [mm:ss] Speaker: text for each chunk
         for chunk in (timeline.chunks or []):
+            chunk_id = val(chunk, 'chunk_id', '')
             sid = val(chunk, 'speaker_id')
             speaker = speakers.get(sid)
             label = val(speaker, 'label', sid or 'Unknown') or sid or 'Unknown'
@@ -4822,8 +4918,12 @@ def api_export_review_pdf(job_id):
             text = escape_xml(val(chunk, 'text', '') or '')
             timestamp = fmt_time(start)
             
+            # Check if chunk is highlighted
+            is_highlighted = chunk_edits.get(chunk_id, {}).get('highlighted', False) if include_highlights else False
+            
             line = f'<font color="{color}"><b>[{timestamp}] {escape_xml(label)}:</b></font> {text}'
-            story.append(Paragraph(line, body_style))
+            style = highlight_style if is_highlighted else body_style
+            story.append(Paragraph(line, style))
         
         doc.build(story)
         buffer.seek(0)

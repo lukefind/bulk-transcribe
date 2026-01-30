@@ -1133,6 +1133,11 @@
                                 <button onclick="exportReviewDocx(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export Word (.docx)</button>
                                 <button onclick="exportReviewPdf(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm">Export PDF (.pdf)</button>
                                 <div class="export-menu-separator my-1"></div>
+                                <label class="flex items-center gap-2 px-3 py-2 text-sm text-yellow-400 cursor-pointer" onclick="event.stopPropagation()">
+                                    <input type="checkbox" id="includeHighlightsCheckbox" checked class="rounded bg-surface-700 border-gray-600 text-yellow-500" onchange="toggleIncludeHighlights()">
+                                    <span>🔆 Include highlights</span>
+                                </label>
+                                <div class="export-menu-separator my-1"></div>
                                 <button onclick="downloadAllFormatsFromReview(); closeExportDropdown()" class="export-menu-item w-full px-3 py-2 text-left text-sm font-medium">Download All Formats</button>
                             </div>
                         </div>
@@ -1282,6 +1287,9 @@
                         <input type="checkbox" id="showHallucinationsCheckbox" checked class="rounded bg-surface-700 border-gray-600 text-amber-500" onchange="toggleHallucinationsView()">
                         <span id="showHallucinationsText">⚠️ Show flagged</span>
                     </label>
+                    <span id="highlightSummaryLabel" class="text-xs text-yellow-400 cursor-pointer whitespace-nowrap hidden" onclick="showHighlightSummaryModal()" title="Click to view highlight summary">
+                        <span id="highlightSummaryText">🔆 0 highlights</span>
+                    </span>
                     <button onclick="regenerateTimeline()" class="text-gray-400 hover:text-amber-400 transition-colors" title="Regenerate timeline from output files (picks up hallucination flags)">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
@@ -6455,6 +6463,12 @@
 
                 // Update hallucinations toggle visibility
                 updateHallucinationsToggleState();
+                
+                // Update highlight summary
+                updateHighlightSummary();
+                
+                // Sync include highlights checkbox
+                syncIncludeHighlightsCheckbox();
 
                 renderTimeline();
                 renderSpeakerLegend();
@@ -6707,15 +6721,18 @@
                     return;
                 }
 
+                // Check if chunk is highlighted (needed for styling)
+                const isHighlighted = reviewState.chunkEdits?.[chunk.chunk_id]?.highlighted === true;
+
                 const div = document.createElement('div');
-                div.className = 'chunk-row flex items-start gap-3 p-3 hover:bg-surface-700/30 cursor-pointer transition-colors';
+                div.className = `chunk-row flex items-start gap-3 p-3 hover:bg-surface-700/30 cursor-pointer transition-colors ${isHighlighted ? 'bg-yellow-500/10' : ''}`;
                 div.dataset.chunkIndex = idx;
                 div.dataset.chunkId = chunk.chunk_id;
                 div.dataset.start = chunk.start;
                 
                 // Speaker color - use centralized helper
                 const speakerColor = speaker ? getSpeakerDisplayColor(speaker) : '#6b7280';
-                div.style.borderLeft = `3px solid ${speakerColor}`;
+                div.style.borderLeft = isHighlighted ? '3px solid #facc15' : `3px solid ${speakerColor}`;
                 div.style.setProperty('--speaker-color', speakerColor);
                 
                 // Get edited text if exists
@@ -6751,6 +6768,12 @@
                     </div>
                     <div class="chunk-text flex-1 text-sm speaker-tinted-text ${isEdited ? 'italic' : ''}" data-chunk-id="${chunk.chunk_id}" data-original="${escapeHtml(chunk.text)}">${escapeHtml(displayText)}</div>
                     <div class="flex-shrink-0 flex items-center gap-1">
+                        <button onclick="event.stopPropagation(); toggleChunkHighlight(${idx})" 
+                                class="highlight-btn p-1 ${isHighlighted ? 'text-yellow-400' : 'text-gray-500'} hover:text-yellow-400 transition-colors" title="Toggle highlight (H)">
+                            <svg class="w-4 h-4" fill="${isHighlighted ? 'currentColor' : 'none'}" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
+                            </svg>
+                        </button>
                         <button onclick="event.stopPropagation(); editChunkText(${idx})" 
                                 class="edit-btn p-1 text-gray-500 hover:text-primary-400 transition-colors" title="Edit text (E)">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -6950,6 +6973,175 @@
             if (idx >= 0 && idx < (reviewTimeline?.chunks?.length || 0)) {
                 reviewSelectedChunkIndex = idx;
                 deleteSelectedChunk();
+            }
+        }
+
+        function toggleChunkHighlight(chunkIndex) {
+            if (!reviewTimeline?.chunks || chunkIndex < 0 || chunkIndex >= reviewTimeline.chunks.length) return;
+            
+            const chunk = reviewTimeline.chunks[chunkIndex];
+            const chunkId = chunk.chunk_id;
+            
+            if (!reviewState.chunkEdits) {
+                reviewState.chunkEdits = {};
+            }
+            if (!reviewState.chunkEdits[chunkId]) {
+                reviewState.chunkEdits[chunkId] = {};
+            }
+            
+            const wasHighlighted = reviewState.chunkEdits[chunkId].highlighted === true;
+            
+            if (wasHighlighted) {
+                delete reviewState.chunkEdits[chunkId].highlighted;
+                // Clean up empty edit objects
+                if (Object.keys(reviewState.chunkEdits[chunkId]).length === 0) {
+                    delete reviewState.chunkEdits[chunkId];
+                }
+                showReviewToast('Highlight removed', 'info');
+            } else {
+                reviewState.chunkEdits[chunkId].highlighted = true;
+                showReviewToast('Segment highlighted', 'success');
+            }
+            
+            // Update summary and re-render
+            updateHighlightSummary();
+            renderTimeline();
+            
+            // Mark as changed and save
+            markUnsaved();
+            debounceSave();
+        }
+        
+        function getHighlightedChunks() {
+            if (!reviewTimeline?.chunks) return [];
+            return reviewTimeline.chunks.filter(c => 
+                reviewState.chunkEdits?.[c.chunk_id]?.highlighted === true
+            );
+        }
+        
+        function getHighlightSections() {
+            // Group consecutive highlighted chunks into sections
+            const highlighted = getHighlightedChunks();
+            if (highlighted.length === 0) return [];
+            
+            // Sort by start time
+            const sorted = [...highlighted].sort((a, b) => a.start - b.start);
+            
+            const sections = [];
+            let currentSection = { start: sorted[0].start, end: sorted[0].end, chunks: [sorted[0]] };
+            
+            for (let i = 1; i < sorted.length; i++) {
+                const chunk = sorted[i];
+                const prevChunk = sorted[i - 1];
+                
+                // Check if this chunk is consecutive (within 1 second of previous end)
+                // Also check if they're adjacent in the timeline
+                const isConsecutive = (chunk.start - prevChunk.end) < 1.0;
+                
+                if (isConsecutive) {
+                    currentSection.end = chunk.end;
+                    currentSection.chunks.push(chunk);
+                } else {
+                    sections.push(currentSection);
+                    currentSection = { start: chunk.start, end: chunk.end, chunks: [chunk] };
+                }
+            }
+            sections.push(currentSection);
+            
+            return sections;
+        }
+        
+        function updateHighlightSummary() {
+            const label = document.getElementById('highlightSummaryLabel');
+            const textSpan = document.getElementById('highlightSummaryText');
+            
+            const sections = getHighlightSections();
+            const totalChunks = getHighlightedChunks().length;
+            
+            if (totalChunks > 0) {
+                label?.classList.remove('hidden');
+                if (textSpan) {
+                    textSpan.textContent = `🔆 ${sections.length} highlight${sections.length !== 1 ? 's' : ''} (${totalChunks} segments)`;
+                }
+            } else {
+                label?.classList.add('hidden');
+            }
+        }
+        
+        function showHighlightSummaryModal() {
+            const sections = getHighlightSections();
+            if (sections.length === 0) {
+                showReviewToast('No highlights in this transcript', 'info');
+                return;
+            }
+            
+            // Build modal content
+            let content = '<div class="space-y-3 max-h-96 overflow-y-auto">';
+            sections.forEach((section, idx) => {
+                const startTime = formatTime(section.start);
+                const endTime = formatTime(section.end);
+                const duration = section.end - section.start;
+                const durationStr = duration < 60 ? `${Math.round(duration)}s` : `${Math.floor(duration / 60)}m ${Math.round(duration % 60)}s`;
+                
+                content += `
+                    <div class="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg cursor-pointer hover:bg-yellow-500/20" 
+                         onclick="seekToTimestamp(${section.start}); closeHighlightSummaryModal();">
+                        <div class="flex justify-between items-center mb-1">
+                            <span class="text-yellow-400 font-medium">Section ${idx + 1}</span>
+                            <span class="text-xs text-gray-400">${section.chunks.length} segment${section.chunks.length !== 1 ? 's' : ''}</span>
+                        </div>
+                        <div class="text-sm text-gray-300">
+                            <span class="font-mono">[${startTime}]</span> → <span class="font-mono">[${endTime}]</span>
+                            <span class="text-gray-500 ml-2">(${durationStr})</span>
+                        </div>
+                    </div>
+                `;
+            });
+            content += '</div>';
+            
+            // Create modal
+            let modal = document.getElementById('highlightSummaryModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'highlightSummaryModal';
+                modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+                document.body.appendChild(modal);
+            }
+            
+            modal.innerHTML = `
+                <div class="bg-surface-800 rounded-xl p-6 max-w-md mx-4 shadow-xl border border-gray-700">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold text-white">🔆 Highlight Summary</h3>
+                        <button onclick="closeHighlightSummaryModal()" class="text-gray-400 hover:text-white">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <p class="text-sm text-gray-400 mb-4">${sections.length} highlighted section${sections.length !== 1 ? 's' : ''} (${getHighlightedChunks().length} total segments). Click to jump.</p>
+                    ${content}
+                </div>
+            `;
+            modal.classList.remove('hidden');
+            modal.onclick = (e) => { if (e.target === modal) closeHighlightSummaryModal(); };
+        }
+        
+        function closeHighlightSummaryModal() {
+            const modal = document.getElementById('highlightSummaryModal');
+            if (modal) modal.classList.add('hidden');
+        }
+        
+        function toggleIncludeHighlights() {
+            const checkbox = document.getElementById('includeHighlightsCheckbox');
+            if (!reviewState.uiPrefs) reviewState.uiPrefs = {};
+            reviewState.uiPrefs.includeHighlightsInExport = checkbox?.checked ?? true;
+            debounceSave();
+        }
+        
+        function syncIncludeHighlightsCheckbox() {
+            const checkbox = document.getElementById('includeHighlightsCheckbox');
+            if (checkbox) {
+                checkbox.checked = reviewState.uiPrefs?.includeHighlightsInExport !== false;
             }
         }
 
@@ -7937,14 +8129,16 @@
             if (!reviewJobData?.jobId) return;
             const inputId = reviewSelectedInputId || '';
             const viewMode = reviewChunkViewMode || 'merged';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-docx?inputId=${inputId}&viewMode=${viewMode}`;
+            const includeHighlights = reviewState.uiPrefs?.includeHighlightsInExport !== false ? 'true' : 'false';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-docx?inputId=${inputId}&viewMode=${viewMode}&includeHighlights=${includeHighlights}`;
         }
         
         function exportReviewPdf() {
             if (!reviewJobData?.jobId) return;
             const inputId = reviewSelectedInputId || '';
             const viewMode = reviewChunkViewMode || 'merged';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-pdf?inputId=${inputId}&viewMode=${viewMode}`;
+            const includeHighlights = reviewState.uiPrefs?.includeHighlightsInExport !== false ? 'true' : 'false';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-pdf?inputId=${inputId}&viewMode=${viewMode}&includeHighlights=${includeHighlights}`;
         }
         
         // Keyboard shortcuts
@@ -8008,6 +8202,13 @@
             if ((e.key === 'e' || e.key === 'E') && reviewSelectedChunkIndex >= 0 && reviewEditingChunkIndex === null) {
                 e.preventDefault();
                 editChunkText(reviewSelectedChunkIndex);
+                return;
+            }
+            
+            // H = toggle highlight on selected chunk (when not editing)
+            if ((e.key === 'h' || e.key === 'H') && reviewSelectedChunkIndex >= 0 && reviewEditingChunkIndex === null) {
+                e.preventDefault();
+                toggleChunkHighlight(reviewSelectedChunkIndex);
                 return;
             }
             
