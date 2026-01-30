@@ -7181,35 +7181,42 @@
 
         function toggleChunkHighlight(chunkIndex) {
             if (!reviewTimeline?.chunks || chunkIndex < 0 || chunkIndex >= reviewTimeline.chunks.length) return;
-            
+
             const chunk = reviewTimeline.chunks[chunkIndex];
             const chunkId = chunk.chunk_id;
-            
+            const timeStr = formatTime(chunk.start);
+
+            // Check current state for undo description
+            const wasHighlighted = reviewState.chunkEdits?.[chunkId]?.highlighted === true;
+
+            // Save undo snapshot before making changes
+            pushUndoSnapshot('highlight', wasHighlighted
+                ? `Remove highlight at ${timeStr}`
+                : `Highlight at ${timeStr}`);
+
             if (!reviewState.chunkEdits) {
                 reviewState.chunkEdits = {};
             }
             if (!reviewState.chunkEdits[chunkId]) {
                 reviewState.chunkEdits[chunkId] = {};
             }
-            
-            const wasHighlighted = reviewState.chunkEdits[chunkId].highlighted === true;
-            
+
             if (wasHighlighted) {
                 delete reviewState.chunkEdits[chunkId].highlighted;
                 // Clean up empty edit objects
                 if (Object.keys(reviewState.chunkEdits[chunkId]).length === 0) {
                     delete reviewState.chunkEdits[chunkId];
                 }
-                showReviewToast('Highlight removed', 'info');
+                showReviewToast('Highlight removed. Ctrl+Z to undo.', 'info');
             } else {
                 reviewState.chunkEdits[chunkId].highlighted = true;
-                showReviewToast('Segment highlighted', 'success');
+                showReviewToast('Segment highlighted. Ctrl+Z to undo.', 'success');
             }
-            
+
             // Update summary and re-render
             updateHighlightSummary();
             renderTimeline();
-            
+
             // Mark as changed and save
             markUnsaved();
             debounceSave();
