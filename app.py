@@ -3681,8 +3681,8 @@ def api_get_review_state(job_id):
 @app.route('/api/jobs/<job_id>/review/highlight-counts', methods=['GET'])
 def api_get_highlight_counts(job_id):
     """
-    Get highlight counts for all inputs in a job.
-    Returns { inputId: count, ... }
+    Get highlight counts and done status for all inputs in a job.
+    Returns { highlights: { inputId: count }, done: { inputId: true } }
     """
     session_id = g.session_id
     manifest_path = session_store.job_manifest_path(session_id, job_id)
@@ -3697,17 +3697,63 @@ def api_get_highlight_counts(job_id):
     state_path = os.path.join(review_dir, 'review_state.json')
     
     state = session_store.read_json(state_path)
-    counts = {}
+    highlights = {}
+    done = {}
     
     if state and 'perInput' in state:
-        # New perInput format - count highlights per input
+        # New perInput format - count highlights and done status per input
         for input_id, input_state in state.get('perInput', {}).items():
             chunk_edits = input_state.get('chunkEdits', {})
             highlight_count = sum(1 for edit in chunk_edits.values() if edit.get('highlighted'))
             if highlight_count > 0:
-                counts[input_id] = highlight_count
+                highlights[input_id] = highlight_count
+            if input_state.get('done'):
+                done[input_id] = True
     
-    return jsonify(counts)
+    return jsonify({'highlights': highlights, 'done': done})
+
+
+@app.route('/api/jobs/<job_id>/review/input-done', methods=['POST'])
+def api_mark_input_done(job_id):
+    """
+    Mark a specific input file as done or not done.
+    
+    Body: { inputId: string, done: boolean }
+    """
+    session_id = g.session_id
+    data = request.get_json() or {}
+    input_id = data.get('inputId')
+    is_done = data.get('done', True)
+    
+    if not input_id:
+        return jsonify({'error': 'inputId is required'}), 400
+    
+    job_dir = session_store.job_dir(session_id, job_id)
+    if not job_dir or not os.path.exists(job_dir):
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Update review state
+    review_dir = os.path.join(job_dir, 'review')
+    os.makedirs(review_dir, exist_ok=True)
+    state_path = os.path.join(review_dir, 'review_state.json')
+    
+    state = session_store.read_json(state_path) or {}
+    
+    # Ensure perInput structure exists
+    if 'perInput' not in state:
+        state['perInput'] = {}
+    if input_id not in state['perInput']:
+        state['perInput'][input_id] = {}
+    
+    # Set done status
+    state['perInput'][input_id]['done'] = is_done
+    state['updatedAt'] = datetime.now(timezone.utc).isoformat()
+    
+    session_store.atomic_write_json(state_path, state)
+    
+    return jsonify({'status': 'ok', 'inputId': input_id, 'done': is_done})
+
+_CSRF_PROTECTED_ENDPOINTS.add('api_mark_input_done')
 
 
 @app.route('/api/jobs/<job_id>/review/state', methods=['PUT'])

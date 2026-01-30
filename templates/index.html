@@ -2594,18 +2594,6 @@
                         
                         <!-- Action buttons cluster -->
                         <div class="flex items-center gap-1.5">
-                            <!-- Mark Done toggle - always visible, distinct style -->
-                            <button onclick="event.stopPropagation(); toggleJobFinished('${job.jobId}', ${!job.finished})" 
-                                    class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all ${job.finished 
-                                        ? 'bg-green-600 text-white hover:bg-green-700' 
-                                        : 'bg-surface-600/60 text-gray-300 hover:bg-surface-500 border border-gray-600/50'}"
-                                    title="${job.finished ? 'Mark as not done' : 'Mark as done'}">
-                                ${job.finished 
-                                    ? '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>' 
-                                    : '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>'}
-                                ${job.finished ? 'Done' : 'Done'}
-                            </button>
-                            
                             ${!isRunning ? `
                                 <!-- Files button for batch jobs -->
                                 ${job.inputCount > 1 ? `
@@ -3007,33 +2995,37 @@
         }
         
         async function toggleReviewJobFinished() {
-            if (!reviewJobData?.jobId) return;
+            if (!reviewJobData?.jobId || !reviewSelectedInputId) return;
             const checkbox = document.getElementById('reviewFinishedCheckbox');
-            const finished = checkbox?.checked || false;
+            const done = checkbox?.checked || false;
             
             try {
                 const headers = { 'Content-Type': 'application/json' };
                 if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
                 
-                const response = await fetch(`/api/jobs/${reviewJobData.jobId}/mark-finished`, {
+                const response = await fetch(`/api/jobs/${reviewJobData.jobId}/review/input-done`, {
                     method: 'POST',
                     headers,
-                    body: JSON.stringify({ finished })
+                    body: JSON.stringify({ inputId: reviewSelectedInputId, done })
                 });
                 
                 if (!response.ok) {
                     const data = await response.json();
-                    showError(data.error || 'Failed to update job');
+                    showError(data.error || 'Failed to update file status');
                     // Revert checkbox
-                    if (checkbox) checkbox.checked = !finished;
+                    if (checkbox) checkbox.checked = !done;
                     return;
                 }
                 
-                // Update local job data
-                reviewJobData.finished = finished;
+                // Update local file status and refresh dropdown
+                reviewFileStatus.done = reviewFileStatus.done || {};
+                reviewFileStatus.done[reviewSelectedInputId] = done;
+                populateInputFileSelector(reviewJobData, reviewSelectedInputId);
+                
+                showReviewToast(done ? 'File marked as done' : 'File marked as not done', 'success');
             } catch (e) {
-                showError(`Failed to update job: ${e.message}`);
-                if (checkbox) checkbox.checked = !finished;
+                showError(`Failed to update file status: ${e.message}`);
+                if (checkbox) checkbox.checked = !done;
             }
         }
         
@@ -6202,16 +6194,15 @@
             // Store selected input ID for timeline loading
             reviewSelectedInputId = targetInput?.uploadId || null;
             
-            // Fetch highlight counts and populate file selector for multi-file jobs
-            const highlightCounts = await fetchHighlightCountsForJob(job.jobId);
-            populateInputFileSelector(job, reviewSelectedInputId, highlightCounts);
+            // Fetch file status (highlights, done) and populate file selector for multi-file jobs
+            const fileStatus = await fetchFileStatusForJob(job.jobId);
+            populateInputFileSelector(job, reviewSelectedInputId, fileStatus);
             
             // Reset save status
             updateSaveStatus('saved');
             
-            // Update finished checkbox
-            const finishedCheckbox = document.getElementById('reviewFinishedCheckbox');
-            if (finishedCheckbox) finishedCheckbox.checked = job.finished || false;
+            // Update finished checkbox for current input (not job-level anymore)
+            updateDoneCheckboxForCurrentInput();
             
             // Setup audio player
             if (targetInput) {
@@ -6233,7 +6224,10 @@
             setupReviewKeyboardShortcuts();
         }
         
-        function populateInputFileSelector(job, selectedInputId, highlightCounts = null) {
+        // Store file status data (highlights, done) for current job
+        let reviewFileStatus = { highlights: {}, done: {} };
+        
+        function populateInputFileSelector(job, selectedInputId, fileStatus = null) {
             const dropdown = document.getElementById('reviewInputDropdown');
             const filenameSpan = document.getElementById('reviewFileName');
             const dropdownList = document.getElementById('reviewInputDropdownList');
@@ -6242,6 +6236,13 @@
             
             const inputs = job?.inputs || [];
             const totalFiles = inputs.length;
+            
+            // Store file status for later use
+            if (fileStatus) {
+                reviewFileStatus = fileStatus;
+            }
+            const highlights = reviewFileStatus.highlights || {};
+            const doneStatus = reviewFileStatus.done || {};
             
             // Hide selector for single-file jobs
             if (totalFiles <= 1) {
@@ -6266,8 +6267,9 @@
                 const isSelected = (inp.uploadId === selectedInputId);
                 const fileNum = String(i + 1).padStart(2, '0');
                 
-                // Get highlight count for this input (if available)
-                const highlightCount = highlightCounts?.[inp.uploadId] || 0;
+                // Get highlight count and done status for this input
+                const highlightCount = highlights[inp.uploadId] || 0;
+                const isDone = doneStatus[inp.uploadId] || false;
                 
                 if (isSelected) {
                     selectedIndex = i + 1;
@@ -6276,13 +6278,14 @@
                 
                 const item = document.createElement('button');
                 item.type = 'button';
-                item.className = `w-full px-3 py-2.5 text-left text-xs hover:bg-surface-600 transition-colors ${isSelected ? 'bg-primary-600/20' : ''}`;
+                item.className = `w-full px-3 py-2.5 text-left text-xs hover:bg-surface-600 transition-colors ${isSelected ? 'bg-primary-600/20' : ''} ${isDone ? 'opacity-60' : ''}`;
                 item.innerHTML = `
                     <div class="flex items-center gap-3">
                         <span class="text-gray-500 font-mono text-[10px] w-5">${fileNum}</span>
                         <div class="flex-1 min-w-0">
                             <div class="flex items-center gap-2">
-                                <span class="truncate ${isSelected ? 'text-primary-400 font-medium' : 'text-gray-300'}">${escapeHtml(fname)}</span>
+                                ${isDone ? '<svg class="w-3.5 h-3.5 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>' : ''}
+                                <span class="truncate ${isSelected ? 'text-primary-400 font-medium' : 'text-gray-300'} ${isDone ? 'line-through' : ''}">${escapeHtml(fname)}</span>
                                 ${highlightCount > 0 ? `<span class="flex-shrink-0 px-1.5 py-0.5 bg-amber-500/20 text-amber-400 text-[10px] rounded-full">${highlightCount}</span>` : ''}
                             </div>
                         </div>
@@ -6294,19 +6297,29 @@
             }
             
             dropdownLabel.textContent = selectedLabel;
+            
+            // Update the Done checkbox to reflect current file's status
+            updateDoneCheckboxForCurrentInput();
         }
         
-        // Fetch highlight counts for all inputs in a job
-        async function fetchHighlightCountsForJob(jobId) {
+        function updateDoneCheckboxForCurrentInput() {
+            const checkbox = document.getElementById('reviewFinishedCheckbox');
+            if (checkbox && reviewSelectedInputId) {
+                checkbox.checked = reviewFileStatus.done?.[reviewSelectedInputId] || false;
+            }
+        }
+        
+        // Fetch highlight counts and done status for all inputs in a job
+        async function fetchFileStatusForJob(jobId) {
             try {
                 const response = await fetch(`/api/jobs/${jobId}/review/highlight-counts`);
                 if (response.ok) {
                     return await response.json();
                 }
             } catch (e) {
-                console.warn('Failed to fetch highlight counts:', e);
+                console.warn('Failed to fetch file status:', e);
             }
-            return {};
+            return { highlights: {}, done: {} };
         }
         
         function toggleFileDropdown() {
@@ -6359,6 +6372,9 @@
             const fname = targetInput.filename || targetInput.originalFilename || 'Unknown';
             const duration = targetInput.durationSec ? formatDuration(targetInput.durationSec) : '';
             document.getElementById('reviewInputDropdownLabel').textContent = fname + (duration ? ` (${duration})` : '');
+            
+            // Update Done checkbox for the new input
+            updateDoneCheckboxForCurrentInput();
             
             // Clear undo stack for the new input
             reviewUndoStacks[inputId] = [];
