@@ -92,13 +92,13 @@ class ReviewTimeline:
             'version': self.version,
             'source': self.source,
             'speakers': [s.to_dict() for s in self.speakers],
-            'chunks': [c.to_dict() for c in self.chunks],
+            'chunks': [c.to_dict() if hasattr(c, 'to_dict') else c for c in self.chunks],
         }
-        # Include raw/merged if available
+        # Include raw/merged if available (handle both Chunk objects and dicts)
         if self.chunks_raw:
-            result['chunks_raw'] = self.chunks_raw
+            result['chunks_raw'] = [c.to_dict() if hasattr(c, 'to_dict') else c for c in self.chunks_raw]
         if self.chunks_merged:
-            result['chunks_merged'] = self.chunks_merged
+            result['chunks_merged'] = [c.to_dict() if hasattr(c, 'to_dict') else c for c in self.chunks_merged]
         return result
     
     def to_json(self) -> str:

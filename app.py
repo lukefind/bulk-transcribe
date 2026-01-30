@@ -3587,6 +3587,44 @@ _CSRF_PROTECTED_ENDPOINTS.add('api_put_speakers')
 # REVIEW STATE + TIMELINE ENDPOINTS
 # =============================================================================
 
+def _invalidate_timeline_cache(job_dir: str, input_id: Optional[str] = None):
+    """
+    Remove cached timeline files so subsequent loads rebuild from outputs.
+
+    Args:
+        job_dir: Path to the job directory
+        input_id: If provided, only invalidate cache for this input.
+                  If None, invalidate all cached timelines in the job.
+    """
+    review_dir = os.path.join(job_dir, 'review')
+    if not os.path.isdir(review_dir):
+        return
+
+    if input_id:
+        # Invalidate specific input's cache
+        cached_dir = os.path.join(review_dir, input_id)
+        if os.path.isdir(cached_dir):
+            for cached_file in ['timeline_merged.json', 'timeline_raw.json']:
+                cached_path = os.path.join(cached_dir, cached_file)
+                try:
+                    if os.path.exists(cached_path):
+                        os.remove(cached_path)
+                except Exception:
+                    pass
+    else:
+        # Invalidate all inputs' caches
+        for entry in os.listdir(review_dir):
+            entry_path = os.path.join(review_dir, entry)
+            if os.path.isdir(entry_path):
+                for cached_file in ['timeline_merged.json', 'timeline_raw.json']:
+                    cached_path = os.path.join(entry_path, cached_file)
+                    try:
+                        if os.path.exists(cached_path):
+                            os.remove(cached_path)
+                    except Exception:
+                        pass
+
+
 @app.route('/api/jobs/<job_id>/review/state', methods=['GET'])
 def api_get_review_state(job_id):
     """
@@ -3765,9 +3803,12 @@ def api_put_review_state(job_id):
         existing_state['perInput'][input_id] = input_state
         existing_state['uiPrefs'] = data.get('uiPrefs', existing_state.get('uiPrefs', {}))
         existing_state['updatedAt'] = datetime.now(timezone.utc).isoformat()
-        
+
         session_store.atomic_write_json(state_path, existing_state)
-        
+
+        # Invalidate cached timelines for this input so edits take effect
+        _invalidate_timeline_cache(job_dir, input_id)
+
         return jsonify({
             'message': 'Review state saved',
             'inputId': input_id
@@ -3782,7 +3823,10 @@ def api_put_review_state(job_id):
             'updatedAt': datetime.now(timezone.utc).isoformat()
         }
         session_store.atomic_write_json(state_path, state)
-        
+
+        # Invalidate all cached timelines for this job (legacy mode affects all inputs)
+        _invalidate_timeline_cache(job_dir, None)
+
         return jsonify({
             'message': 'Review state saved',
             'state': state
@@ -4229,17 +4273,8 @@ def api_regenerate_review_timeline(job_id):
               numChunks=len(timeline.chunks),
               numSpeakers=len(timeline.speakers))
 
-    # Clear any cached timeline files so future loads use fresh data
-    if input_id:
-        cached_dir = os.path.join(job_dir, 'review', input_id)
-        if os.path.isdir(cached_dir):
-            for cached_file in ['timeline_merged.json', 'timeline_raw.json']:
-                cached_path = os.path.join(cached_dir, cached_file)
-                try:
-                    if os.path.exists(cached_path):
-                        os.remove(cached_path)
-                except Exception:
-                    pass
+    # Clear cached timeline files so future loads use fresh data
+    _invalidate_timeline_cache(job_dir, input_id)
 
     # Apply saved review state if exists
     state_path = os.path.join(job_dir, 'review', 'review_state.json')
@@ -4531,11 +4566,19 @@ def _build_review_timeline(session_id: str, job_id: str, input_id: str, filename
                 with open(cached_path, 'r', encoding='utf-8') as f:
                     cached_json = f.read()
                 timeline = ReviewTimeline.from_json(cached_json)
+                # Normalize chunks_raw/chunks_merged to Chunk objects
+                if timeline.chunks_raw:
+                    timeline.chunks_raw = [Chunk.from_dict(c) if isinstance(c, dict) else c for c in timeline.chunks_raw]
+                if timeline.chunks_merged:
+                    timeline.chunks_merged = [Chunk.from_dict(c) if isinstance(c, dict) else c for c in timeline.chunks_merged]
                 # Apply view mode from cached data
                 if view_mode == 'raw' and timeline.chunks_raw:
-                    timeline.chunks = [Chunk.from_dict(c) if isinstance(c, dict) else c for c in timeline.chunks_raw]
+                    timeline.chunks = list(timeline.chunks_raw)
                 elif timeline.chunks_merged:
-                    timeline.chunks = [Chunk.from_dict(c) if isinstance(c, dict) else c for c in timeline.chunks_merged]
+                    timeline.chunks = list(timeline.chunks_merged)
+                # Re-apply review state in case edits were made after cache was created
+                if review_state:
+                    timeline = apply_review_state(timeline, review_state)
                 return timeline, review_state
             except Exception:
                 # Fall through to rebuild if cache is invalid
