@@ -2512,7 +2512,8 @@
                 };
                 const statusBg = statusBgColors[job.status] || 'bg-gray-400';
                 const isRunning = job.status === 'running' || job.status === 'queued';
-                const isReviewable = job.reviewable && !isRunning;
+                // Allow reviewing any job that has outputs, even if failed/running (for partial results)
+                const isReviewable = job.reviewable || job.outputCount > 0;
                 
                 const date = job.createdAt ? new Date(job.createdAt).toLocaleString() : '';
                 // Show file count for batch jobs: "filename.m4a (3 files)"

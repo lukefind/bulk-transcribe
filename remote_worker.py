@@ -879,11 +879,16 @@ def dispatch_to_remote_worker(
             # Check timeout
             elapsed = time.time() - start_time
             if elapsed > timeout:
-                log_event('error', 'remote_job_timeout', jobId=job_id, workerJobId=worker_job_id)
+                log_event('error', 'remote_job_timeout', jobId=job_id, workerJobId=worker_job_id, 
+                          elapsedSeconds=int(elapsed), timeoutSeconds=timeout)
+                # Note: Worker may still be running and uploading outputs.
+                # Use 'complete_with_errors' to indicate partial results may exist.
+                # The worker will continue uploading outputs even after this timeout.
                 update_manifest_callback(
-                    status='failed',
+                    status='complete_with_errors',
                     finishedAt=datetime.now(timezone.utc).isoformat(),
-                    error={'code': 'REMOTE_WORKER_TIMEOUT', 'message': f'Worker job timed out after {timeout}s'}
+                    error={'code': 'REMOTE_WORKER_TIMEOUT', 
+                           'message': f'Controller timed out after {timeout}s. Worker may still be processing - check for partial results.'}
                 )
                 return False
             
