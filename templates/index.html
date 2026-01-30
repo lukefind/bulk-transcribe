@@ -2816,19 +2816,59 @@
                     }).join('');
                 }
 
-                // Check for controller timeout
+                // Check for controller timeout and resolution
                 const isTimedOut = job.controllerTimedOut === true;
-                const timedOutBanner = isTimedOut ? `
-                    <div class="mb-3 p-2 bg-amber-900/30 border border-amber-600/50 rounded-lg flex items-start gap-2">
-                        <svg class="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
-                        </svg>
-                        <div class="text-xs text-amber-200">
-                            <div class="font-medium">Controller timed out</div>
-                            <div class="text-amber-300/80">Worker may still be processing and uploading outputs. Click Refresh to check for new files.</div>
+                const wasTimedOut = job.controllerTimedOutResolvedAt && job.controllerTimedOutAt;
+                
+                // Format timestamps for display
+                const formatTimeoutTime = (isoStr) => {
+                    if (!isoStr) return '';
+                    try {
+                        const d = new Date(isoStr);
+                        return d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+                    } catch { return ''; }
+                };
+                
+                let timedOutBanner = '';
+                if (isTimedOut) {
+                    const timedOutTime = formatTimeoutTime(job.controllerTimedOutAt);
+                    timedOutBanner = `
+                        <div class="mb-3 p-2 bg-amber-900/30 border border-amber-600/50 rounded-lg">
+                            <div class="flex items-start gap-2">
+                                <svg class="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                                </svg>
+                                <div class="text-xs text-amber-200 flex-1">
+                                    <div class="font-medium">Controller timed out${timedOutTime ? ` at ${timedOutTime}` : ''}</div>
+                                    <div class="text-amber-300/80">Worker may still be processing and uploading outputs.
+                                        <a href="#" onclick="event.preventDefault(); typeof openJobLogs === 'function' && openJobLogs('${job.jobId}')" class="text-amber-400 hover:text-amber-300 underline ml-1">View logs</a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mt-2 flex items-center gap-2 pl-6">
+                                <label class="flex items-center gap-1.5 text-xs text-amber-300 cursor-pointer">
+                                    <input type="checkbox" id="autoRefreshOutputs" class="rounded bg-surface-700 border-amber-600 text-amber-500 w-3 h-3"
+                                           onchange="toggleAutoRefreshOutputs('${job.jobId}', this.checked)">
+                                    Auto-refresh every 20s
+                                </label>
+                            </div>
                         </div>
-                    </div>
-                ` : '';
+                    `;
+                } else if (wasTimedOut) {
+                    const timedOutTime = formatTimeoutTime(job.controllerTimedOutAt);
+                    const resolvedTime = formatTimeoutTime(job.controllerTimedOutResolvedAt);
+                    timedOutBanner = `
+                        <div class="mb-3 p-2 bg-green-900/20 border border-green-600/30 rounded-lg flex items-start gap-2">
+                            <svg class="w-4 h-4 text-green-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                            </svg>
+                            <div class="text-xs text-green-200">
+                                <div class="font-medium">Timeout resolved</div>
+                                <div class="text-green-300/80">Timed out${timedOutTime ? ` at ${timedOutTime}` : ''}, resolved${resolvedTime ? ` at ${resolvedTime}` : ''} when worker completed.</div>
+                            </div>
+                        </div>
+                    `;
+                }
 
                 modal.innerHTML = `
                     <div class="bg-surface-800 text-gray-200 rounded-xl shadow-xl w-full max-w-xl p-4 border border-surface-600">
@@ -2863,6 +2903,52 @@
         function closeJobFilesModal() {
             const modal = document.getElementById('jobFilesModal');
             if (modal) modal.classList.add('hidden');
+            // Stop auto-refresh when modal closes
+            stopAutoRefreshOutputs();
+        }
+        
+        // Auto-refresh outputs polling
+        let autoRefreshOutputsTimer = null;
+        let autoRefreshOutputsJobId = null;
+        const AUTO_REFRESH_INTERVAL_MS = 20000; // 20 seconds
+        
+        function toggleAutoRefreshOutputs(jobId, enabled) {
+            if (enabled) {
+                startAutoRefreshOutputs(jobId);
+            } else {
+                stopAutoRefreshOutputs();
+            }
+        }
+        
+        function startAutoRefreshOutputs(jobId) {
+            stopAutoRefreshOutputs(); // Clear any existing timer
+            autoRefreshOutputsJobId = jobId;
+            autoRefreshOutputsTimer = setInterval(async () => {
+                try {
+                    const job = await fetchJobDetails(autoRefreshOutputsJobId);
+                    // Check if timeout resolved or job is final
+                    const isFinal = ['complete', 'complete_with_errors', 'failed', 'canceled'].includes(job.status);
+                    const stillTimedOut = job.controllerTimedOut === true;
+                    
+                    if (!stillTimedOut || isFinal) {
+                        // Timeout resolved or job finished - stop polling
+                        stopAutoRefreshOutputs();
+                    }
+                    
+                    // Refresh the modal content
+                    openJobFilesModal(autoRefreshOutputsJobId);
+                } catch (e) {
+                    console.error('Auto-refresh failed:', e);
+                }
+            }, AUTO_REFRESH_INTERVAL_MS);
+        }
+        
+        function stopAutoRefreshOutputs() {
+            if (autoRefreshOutputsTimer) {
+                clearInterval(autoRefreshOutputsTimer);
+                autoRefreshOutputsTimer = null;
+            }
+            autoRefreshOutputsJobId = null;
         }
         
         async function toggleJobFinished(jobId, finished) {

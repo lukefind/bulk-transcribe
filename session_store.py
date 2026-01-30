@@ -317,6 +317,7 @@ def list_jobs(session_id: str, limit: int = 20) -> list:
                 'finished': manifest.get('finished', False),
                 'controllerTimedOut': manifest.get('controllerTimedOut', False),
                 'controllerTimedOutAt': manifest.get('controllerTimedOutAt'),
+                'controllerTimedOutResolvedAt': manifest.get('controllerTimedOutResolvedAt'),
             })
     
     # Sort by createdAt descending
