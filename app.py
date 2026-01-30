@@ -53,6 +53,7 @@ from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
 import json
 from datetime import datetime, timezone
+from typing import Optional
 
 from transcribe_options import TranscribeOptions, get_preset, postprocess_segments
 import session_store
