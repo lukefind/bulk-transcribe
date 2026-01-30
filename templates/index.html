@@ -6138,8 +6138,10 @@
             try {
                 const response = await fetch(`/api/jobs/${jobId}`);
                 const job = await response.json();
-                if (job.error) {
-                    showError(job.error);
+                // Only block on error if job is actually failed with no outputs
+                // Jobs can have stale error field from timeout but still be complete
+                if (job.error && job.status === 'failed' && !job.outputs?.length) {
+                    showError(job.error.message || job.error);
                     return;
                 }
                 await openReviewPanel(job);
@@ -7216,10 +7218,53 @@
             // Update summary and re-render
             updateHighlightSummary();
             renderTimeline();
+            
+            // Update file dropdown highlight count for current input
+            updateFileDropdownHighlightCount();
 
             // Mark as changed and save
             markUnsaved();
             debounceSave();
+        }
+        
+        function updateFileDropdownHighlightCount() {
+            // Update the highlight badge for the current input in the file dropdown
+            if (!reviewJobData || !reviewSelectedInputId) return;
+            
+            const dropdownList = document.getElementById('reviewInputDropdownList');
+            if (!dropdownList) return;
+            
+            // Count current highlights for this input
+            const highlightCount = Object.values(reviewState.chunkEdits || {})
+                .filter(edit => edit.highlighted === true).length;
+            
+            // Find the button for the current input and update its badge
+            const buttons = dropdownList.querySelectorAll('button');
+            const inputs = reviewJobData.inputs || [];
+            
+            for (let i = 0; i < inputs.length && i < buttons.length; i++) {
+                if (inputs[i].uploadId === reviewSelectedInputId) {
+                    const badge = buttons[i].querySelector('.bg-amber-500\\/20');
+                    const nameContainer = buttons[i].querySelector('.flex.items-center.gap-2');
+                    
+                    if (highlightCount > 0) {
+                        if (badge) {
+                            // Update existing badge
+                            badge.textContent = highlightCount;
+                        } else if (nameContainer) {
+                            // Add new badge
+                            const newBadge = document.createElement('span');
+                            newBadge.className = 'flex-shrink-0 px-1.5 py-0.5 bg-amber-500/20 text-amber-400 text-[10px] rounded-full';
+                            newBadge.textContent = highlightCount;
+                            nameContainer.appendChild(newBadge);
+                        }
+                    } else if (badge) {
+                        // Remove badge if no highlights
+                        badge.remove();
+                    }
+                    break;
+                }
+            }
         }
         
         function getHighlightedChunks() {
