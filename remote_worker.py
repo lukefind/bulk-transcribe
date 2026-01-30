@@ -876,21 +876,24 @@ def dispatch_to_remote_worker(
                 )
                 return False
             
-            # Check timeout
+            # Check timeout - but don't mark as failed, just flag it
+            # Worker may still be running and will callback when done
             elapsed = time.time() - start_time
             if elapsed > timeout:
-                log_event('error', 'remote_job_timeout', jobId=job_id, workerJobId=worker_job_id, 
-                          elapsedSeconds=int(elapsed), timeoutSeconds=timeout)
-                # Note: Worker may still be running and uploading outputs.
-                # Use 'complete_with_errors' to indicate partial results may exist.
-                # The worker will continue uploading outputs even after this timeout.
+                now_iso = datetime.now(timezone.utc).isoformat()
+                log_event('warning', 'remote_job_controller_timeout', jobId=job_id, workerJobId=worker_job_id, 
+                          elapsedSeconds=int(elapsed), timeoutSeconds=timeout,
+                          message='Controller stopping poll loop but worker may still be processing')
+                # Keep status as 'running' but flag that controller timed out
+                # Worker callbacks will resolve the final status when they arrive
                 update_manifest_callback(
-                    status='complete_with_errors',
-                    finishedAt=datetime.now(timezone.utc).isoformat(),
-                    error={'code': 'REMOTE_WORKER_TIMEOUT', 
-                           'message': f'Controller timed out after {timeout}s. Worker may still be processing - check for partial results.'}
+                    controllerTimedOut=True,
+                    controllerTimedOutAt=now_iso,
+                    controllerTimedOutAfterSeconds=int(elapsed)
                 )
-                return False
+                # Return True to indicate we're not treating this as a failure
+                # The job stays "running" and worker callbacks will finalize it
+                return True
             
             # Poll worker status
             try:

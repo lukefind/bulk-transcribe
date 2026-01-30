@@ -2512,6 +2512,7 @@
                 };
                 const statusBg = statusBgColors[job.status] || 'bg-gray-400';
                 const isRunning = job.status === 'running' || job.status === 'queued';
+                const isTimedOut = job.controllerTimedOut === true;
                 // Allow reviewing any job that has outputs, even if failed/running (for partial results)
                 const isReviewable = job.reviewable || job.outputCount > 0;
                 
@@ -2551,6 +2552,11 @@
                                    title="Select for batch actions">
                         ` : '<span class="w-4"></span>'}
                         <span class="w-2 h-2 rounded-full ${statusBg} ${isRunning ? 'animate-pulse' : ''} flex-shrink-0"></span>
+                        ${isTimedOut ? `
+                            <svg class="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Controller timed out - worker may still be processing">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                            </svg>
+                        ` : ''}
                         <span class="font-medium text-gray-200 truncate flex-1" title="${escapeHtml(primaryFilename)}">${escapeHtml(primaryFilename)}</span>
                         <!-- Arrow hint on hover - visible icon -->
                         <svg class="job-row-icon w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2810,6 +2816,20 @@
                     }).join('');
                 }
 
+                // Check for controller timeout
+                const isTimedOut = job.controllerTimedOut === true;
+                const timedOutBanner = isTimedOut ? `
+                    <div class="mb-3 p-2 bg-amber-900/30 border border-amber-600/50 rounded-lg flex items-start gap-2">
+                        <svg class="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                        </svg>
+                        <div class="text-xs text-amber-200">
+                            <div class="font-medium">Controller timed out</div>
+                            <div class="text-amber-300/80">Worker may still be processing and uploading outputs. Click Refresh to check for new files.</div>
+                        </div>
+                    </div>
+                ` : '';
+
                 modal.innerHTML = `
                     <div class="bg-surface-800 text-gray-200 rounded-xl shadow-xl w-full max-w-xl p-4 border border-surface-600">
                         <div class="flex items-center justify-between mb-3">
@@ -2817,8 +2837,18 @@
                                 <div class="text-sm font-semibold">Batch Files</div>
                                 <div class="text-xs text-gray-400">${escapeHtml(job.primaryFilename || job.name || job.jobId)}</div>
                             </div>
-                            <button class="text-gray-400 hover:text-gray-200" onclick="closeJobFilesModal()">✕</button>
+                            <div class="flex items-center gap-2">
+                                <button class="px-2 py-1 text-xs bg-surface-600 hover:bg-surface-500 text-gray-300 rounded flex items-center gap-1" 
+                                        onclick="openJobFilesModal('${job.jobId}')" title="Refresh file list">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                    </svg>
+                                    Refresh
+                                </button>
+                                <button class="text-gray-400 hover:text-gray-200" onclick="closeJobFilesModal()">✕</button>
+                            </div>
                         </div>
+                        ${timedOutBanner}
                         <div class="max-h-[50vh] overflow-auto">
                             ${rows || '<div class="text-sm text-gray-400">No inputs found.</div>'}
                         </div>

@@ -6109,6 +6109,14 @@ def api_worker_upload_output(job_id):
     
     file.save(output_path)
     
+    # If controller had timed out, note that we're still receiving outputs
+    # (Don't clear the flag here - let /worker/complete do that)
+    if manifest.get('controllerTimedOut'):
+        log_event('info', 'worker_output_after_timeout',
+                  jobId=job_id, workerJobId=worker_job_id,
+                  filename=safe_filename, outputType=output_type,
+                  timedOutAt=manifest.get('controllerTimedOutAt'))
+    
     # Register output in manifest
     # Find the original filename for this input
     input_filename = None
@@ -6190,6 +6198,16 @@ def api_worker_complete(job_id):
     # Update manifest with final status
     now = datetime.now(timezone.utc).isoformat()
     
+    # Check if controller had timed out - clear the flag since worker is reporting back
+    was_timed_out = manifest.get('controllerTimedOut', False)
+    if was_timed_out:
+        manifest['controllerTimedOut'] = False
+        manifest['controllerTimedOutResolvedAt'] = now
+        log_event('info', 'worker_callback_after_timeout',
+                  jobId=job_id, workerJobId=worker_job_id,
+                  timedOutAt=manifest.get('controllerTimedOutAt'),
+                  resolvedAt=now)
+    
     # Check how many outputs we actually received
     outputs_received = len(manifest.get('outputs', []))
     worker_reported_outputs = len(data.get('outputs', []))
@@ -6201,6 +6219,7 @@ def api_worker_complete(job_id):
     manifest['remote']['workerReportedStatus'] = status
     manifest['remote']['workerReportedOutputs'] = worker_reported_outputs
     manifest['remote']['outputsReceived'] = outputs_received
+    manifest['remote']['wasTimedOut'] = was_timed_out
     
     if status == 'complete':
         # Check if we actually received outputs
