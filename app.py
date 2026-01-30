@@ -5152,23 +5152,32 @@ def _run_session_export(export_id: str, session_id: str):
                         zf.writestr(f'{job_folder}/review_state.json', json.dumps(review_state, indent=2).encode('utf-8'))
                         with_review_state += 1
                     
-                    timeline_path = os.path.join(job_dir, 'review', 'timeline.json')
-                    if os.path.exists(timeline_path):
-                        with open(timeline_path, 'r', encoding='utf-8') as f:
-                            zf.writestr(f'{job_folder}/timeline.json', f.read().encode('utf-8'))
-                    
-                    outputs = manifest.get('outputs', []) if manifest else []
-                    for output in outputs:
-                        output_path = output.get('path')
-                        output_filename = output.get('filename', '')
-                        if output_path and os.path.exists(output_path) and output_filename:
-                            try:
-                                with open(output_path, 'r', encoding='utf-8') as f:
-                                    zf.writestr(f'{job_folder}/outputs/{output_filename}', f.read().encode('utf-8'))
-                                    files_total += 1
-                            except Exception:
-                                pass
-                    
+                    # Export all files from review directory
+                    review_dir = os.path.join(job_dir, 'review')
+                    if os.path.isdir(review_dir):
+                        for fname in os.listdir(review_dir):
+                            fpath = os.path.join(review_dir, fname)
+                            if os.path.isfile(fpath):
+                                try:
+                                    with open(fpath, 'rb') as f:
+                                        zf.writestr(f'{job_folder}/review/{fname}', f.read())
+                                        files_total += 1
+                                except Exception:
+                                    pass
+
+                    # Export all files from outputs directory (scan directly, not just manifest)
+                    outputs_dir = os.path.join(job_dir, 'outputs')
+                    if os.path.isdir(outputs_dir):
+                        for fname in os.listdir(outputs_dir):
+                            fpath = os.path.join(outputs_dir, fname)
+                            if os.path.isfile(fpath):
+                                try:
+                                    with open(fpath, 'rb') as f:
+                                        zf.writestr(f'{job_folder}/outputs/{fname}', f.read())
+                                        files_total += 1
+                                except Exception:
+                                    pass
+
                     job_count += 1
                         
                 except Exception as e:
@@ -5391,21 +5400,44 @@ def api_import_session():
                     manifest_path = session_store.job_manifest_path(session_id, new_job_id)
                     session_store.write_json(manifest_path, job_data)
                     
-                    # Restore review_state.json if present
+                    # Restore review_state.json if present (check both old and new paths)
                     review_state_path = f'{job_prefix}review_state.json'
+                    review_state_path_new = f'{job_prefix}review/review_state.json'
                     if review_state_path in namelist:
                         review_state = json.loads(zf.read(review_state_path).decode('utf-8'))
                         state_dest = os.path.join(job_dir, 'review', 'review_state.json')
                         session_store.write_json(state_dest, review_state)
-                    
-                    # Restore timeline.json if present
+                    elif review_state_path_new in namelist:
+                        review_state = json.loads(zf.read(review_state_path_new).decode('utf-8'))
+                        state_dest = os.path.join(job_dir, 'review', 'review_state.json')
+                        session_store.write_json(state_dest, review_state)
+
+                    # Restore timeline.json if present (check both old and new paths)
                     timeline_path = f'{job_prefix}timeline.json'
+                    timeline_path_new = f'{job_prefix}review/timeline.json'
                     if timeline_path in namelist:
                         timeline_content = zf.read(timeline_path).decode('utf-8')
                         timeline_dest = os.path.join(job_dir, 'review', 'timeline.json')
                         with open(timeline_dest, 'w', encoding='utf-8') as f:
                             f.write(timeline_content)
-                    
+                    elif timeline_path_new in namelist:
+                        timeline_content = zf.read(timeline_path_new).decode('utf-8')
+                        timeline_dest = os.path.join(job_dir, 'review', 'timeline.json')
+                        with open(timeline_dest, 'w', encoding='utf-8') as f:
+                            f.write(timeline_content)
+
+                    # Restore any other review files from review/ subdirectory
+                    for name in namelist:
+                        if name.startswith(f'{job_prefix}review/') and not name.endswith('/'):
+                            filename = name.split('/')[-1]
+                            # Skip files we already handled explicitly
+                            if filename in ('review_state.json', 'timeline.json'):
+                                continue
+                            if filename:
+                                review_dest = os.path.join(job_dir, 'review', filename)
+                                with open(review_dest, 'wb') as f:
+                                    f.write(zf.read(name))
+
                     # Restore outputs
                     for name in namelist:
                         if name.startswith(f'{job_prefix}outputs/') and not name.endswith('/'):
