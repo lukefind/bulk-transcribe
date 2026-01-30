@@ -4027,8 +4027,10 @@
                 const response = await fetch(`/api/jobs/${jobId}`);
                 const job = await response.json();
                 
-                if (job.error) {
-                    showError(job.error);
+                // Only block on error if job is actually failed (not just has a stale error field)
+                // Jobs can have error field from timeout but still be complete with outputs
+                if (job.error && job.status === 'failed' && !job.outputs?.length) {
+                    showError(job.error.message || job.error);
                     return;
                 }
                 
@@ -4048,8 +4050,9 @@
                 const response = await fetch(`/api/jobs/${jobId}`);
                 const job = await response.json();
                 
-                if (job.error) {
-                    showError(job.error);
+                // Only block on error if job is actually failed with no outputs
+                if (job.error && job.status === 'failed' && !job.outputs?.length) {
+                    showError(job.error.message || job.error);
                     return;
                 }
                 
