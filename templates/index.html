@@ -4039,9 +4039,11 @@
                 saveSelectedJob(jobId);
                 
                 // Open review panel directly
-                openReviewPanel(job, inputId);
+                await openReviewPanel(job, inputId);
             } catch (e) {
-                showError(`Failed to load job for review: ${e.message}`);
+                console.error('openReviewForJob error:', e);
+                const msg = e?.message || (typeof e === 'string' ? e : JSON.stringify(e));
+                showError(`Failed to open review: ${msg}`);
             }
         }
         
@@ -4067,9 +4069,11 @@
                 window._regenFilenameHint = decodeURIComponent(filenameHint);
                 
                 // Open review panel - it will use regenerate endpoint
-                openReviewPanel(job, inputId, true);  // true = useRegen
+                await openReviewPanel(job, inputId, true);  // true = useRegen
             } catch (e) {
-                showError(`Failed to load job for review: ${e.message}`);
+                console.error('openReviewWithRegen error:', e);
+                const msg = e?.message || (typeof e === 'string' ? e : JSON.stringify(e));
+                showError(`Failed to open review: ${msg}`);
             }
         }
 
