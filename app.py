@@ -4642,6 +4642,7 @@ def api_export_review_docx(job_id):
     """Export review timeline as DOCX with timestamps."""
     from docx import Document
     from docx.shared import Pt, Inches, RGBColor
+    from docx.enum.text import WD_COLOR_INDEX
     import io
     
     # Safe access helper for dict or object
@@ -4732,10 +4733,17 @@ def api_export_review_docx(job_id):
         
         # Add highlight summary if there are highlights
         if highlight_sections:
+            total_chunks = sum(s['count'] for s in highlight_sections)
             summary_para = doc.add_paragraph()
-            summary_para.add_run(f"🔆 {len(highlight_sections)} Highlighted Section(s): ").bold = True
-            times = [f"[{fmt_time(s['start'])}]" for s in highlight_sections]
-            summary_para.add_run(", ".join(times))
+            summary_run = summary_para.add_run(f"🔆 {total_chunks} Highlighted Segment(s) in {len(highlight_sections)} Section(s)")
+            summary_run.bold = True
+            summary_run.font.highlight_color = WD_COLOR_INDEX.YELLOW
+            
+            # Add timestamps on new line
+            times_para = doc.add_paragraph()
+            times_para.add_run("Timestamps: ").bold = True
+            times = [f"[{fmt_time(s['start'])} - {fmt_time(s['end'])}]" for s in highlight_sections]
+            times_para.add_run(", ".join(times))
             doc.add_paragraph()  # Spacer
         
         # Build speaker lookup (handles both dict and object)
@@ -4768,11 +4776,9 @@ def api_export_review_docx(job_id):
             # Add text with highlight if applicable
             text_run = para.add_run(text)
             if is_highlighted:
-                from docx.shared import RGBColor as DocxRGBColor
-                from docx.oxml.ns import nsdecls
-                from docx.oxml import parse_xml
-                # Apply yellow highlight
-                text_run.font.highlight_color = 7  # WD_COLOR_INDEX.YELLOW = 7
+                # Apply yellow highlight to entire paragraph (timestamp + speaker + text)
+                run.font.highlight_color = WD_COLOR_INDEX.YELLOW
+                text_run.font.highlight_color = WD_COLOR_INDEX.YELLOW
         
         # Write to buffer
         buffer = io.BytesIO()
@@ -5007,9 +5013,12 @@ def api_export_review_pdf(job_id):
         
         # Add highlight summary if there are highlights
         if highlight_sections:
-            times = [f"[{fmt_time(s['start'])}]" for s in highlight_sections]
-            summary_text = f"<b>🔆 {len(highlight_sections)} Highlighted Section(s):</b> {', '.join(times)}"
-            story.append(Paragraph(summary_text, summary_style))
+            total_chunks = sum(s['count'] for s in highlight_sections)
+            times = [f"[{fmt_time(s['start'])} - {fmt_time(s['end'])}]" for s in highlight_sections]
+            summary_text = f"<b>🔆 {total_chunks} Highlighted Segment(s) in {len(highlight_sections)} Section(s)</b>"
+            story.append(Paragraph(summary_text, highlight_style))
+            times_text = f"<b>Timestamps:</b> {', '.join(times)}"
+            story.append(Paragraph(times_text, summary_style))
         
         story.append(Spacer(1, 0.25 * inch))
         
