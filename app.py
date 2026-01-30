@@ -3639,6 +3639,38 @@ def api_get_review_state(job_id):
     return jsonify(state)
 
 
+@app.route('/api/jobs/<job_id>/review/highlight-counts', methods=['GET'])
+def api_get_highlight_counts(job_id):
+    """
+    Get highlight counts for all inputs in a job.
+    Returns { inputId: count, ... }
+    """
+    session_id = g.session_id
+    manifest_path = session_store.job_manifest_path(session_id, job_id)
+    manifest = session_store.read_json(manifest_path)
+    
+    if not manifest:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Review state is stored in {job}/review/review_state.json
+    job_dir = session_store.job_dir(session_id, job_id)
+    review_dir = os.path.join(job_dir, 'review')
+    state_path = os.path.join(review_dir, 'review_state.json')
+    
+    state = session_store.read_json(state_path)
+    counts = {}
+    
+    if state and 'perInput' in state:
+        # New perInput format - count highlights per input
+        for input_id, input_state in state.get('perInput', {}).items():
+            chunk_edits = input_state.get('chunkEdits', {})
+            highlight_count = sum(1 for edit in chunk_edits.values() if edit.get('highlighted'))
+            if highlight_count > 0:
+                counts[input_id] = highlight_count
+    
+    return jsonify(counts)
+
+
 @app.route('/api/jobs/<job_id>/review/state', methods=['PUT'])
 def api_put_review_state(job_id):
     """
