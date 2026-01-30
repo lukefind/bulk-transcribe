@@ -2673,7 +2673,9 @@
         async function fetchJobDetails(jobId) {
             const response = await fetch(`/api/jobs/${jobId}`);
             const data = await response.json();
-            if (!response.ok || data.error) {
+            // Only throw on HTTP errors, not on stale error fields in job data
+            // Jobs can have error field from timeout but still be complete with outputs
+            if (!response.ok) {
                 throw new Error(data.error || 'Failed to load job');
             }
             return data;
