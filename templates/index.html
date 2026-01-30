@@ -1150,29 +1150,46 @@
                 <div class="flex items-center justify-between max-w-7xl mx-auto">
                     <!-- Left: File + Batch selectors -->
                     <div class="flex items-center gap-6">
-                        <!-- File Selector -->
+                        <!-- File Selector (Custom Dropdown) -->
                         <div class="flex items-center gap-2">
                             <label class="text-[11px] text-gray-500 uppercase tracking-wide">File</label>
                             <span class="text-sm text-gray-300" id="reviewFileName">Loading...</span>
-                            <select id="reviewInputSelect" onchange="onReviewInputSelectChange()"
-                                    class="hidden px-2 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded text-primary-400 text-xs max-w-[350px]"
-                                    title="Switch between input files">
-                            </select>
+                            <div id="reviewInputDropdown" class="hidden relative">
+                                <button onclick="toggleFileDropdown()" id="reviewInputDropdownBtn"
+                                        class="flex items-center gap-2 px-3 py-1.5 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-primary-400 text-xs max-w-[350px] transition-colors">
+                                    <span id="reviewInputDropdownLabel" class="truncate">Select file...</span>
+                                    <svg class="w-3 h-3 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                    </svg>
+                                </button>
+                                <div id="reviewInputDropdownMenu" class="hidden absolute left-0 top-full mt-1 w-80 max-h-64 overflow-y-auto bg-surface-800 border border-gray-600/50 rounded-lg shadow-xl z-50">
+                                    <div id="reviewInputDropdownList" class="py-1"></div>
+                                </div>
+                            </div>
                         </div>
                         
-                        <!-- Batch Selector -->
+                        <!-- Batch Selector (Custom Dropdown) -->
                         <div class="flex items-center gap-2">
                             <label class="text-[11px] text-gray-500 uppercase tracking-wide">Batch</label>
-                            <button onclick="reviewPrevJob()" id="reviewPrevBtn" class="p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 disabled:opacity-40 disabled:cursor-not-allowed" title="Previous job">
+                            <button onclick="reviewPrevJob()" id="reviewPrevBtn" class="p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors" title="Previous job">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
                             </button>
-                            <select id="reviewJobSelect" onchange="onReviewJobSelectChange()"
-                                    class="px-2 py-1.5 bg-surface-700/50 border border-gray-600/50 rounded text-white text-xs min-w-[200px] max-w-[400px]">
-                            </select>
-                            <button onclick="reviewNextJob()" id="reviewNextBtn" class="p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 disabled:opacity-40 disabled:cursor-not-allowed" title="Next job">
+                            <div id="reviewJobDropdown" class="relative">
+                                <button onclick="toggleJobDropdown()" id="reviewJobDropdownBtn"
+                                        class="flex items-center gap-2 px-3 py-1.5 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-white text-xs min-w-[200px] max-w-[350px] transition-colors">
+                                    <span id="reviewJobDropdownLabel" class="truncate flex-1 text-left">Select job...</span>
+                                    <svg class="w-3 h-3 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                    </svg>
+                                </button>
+                                <div id="reviewJobDropdownMenu" class="hidden absolute left-0 top-full mt-1 w-80 max-h-64 overflow-y-auto bg-surface-800 border border-gray-600/50 rounded-lg shadow-xl z-50">
+                                    <div id="reviewJobDropdownList" class="py-1"></div>
+                                </div>
+                            </div>
+                            <button onclick="reviewNextJob()" id="reviewNextBtn" class="p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors" title="Next job">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
                             </button>
-                            <button onclick="loadReviewJobOptions(reviewJobData?.jobId)" class="p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400" title="Refresh job list">
+                            <button onclick="loadReviewJobOptions(reviewJobData?.jobId)" class="p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 transition-colors" title="Refresh job list">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
                             </button>
                         </div>
@@ -5978,10 +5995,11 @@
                 const data = await response.json();
                 reviewJobList = data.jobs || [];
                 
-                const select = document.getElementById('reviewJobSelect');
-                if (!select) return;
+                const dropdownList = document.getElementById('reviewJobDropdownList');
+                const dropdownLabel = document.getElementById('reviewJobDropdownLabel');
+                if (!dropdownList) return;
                 
-                select.innerHTML = '';
+                dropdownList.innerHTML = '';
                 
                 // Filter to reviewable + active jobs
                 const eligibleJobs = reviewJobList.filter(j => 
@@ -6028,14 +6046,13 @@
                     }
                 }
                 
+                let selectedLabel = 'Select job...';
+                
                 for (const job of dedupedJobs) {
-                    const option = document.createElement('option');
-                    option.value = job.jobId;
-
-                    // Rich label: date time • N files • primary filename (no truncation)
                     const filename = job.primaryFilename || 'Unknown';
                     const fileCount = job.inputCount || 1;
                     const filesLabel = fileCount > 1 ? `${fileCount} files` : '1 file';
+                    const isSelected = (job.jobId === selectedJobId);
 
                     let dateTimeStr = '';
                     if (job.createdAt) {
@@ -6046,19 +6063,26 @@
                         } catch (e) {}
                     }
 
-                    const labelParts = [];
-                    if (dateTimeStr) labelParts.push(dateTimeStr);
-                    labelParts.push(filesLabel);
-                    labelParts.push(filename);
-
-                    option.textContent = labelParts.join(' • ');
-                    option.title = `${filename}\nJob: ${job.jobId}\nFiles: ${fileCount}\nCreated: ${job.createdAt || 'unknown'}`;
-
-                    if (job.jobId === selectedJobId) {
-                        option.selected = true;
+                    if (isSelected) {
+                        selectedLabel = `${dateTimeStr} • ${filesLabel} • ${filename}`;
                     }
 
-                    select.appendChild(option);
+                    const item = document.createElement('button');
+                    item.type = 'button';
+                    item.className = `w-full px-3 py-2 text-left text-xs hover:bg-surface-600 transition-colors ${isSelected ? 'bg-primary-600/20 text-primary-400' : 'text-gray-300'}`;
+                    item.innerHTML = `
+                        <div class="flex items-center justify-between gap-2">
+                            <span class="truncate font-medium">${escapeHtml(filename)}</span>
+                            <span class="text-gray-500 flex-shrink-0">${filesLabel}</span>
+                        </div>
+                        <div class="text-[10px] text-gray-500 mt-0.5">${dateTimeStr}</div>
+                    `;
+                    item.onclick = () => selectJobFromDropdown(job.jobId);
+                    dropdownList.appendChild(item);
+                }
+                
+                if (dropdownLabel) {
+                    dropdownLabel.textContent = selectedLabel;
                 }
                 
                 // Update prev/next button states
@@ -6066,6 +6090,19 @@
             } catch (e) {
                 console.error('Failed to load review job options:', e);
             }
+        }
+        
+        async function selectJobFromDropdown(jobId) {
+            closeAllDropdowns();
+            if (!jobId || jobId === reviewJobData?.jobId) return;
+            
+            // Save current state before switching
+            if (reviewHasUnsavedChanges) {
+                await saveReviewState();
+            }
+            
+            // Load the new job
+            await openReviewForJobId(jobId);
         }
         
         function getReviewJobIndex(jobId) {
@@ -6108,47 +6145,6 @@
                 await openReviewPanel(job);
             } catch (e) {
                 showError(`Failed to load job: ${e.message}`);
-            }
-        }
-        
-        async function onReviewJobSelectChange() {
-            const select = document.getElementById('reviewJobSelect');
-            if (!select) return;
-            
-            const newJobId = select.value;
-            if (!newJobId || newJobId === reviewJobData?.jobId) return;
-            
-            // Clear all undo stacks when switching jobs (avoid stale snapshots)
-            reviewUndoStacks = {};
-            
-            // Find the job in our cached list
-            const newJob = reviewJobList.find(j => j.jobId === newJobId);
-            if (!newJob) {
-                // Fetch the job directly
-                try {
-                    const response = await fetch(`/api/jobs/${newJobId}`);
-                    const job = await response.json();
-                    if (job.error) {
-                        showError(job.error);
-                        return;
-                    }
-                    await openReviewPanel(job);
-                } catch (e) {
-                    showError(`Failed to load job: ${e.message}`);
-                }
-            } else {
-                // Fetch full job data
-                try {
-                    const response = await fetch(`/api/jobs/${newJobId}`);
-                    const job = await response.json();
-                    if (job.error) {
-                        showError(job.error);
-                        return;
-                    }
-                    await openReviewPanel(job);
-                } catch (e) {
-                    showError(`Failed to load job: ${e.message}`);
-                }
             }
         }
         
@@ -6233,44 +6229,88 @@
         }
         
         function populateInputFileSelector(job, selectedInputId) {
-            const select = document.getElementById('reviewInputSelect');
+            const dropdown = document.getElementById('reviewInputDropdown');
             const filenameSpan = document.getElementById('reviewFileName');
-            if (!select) return;
+            const dropdownList = document.getElementById('reviewInputDropdownList');
+            const dropdownLabel = document.getElementById('reviewInputDropdownLabel');
+            if (!dropdown) return;
             
             const inputs = job?.inputs || [];
             
             // Hide selector for single-file jobs
             if (inputs.length <= 1) {
-                select.classList.add('hidden');
+                dropdown.classList.add('hidden');
                 if (filenameSpan) filenameSpan.classList.remove('hidden');
                 return;
             }
             
-            // Multi-file job - show selector, hide static filename
-            select.classList.remove('hidden');
+            // Multi-file job - show dropdown, hide static filename
+            dropdown.classList.remove('hidden');
             if (filenameSpan) filenameSpan.classList.add('hidden');
             
-            select.innerHTML = '';
+            // Build dropdown items
+            dropdownList.innerHTML = '';
+            let selectedLabel = 'Select file...';
+            
             for (const inp of inputs) {
-                const opt = document.createElement('option');
-                opt.value = inp.uploadId || '';
                 const fname = inp.filename || inp.originalFilename || 'Unknown';
-                const duration = inp.durationSec ? ` (${formatDuration(inp.durationSec)})` : '';
-                opt.textContent = fname + duration;
-                opt.selected = (inp.uploadId === selectedInputId);
-                select.appendChild(opt);
+                const duration = inp.durationSec ? formatDuration(inp.durationSec) : '';
+                const isSelected = (inp.uploadId === selectedInputId);
+                
+                if (isSelected) {
+                    selectedLabel = fname + (duration ? ` (${duration})` : '');
+                }
+                
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = `w-full px-3 py-2 text-left text-xs hover:bg-surface-600 transition-colors flex items-center justify-between gap-2 ${isSelected ? 'bg-primary-600/20 text-primary-400' : 'text-gray-300'}`;
+                item.innerHTML = `
+                    <span class="truncate">${escapeHtml(fname)}</span>
+                    <span class="text-gray-500 flex-shrink-0">${duration}</span>
+                `;
+                item.onclick = () => selectFileFromDropdown(inp.uploadId);
+                dropdownList.appendChild(item);
+            }
+            
+            dropdownLabel.textContent = selectedLabel;
+        }
+        
+        function toggleFileDropdown() {
+            const menu = document.getElementById('reviewInputDropdownMenu');
+            const isOpen = !menu.classList.contains('hidden');
+            closeAllDropdowns();
+            if (!isOpen) {
+                menu.classList.remove('hidden');
             }
         }
         
-        async function onReviewInputSelectChange() {
-            const select = document.getElementById('reviewInputSelect');
-            if (!select || !reviewJobData) return;
-            
-            const newInputId = select.value;
-            if (newInputId === reviewSelectedInputId) return;
+        function toggleJobDropdown() {
+            const menu = document.getElementById('reviewJobDropdownMenu');
+            const isOpen = !menu.classList.contains('hidden');
+            closeAllDropdowns();
+            if (!isOpen) {
+                menu.classList.remove('hidden');
+            }
+        }
+        
+        function closeAllDropdowns() {
+            document.getElementById('reviewInputDropdownMenu')?.classList.add('hidden');
+            document.getElementById('reviewJobDropdownMenu')?.classList.add('hidden');
+        }
+        
+        // Close dropdowns when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('#reviewInputDropdown') && !e.target.closest('#reviewJobDropdown')) {
+                closeAllDropdowns();
+            }
+        });
+        
+        async function selectFileFromDropdown(inputId) {
+            closeAllDropdowns();
+            if (!reviewJobData || inputId === reviewSelectedInputId) return;
             
             // Find the input
-            const targetInput = reviewJobData.inputs?.find(i => i.uploadId === newInputId);
+            const targetInput = reviewJobData.inputs?.find(i => i.uploadId === inputId);
             if (!targetInput) return;
             
             // Save current input's state before switching
@@ -6279,15 +6319,20 @@
             }
             
             // Update state
-            reviewSelectedInputId = newInputId;
+            reviewSelectedInputId = inputId;
             
-            // Clear undo stack for the new input (start fresh on file switch)
-            reviewUndoStacks[newInputId] = [];
+            // Update dropdown label
+            const fname = targetInput.filename || targetInput.originalFilename || 'Unknown';
+            const duration = targetInput.durationSec ? formatDuration(targetInput.durationSec) : '';
+            document.getElementById('reviewInputDropdownLabel').textContent = fname + (duration ? ` (${duration})` : '');
+            
+            // Clear undo stack for the new input
+            reviewUndoStacks[inputId] = [];
             
             // Update audio player
             setupReviewAudio(reviewJobData.jobId, targetInput);
             
-            // Reload timeline for the new input (this also loads the new input's review state)
+            // Reload timeline
             await loadReviewTimeline(false);
         }
         
