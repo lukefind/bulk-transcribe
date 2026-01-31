@@ -1168,12 +1168,13 @@ class TimelineParser:
 
 def apply_review_state(timeline: ReviewTimeline, review_state: dict) -> ReviewTimeline:
     """
-    Apply saved review state (speaker relabels, chunk edits) to a timeline.
+    Apply saved review state (speaker relabels, chunk edits, deletions) to a timeline.
     
     review_state format:
     {
         "speakerLabelMap": {"SPEAKER_00": "Matt", "SPEAKER_01": "Host"},
         "chunkEdits": {"t_000001": {"speakerId": "SPEAKER_02"}, ...},
+        "deletedChunkIds": ["t_000005", "t_000010"],
         "uiPrefs": {...}
     }
     """
@@ -1182,6 +1183,11 @@ def apply_review_state(timeline: ReviewTimeline, review_state: dict) -> ReviewTi
     for speaker in timeline.speakers:
         if speaker.id in label_map:
             speaker.label = label_map[speaker.id]
+    
+    # Filter out deleted chunks
+    deleted_ids = set(review_state.get('deletedChunkIds', []))
+    if deleted_ids:
+        timeline.chunks = [c for c in timeline.chunks if c.chunk_id not in deleted_ids]
     
     # Apply chunk edits
     chunk_edits = review_state.get('chunkEdits', {})

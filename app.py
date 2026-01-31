@@ -4602,7 +4602,13 @@ def _build_review_timeline(session_id: str, job_id: str, input_id: str, filename
 
     job_dir = session_store.job_dir(session_id, job_id)
     state_path = os.path.join(job_dir, 'review', 'review_state.json')
-    review_state = session_store.read_json(state_path) or {}
+    review_state_full = session_store.read_json(state_path) or {}
+    
+    # Extract input-specific review state (handle perInput format)
+    if 'perInput' in review_state_full and input_id:
+        review_state = review_state_full.get('perInput', {}).get(input_id, {})
+    else:
+        review_state = review_state_full
 
     # Check for cached timeline file (from session import or previous export)
     if not force_rebuild and input_id:

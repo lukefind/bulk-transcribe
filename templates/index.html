@@ -7165,7 +7165,15 @@
             // Push undo snapshot before delete
             pushUndoSnapshot('delete', `Delete chunk at ${formatTime(chunk.start)}`);
             
-            // Remove the chunk
+            // Track deleted chunk ID so exports can filter it out
+            if (!reviewState.deletedChunkIds) {
+                reviewState.deletedChunkIds = [];
+            }
+            if (chunk.chunk_id && !reviewState.deletedChunkIds.includes(chunk.chunk_id)) {
+                reviewState.deletedChunkIds.push(chunk.chunk_id);
+            }
+            
+            // Remove the chunk from timeline
             const deletedIndex = reviewSelectedChunkIndex;
             reviewTimeline.chunks.splice(deletedIndex, 1);
             
