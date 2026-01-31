@@ -4491,20 +4491,36 @@ def api_export_review_md(job_id):
     
     # Build timeline with review state (respect view mode)
     view_mode = request.args.get('viewMode', 'merged')
-    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
-    
+    include_hallucinations = request.args.get('includeHallucinations', 'true').lower() == 'true'
+    timeline, review_state = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
+
+    # Get chunk edits for hallucination dismissals
+    chunk_edits = {}
+    if review_state:
+        if 'perInput' in review_state and input_id:
+            chunk_edits = review_state.get('perInput', {}).get(input_id, {}).get('chunkEdits', {})
+        else:
+            chunk_edits = review_state.get('chunkEdits', {})
+
     # Format as markdown
     lines = []
     for chunk in timeline.chunks:
+        # Respect hallucination visibility
+        cid = chunk.chunk_id if hasattr(chunk, 'chunk_id') else chunk.get('chunk_id', '')
+        is_dismissed = chunk_edits.get(cid, {}).get('hallucinationDismissed')
+        has_warning = chunk.hallucination_warning if hasattr(chunk, 'hallucination_warning') else chunk.get('hallucination_warning')
+        if (not include_hallucinations) and has_warning and not is_dismissed:
+            continue
+
         speaker = next((s for s in timeline.speakers if s.id == chunk.speaker_id), None)
         label = speaker.label if speaker else chunk.speaker_id or 'Speaker'
-        
+
         mins, secs = divmod(int(chunk.start), 60)
         hours, mins = divmod(mins, 60)
         timestamp = f'{hours:02d}:{mins:02d}:{secs:02d}' if hours else f'{mins:02d}:{secs:02d}'
-        
+
         lines.append(f'[{timestamp}] {label}: {chunk.text}')
-    
+
     content = '\n\n'.join(lines)
     
     return Response(
@@ -4538,11 +4554,27 @@ def api_export_review_txt(job_id):
     
     # Build timeline with review state (respect view mode)
     view_mode = request.args.get('viewMode', 'merged')
-    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
-    
+    include_hallucinations = request.args.get('includeHallucinations', 'true').lower() == 'true'
+    timeline, review_state = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
+
+    # Get chunk edits for hallucination dismissals
+    chunk_edits = {}
+    if review_state:
+        if 'perInput' in review_state and input_id:
+            chunk_edits = review_state.get('perInput', {}).get(input_id, {}).get('chunkEdits', {})
+        else:
+            chunk_edits = review_state.get('chunkEdits', {})
+
     # Format as plain text
     lines = []
     for chunk in timeline.chunks:
+        # Respect hallucination visibility
+        cid = chunk.chunk_id if hasattr(chunk, 'chunk_id') else chunk.get('chunk_id', '')
+        is_dismissed = chunk_edits.get(cid, {}).get('hallucinationDismissed')
+        has_warning = chunk.hallucination_warning if hasattr(chunk, 'hallucination_warning') else chunk.get('hallucination_warning')
+        if (not include_hallucinations) and has_warning and not is_dismissed:
+            continue
+
         speaker = next((s for s in timeline.speakers if s.id == chunk.speaker_id), None)
         label = speaker.label if speaker else chunk.speaker_id or 'Speaker'
         lines.append(f'{label}: {chunk.text}')
@@ -4580,10 +4612,30 @@ def api_export_review_timeline_json(job_id):
     
     # Build timeline with review state (respect view mode)
     view_mode = request.args.get('viewMode', 'merged')
-    timeline, _ = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
-    
+    include_hallucinations = request.args.get('includeHallucinations', 'true').lower() == 'true'
+    timeline, review_state = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
+
+    # Filter out hallucinations if not included
+    if not include_hallucinations:
+        chunk_edits = {}
+        if review_state:
+            if 'perInput' in review_state and input_id:
+                chunk_edits = review_state.get('perInput', {}).get(input_id, {}).get('chunkEdits', {})
+            else:
+                chunk_edits = review_state.get('chunkEdits', {})
+
+        filtered_chunks = []
+        for chunk in timeline.chunks:
+            cid = chunk.chunk_id if hasattr(chunk, 'chunk_id') else chunk.get('chunk_id', '')
+            is_dismissed = chunk_edits.get(cid, {}).get('hallucinationDismissed')
+            has_warning = chunk.hallucination_warning if hasattr(chunk, 'hallucination_warning') else chunk.get('hallucination_warning')
+            if has_warning and not is_dismissed:
+                continue
+            filtered_chunks.append(chunk)
+        timeline.chunks = filtered_chunks
+
     content = timeline.to_json()
-    
+
     return Response(
         content,
         mimetype='application/json',
@@ -4736,6 +4788,7 @@ def api_export_review_docx(job_id):
         # Build timeline with review state (respect view mode)
         view_mode = request.args.get('viewMode', 'merged')
         include_highlights = request.args.get('includeHighlights', 'true').lower() == 'true'
+        include_hallucinations = request.args.get('includeHallucinations', 'true').lower() == 'true'
         timeline, review_state = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
         
         # Get chunk edits for highlight info (handle perInput format)
@@ -4759,6 +4812,10 @@ def api_export_review_docx(job_id):
             highlighted = []
             for chunk in (timeline.chunks or []):
                 cid = val(chunk, 'chunk_id', '')
+                # Respect hallucination visibility: skip flagged chunks unless dismissed or explicitly included
+                is_dismissed = chunk_edits.get(cid, {}).get('hallucinationDismissed')
+                if (not include_hallucinations) and val(chunk, 'hallucination_warning') and not is_dismissed:
+                    continue
                 if chunk_edits.get(cid, {}).get('highlighted', False):
                     highlighted.append(chunk)
             if not highlighted:
@@ -4821,6 +4878,11 @@ def api_export_review_docx(job_id):
             text = val(chunk, 'text', '') or ''
             timestamp = fmt_time(start)
             
+            # Respect hallucination visibility: skip flagged chunks unless dismissed or explicitly included
+            is_dismissed = chunk_edits.get(chunk_id, {}).get('hallucinationDismissed')
+            if (not include_hallucinations) and val(chunk, 'hallucination_warning') and not is_dismissed:
+                continue
+
             # Check if chunk is highlighted
             is_highlighted = chunk_edits.get(chunk_id, {}).get('highlighted', False) if include_highlights else False
             
@@ -5007,8 +5069,9 @@ def api_export_review_pdf(job_id):
         # Build timeline with review state (respect view mode)
         view_mode = request.args.get('viewMode', 'merged')
         include_highlights = request.args.get('includeHighlights', 'true').lower() == 'true'
+        include_hallucinations = request.args.get('includeHallucinations', 'true').lower() == 'true'
         timeline, review_state = _build_review_timeline(session_id, job_id, input_id, filename, manifest, view_mode)
-        
+
         # Get chunk edits for highlight info (handle perInput format)
         chunk_edits = {}
         if review_state:
@@ -5016,7 +5079,16 @@ def api_export_review_pdf(job_id):
                 chunk_edits = review_state.get('perInput', {}).get(input_id, {}).get('chunkEdits', {})
             else:
                 chunk_edits = review_state.get('chunkEdits', {})
-        
+
+        # Helper to check if chunk should be included (respects hallucination filter)
+        def should_include_chunk(chunk):
+            if include_hallucinations:
+                return True
+            cid = val(chunk, 'chunk_id', '')
+            is_dismissed = chunk_edits.get(cid, {}).get('hallucinationDismissed')
+            has_warning = val(chunk, 'hallucination_warning')
+            return not has_warning or is_dismissed
+
         # Format time helper
         def fmt_time(seconds):
             m, s = divmod(int(seconds), 60)
@@ -5024,11 +5096,13 @@ def api_export_review_pdf(job_id):
             if h > 0:
                 return f"{h}:{m:02d}:{s:02d}"
             return f"{m}:{s:02d}"
-        
+
         # Build highlight sections (group consecutive highlighted chunks)
         def get_highlight_sections():
             highlighted = []
             for chunk in (timeline.chunks or []):
+                if not should_include_chunk(chunk):
+                    continue
                 cid = val(chunk, 'chunk_id', '')
                 if chunk_edits.get(cid, {}).get('highlighted', False):
                     highlighted.append(chunk)
@@ -5089,6 +5163,10 @@ def api_export_review_pdf(job_id):
         
         # Timestamped mode: [mm:ss] Speaker: text for each chunk
         for chunk in (timeline.chunks or []):
+            # Respect hallucination visibility
+            if not should_include_chunk(chunk):
+                continue
+
             chunk_id = val(chunk, 'chunk_id', '')
             sid = val(chunk, 'speaker_id')
             speaker = speakers.get(sid)
@@ -5097,14 +5175,14 @@ def api_export_review_pdf(job_id):
             start = val(chunk, 'start', 0)
             text = escape_xml(val(chunk, 'text', '') or '')
             timestamp = fmt_time(start)
-            
+
             # Check if chunk is highlighted
             is_highlighted = chunk_edits.get(chunk_id, {}).get('highlighted', False) if include_highlights else False
-            
+
             line = f'<font color="{color}"><b>[{timestamp}] {escape_xml(label)}:</b></font> {text}'
             style = highlight_style if is_highlighted else body_style
             story.append(Paragraph(line, style))
-        
+
         doc.build(story)
         buffer.seek(0)
         

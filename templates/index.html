@@ -8406,21 +8406,24 @@
             if (!reviewJobData?.jobId) return;
             const inputId = reviewSelectedInputId || '';
             const viewMode = reviewChunkViewMode || 'merged';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-md?inputId=${inputId}&viewMode=${viewMode}`;
+            const includeHallucinations = reviewShowHallucinations ? 'true' : 'false';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-md?inputId=${inputId}&viewMode=${viewMode}&includeHallucinations=${includeHallucinations}`;
         }
-        
+
         function exportReviewTxt() {
             if (!reviewJobData?.jobId) return;
             const inputId = reviewSelectedInputId || '';
             const viewMode = reviewChunkViewMode || 'merged';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-txt?inputId=${inputId}&viewMode=${viewMode}`;
+            const includeHallucinations = reviewShowHallucinations ? 'true' : 'false';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-txt?inputId=${inputId}&viewMode=${viewMode}&includeHallucinations=${includeHallucinations}`;
         }
-        
+
         function exportReviewJson() {
             if (!reviewJobData?.jobId) return;
             const inputId = reviewSelectedInputId || '';
             const viewMode = reviewChunkViewMode || 'merged';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-timeline-json?inputId=${inputId}&viewMode=${viewMode}`;
+            const includeHallucinations = reviewShowHallucinations ? 'true' : 'false';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-timeline-json?inputId=${inputId}&viewMode=${viewMode}&includeHallucinations=${includeHallucinations}`;
         }
         
         function exportReviewDocx() {
@@ -8428,7 +8431,8 @@
             const inputId = reviewSelectedInputId || '';
             const viewMode = reviewChunkViewMode || 'merged';
             const includeHighlights = reviewState.uiPrefs?.includeHighlightsInExport !== false ? 'true' : 'false';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-docx?inputId=${inputId}&viewMode=${viewMode}&includeHighlights=${includeHighlights}`;
+            const includeHallucinations = reviewShowHallucinations ? 'true' : 'false';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-docx?inputId=${inputId}&viewMode=${viewMode}&includeHighlights=${includeHighlights}&includeHallucinations=${includeHallucinations}`;
         }
         
         function exportReviewPdf() {
@@ -8436,7 +8440,8 @@
             const inputId = reviewSelectedInputId || '';
             const viewMode = reviewChunkViewMode || 'merged';
             const includeHighlights = reviewState.uiPrefs?.includeHighlightsInExport !== false ? 'true' : 'false';
-            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-pdf?inputId=${inputId}&viewMode=${viewMode}&includeHighlights=${includeHighlights}`;
+            const includeHallucinations = reviewShowHallucinations ? 'true' : 'false';
+            window.location.href = `/api/jobs/${reviewJobData.jobId}/review/export-pdf?inputId=${inputId}&viewMode=${viewMode}&includeHighlights=${includeHighlights}&includeHallucinations=${includeHallucinations}`;
         }
         
         // Keyboard shortcuts
