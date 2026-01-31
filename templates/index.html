@@ -1154,6 +1154,9 @@
                         <div class="flex items-center gap-2">
                             <label class="text-[11px] text-gray-500 uppercase tracking-wide">File</label>
                             <span class="text-sm text-gray-300" id="reviewFileName">Loading...</span>
+                            <button onclick="reviewPrevFile()" id="reviewPrevFileBtn" class="hidden p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors" title="Previous file">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                            </button>
                             <div id="reviewInputDropdown" class="hidden relative">
                                 <button onclick="toggleFileDropdown()" id="reviewInputDropdownBtn"
                                         class="flex items-center gap-2 px-3 py-1.5 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-primary-400 text-xs max-w-[400px] transition-colors">
@@ -1166,6 +1169,9 @@
                                     <div id="reviewInputDropdownList" class="py-1"></div>
                                 </div>
                             </div>
+                            <button onclick="reviewNextFile()" id="reviewNextFileBtn" class="hidden p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors" title="Next file">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                            </button>
                         </div>
                         
                         <!-- Batch Selector (Custom Dropdown) -->
@@ -6128,6 +6134,28 @@
             await openReviewForJobId(nextJobId);
         }
         
+        // File navigation functions
+        function getReviewFileIndex(inputId) {
+            if (!reviewJobData?.inputs || !inputId) return -1;
+            return reviewJobData.inputs.findIndex(i => i.uploadId === inputId);
+        }
+        
+        async function reviewPrevFile() {
+            const currentIdx = getReviewFileIndex(reviewSelectedInputId);
+            if (currentIdx <= 0 || !reviewJobData?.inputs) return;
+            
+            const prevInputId = reviewJobData.inputs[currentIdx - 1].uploadId;
+            await selectFileFromDropdown(prevInputId);
+        }
+        
+        async function reviewNextFile() {
+            const currentIdx = getReviewFileIndex(reviewSelectedInputId);
+            if (!reviewJobData?.inputs || currentIdx < 0 || currentIdx >= reviewJobData.inputs.length - 1) return;
+            
+            const nextInputId = reviewJobData.inputs[currentIdx + 1].uploadId;
+            await selectFileFromDropdown(nextInputId);
+        }
+        
         async function openReviewForJobId(jobId) {
             try {
                 const response = await fetch(`/api/jobs/${jobId}`);
@@ -6232,6 +6260,8 @@
             const filenameSpan = document.getElementById('reviewFileName');
             const dropdownList = document.getElementById('reviewInputDropdownList');
             const dropdownLabel = document.getElementById('reviewInputDropdownLabel');
+            const prevFileBtn = document.getElementById('reviewPrevFileBtn');
+            const nextFileBtn = document.getElementById('reviewNextFileBtn');
             if (!dropdown) return;
             
             const inputs = job?.inputs || [];
@@ -6244,16 +6274,25 @@
             const highlights = reviewFileStatus.highlights || {};
             const doneStatus = reviewFileStatus.done || {};
             
-            // Hide selector for single-file jobs
+            // Hide selector and nav buttons for single-file jobs
             if (totalFiles <= 1) {
                 dropdown.classList.add('hidden');
                 if (filenameSpan) filenameSpan.classList.remove('hidden');
+                if (prevFileBtn) prevFileBtn.classList.add('hidden');
+                if (nextFileBtn) nextFileBtn.classList.add('hidden');
                 return;
             }
             
-            // Multi-file job - show dropdown, hide static filename
+            // Multi-file job - show dropdown and nav buttons, hide static filename
             dropdown.classList.remove('hidden');
             if (filenameSpan) filenameSpan.classList.add('hidden');
+            if (prevFileBtn) prevFileBtn.classList.remove('hidden');
+            if (nextFileBtn) nextFileBtn.classList.remove('hidden');
+            
+            // Find current file index and update nav button states
+            const currentIdx = inputs.findIndex(i => i.uploadId === selectedInputId);
+            if (prevFileBtn) prevFileBtn.disabled = currentIdx <= 0;
+            if (nextFileBtn) nextFileBtn.disabled = currentIdx < 0 || currentIdx >= totalFiles - 1;
             
             // Build dropdown items
             dropdownList.innerHTML = '';
@@ -6368,10 +6407,19 @@
             // Update state
             reviewSelectedInputId = inputId;
             
-            // Update dropdown label
+            // Update dropdown label and nav button states
             const fname = targetInput.filename || targetInput.originalFilename || 'Unknown';
             const duration = targetInput.durationSec ? formatDuration(targetInput.durationSec) : '';
-            document.getElementById('reviewInputDropdownLabel').textContent = fname + (duration ? ` (${duration})` : '');
+            const totalFiles = reviewJobData.inputs?.length || 0;
+            const currentIdx = reviewJobData.inputs.findIndex(i => i.uploadId === inputId);
+            const fileNum = String(currentIdx + 1).padStart(2, '0');
+            document.getElementById('reviewInputDropdownLabel').textContent = `${fileNum}/${totalFiles} • ${fname}` + (duration ? ` (${duration})` : '');
+            
+            // Update file nav button states
+            const prevFileBtn = document.getElementById('reviewPrevFileBtn');
+            const nextFileBtn = document.getElementById('reviewNextFileBtn');
+            if (prevFileBtn) prevFileBtn.disabled = currentIdx <= 0;
+            if (nextFileBtn) nextFileBtn.disabled = currentIdx < 0 || currentIdx >= totalFiles - 1;
             
             // Update Done checkbox for the new input
             updateDoneCheckboxForCurrentInput();
