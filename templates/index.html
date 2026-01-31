@@ -1148,32 +1148,8 @@
             <!-- Row 2: File/Batch Selectors -->
             <div class="px-4 py-2">
                 <div class="flex items-center justify-between max-w-7xl mx-auto">
-                    <!-- Left: File + Batch selectors -->
+                    <!-- Left: Batch + File selectors -->
                     <div class="flex items-center gap-6">
-                        <!-- File Selector (Custom Dropdown) -->
-                        <div class="flex items-center gap-2">
-                            <label class="text-[11px] text-gray-500 uppercase tracking-wide">File</label>
-                            <span class="text-sm text-gray-300" id="reviewFileName">Loading...</span>
-                            <button onclick="reviewPrevFile()" id="reviewPrevFileBtn" class="hidden p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors" title="Previous file">
-                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
-                            </button>
-                            <div id="reviewInputDropdown" class="hidden relative">
-                                <button onclick="toggleFileDropdown()" id="reviewInputDropdownBtn"
-                                        class="flex items-center gap-2 px-3 py-1.5 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-primary-400 text-xs max-w-[400px] transition-colors">
-                                    <span id="reviewInputDropdownLabel" class="truncate">Select file...</span>
-                                    <svg class="w-3 h-3 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-                                    </svg>
-                                </button>
-                                <div id="reviewInputDropdownMenu" class="hidden absolute left-0 top-full mt-1 w-[min(400px,90vw)] max-h-[min(400px,60vh)] overflow-y-auto bg-surface-800 border border-gray-600/50 rounded-lg shadow-xl z-50">
-                                    <div id="reviewInputDropdownList" class="py-1"></div>
-                                </div>
-                            </div>
-                            <button onclick="reviewNextFile()" id="reviewNextFileBtn" class="hidden p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors" title="Next file">
-                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
-                            </button>
-                        </div>
-                        
                         <!-- Batch Selector (Custom Dropdown) -->
                         <div class="flex items-center gap-2">
                             <label class="text-[11px] text-gray-500 uppercase tracking-wide">Batch</label>
@@ -1197,6 +1173,30 @@
                             </button>
                             <button onclick="loadReviewJobOptions(reviewJobData?.jobId)" class="p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 transition-colors" title="Refresh job list">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                            </button>
+                        </div>
+                        
+                        <!-- File Selector (Custom Dropdown) -->
+                        <div class="flex items-center gap-2">
+                            <label class="text-[11px] text-gray-500 uppercase tracking-wide">File</label>
+                            <span class="text-sm text-gray-300" id="reviewFileName">Loading...</span>
+                            <button onclick="reviewPrevFile()" id="reviewPrevFileBtn" class="hidden p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors" title="Previous file">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                            </button>
+                            <div id="reviewInputDropdown" class="hidden relative">
+                                <button onclick="toggleFileDropdown()" id="reviewInputDropdownBtn"
+                                        class="flex items-center gap-2 px-3 py-1.5 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-primary-400 text-xs max-w-[400px] transition-colors">
+                                    <span id="reviewInputDropdownLabel" class="truncate">Select file...</span>
+                                    <svg class="w-3 h-3 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                    </svg>
+                                </button>
+                                <div id="reviewInputDropdownMenu" class="hidden absolute left-0 top-full mt-1 w-[min(400px,90vw)] max-h-[min(400px,60vh)] overflow-y-auto bg-surface-800 border border-gray-600/50 rounded-lg shadow-xl z-50">
+                                    <div id="reviewInputDropdownList" class="py-1"></div>
+                                </div>
+                            </div>
+                            <button onclick="reviewNextFile()" id="reviewNextFileBtn" class="hidden p-1 bg-surface-700/50 hover:bg-surface-600 border border-gray-600/50 rounded text-gray-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors" title="Next file">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
                             </button>
                         </div>
                     </div>
