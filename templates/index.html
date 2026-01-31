@@ -2698,26 +2698,34 @@
             return output?.forUploadId || output?.inputId || null;
         }
 
-        function getLatestCompletedInputId(job) {
+        function getFirstCompletedInputId(job) {
+            // Return the first input that has a completed transcript, in input order
             const outputs = job.outputs || [];
-            let latestInputId = null;
+            const inputs = job.inputs || [];
+            const completedInputIds = new Set();
+            
             for (const output of outputs) {
                 if (output?.type === 'json' && !output?.error) {
                     const inputId = getInputIdFromOutput(output);
-                    if (inputId) {
-                        latestInputId = inputId;
-                    }
+                    if (inputId) completedInputIds.add(inputId);
                 }
             }
-            return latestInputId;
+            
+            // Return first input (in order) that has completed
+            for (const input of inputs) {
+                if (completedInputIds.has(input.uploadId)) {
+                    return input.uploadId;
+                }
+            }
+            return null;
         }
 
         async function openReviewLatestForJob(jobId) {
             try {
                 const job = await fetchJobDetails(jobId);
-                const latestInputId = getLatestCompletedInputId(job);
+                const firstInputId = getFirstCompletedInputId(job);
                 
-                if (!latestInputId) {
+                if (!firstInputId) {
                     // No completed files yet - show message for multi-file jobs, fallback for single-file
                     if ((job.inputs?.length || 0) > 1) {
                         showError('No files completed yet. Check the Files button to see progress.');
@@ -2729,7 +2737,7 @@
                     return;
                 }
                 
-                openReviewForJob(jobId, latestInputId);
+                openReviewForJob(jobId, firstInputId);
             } catch (e) {
                 showError(`Failed to open review: ${e.message}`);
             }
