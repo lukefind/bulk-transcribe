@@ -5447,6 +5447,24 @@ def _run_session_export(export_id: str, session_id: str):
                                 except Exception:
                                     pass
 
+                    # Export audio files from uploads directory for each input
+                    if manifest:
+                        uploads_base = session_store.uploads_dir(session_id)
+                        for input_info in manifest.get('inputs', []):
+                            upload_id = input_info.get('uploadId', '')
+                            if not upload_id:
+                                continue
+                            # Find the actual upload file
+                            upload_path = session_store.find_upload_by_id(session_id, upload_id)
+                            if upload_path and os.path.isfile(upload_path):
+                                try:
+                                    upload_fname = os.path.basename(upload_path)
+                                    with open(upload_path, 'rb') as f:
+                                        zf.writestr(f'{job_folder}/uploads/{upload_fname}', f.read())
+                                        files_total += 1
+                                except Exception:
+                                    pass
+
                     job_count += 1
                         
                 except Exception as e:
@@ -5719,6 +5737,17 @@ def api_import_session():
                             if filename:
                                 output_dest = os.path.join(job_dir, 'outputs', filename)
                                 with open(output_dest, 'wb') as f:
+                                    f.write(zf.read(name))
+                    
+                    # Restore audio files from uploads/ to session uploads directory
+                    uploads_dest_dir = session_store.uploads_dir(session_id)
+                    os.makedirs(uploads_dest_dir, exist_ok=True)
+                    for name in namelist:
+                        if name.startswith(f'{job_prefix}uploads/') and not name.endswith('/'):
+                            filename = name.split('/')[-1]
+                            if filename:
+                                upload_dest = os.path.join(uploads_dest_dir, filename)
+                                with open(upload_dest, 'wb') as f:
                                     f.write(zf.read(name))
                     
                     imported.append({
