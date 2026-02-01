@@ -5667,7 +5667,7 @@ def api_import_session():
                     
                     # Write job manifest
                     manifest_path = session_store.job_manifest_path(session_id, new_job_id)
-                    session_store.write_json(manifest_path, job_data)
+                    session_store.atomic_write_json(manifest_path, job_data)
                     
                     # Restore review_state.json if present (check both old and new paths)
                     review_state_path = f'{job_prefix}review_state.json'
@@ -5675,11 +5675,11 @@ def api_import_session():
                     if review_state_path in namelist:
                         review_state = json.loads(zf.read(review_state_path).decode('utf-8'))
                         state_dest = os.path.join(job_dir, 'review', 'review_state.json')
-                        session_store.write_json(state_dest, review_state)
+                        session_store.atomic_write_json(state_dest, review_state)
                     elif review_state_path_new in namelist:
                         review_state = json.loads(zf.read(review_state_path_new).decode('utf-8'))
                         state_dest = os.path.join(job_dir, 'review', 'review_state.json')
-                        session_store.write_json(state_dest, review_state)
+                        session_store.atomic_write_json(state_dest, review_state)
 
                     # Restore timeline.json if present (check both old and new paths)
                     timeline_path = f'{job_prefix}timeline.json'
