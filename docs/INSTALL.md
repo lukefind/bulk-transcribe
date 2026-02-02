@@ -94,3 +94,37 @@ curl -sS https://<worker-url>/v1/ping -H "Authorization: Bearer $WORKER_TOKEN" |
 
 - First run is slower (model download + cache warm-up)
 - Diarization adds time; use Fast Switching only when needed
+
+---
+
+## Diarization Setup
+
+Speaker diarization requires a HuggingFace token with access to pyannote models.
+
+### 1) Create HuggingFace Token
+
+1. Create an account at https://huggingface.co
+2. Go to Settings → Access Tokens
+3. Create a token with **read** access
+
+### 2) Accept Model Terms
+
+You must accept the terms for these models (visit each link while logged in):
+
+- https://huggingface.co/pyannote/speaker-diarization-3.1
+- https://huggingface.co/pyannote/segmentation-3.0
+
+### 3) Set Token
+
+Add to your `.env` file:
+```bash
+HF_TOKEN=hf_your_token_here
+```
+
+### 4) Verify Access
+
+```bash
+curl -sS http://localhost:8476/api/runtime | jq '{hfTokenPresent, hfAccessOk, diarizationAvailable}'
+```
+
+If `hfAccessOk` is false, check that you've accepted the model terms above.

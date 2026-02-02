@@ -135,3 +135,45 @@ The Dockerfile sets `TMPDIR=/var/tmp/pip` to avoid I/O errors during pip package
 | `WORKER_MAX_FILE_MB` | 2000 | Max upload size |
 | `WORKER_MAX_CONCURRENT_JOBS` | 1 | Max parallel jobs |
 | `HF_TOKEN` | (optional) | HuggingFace token for diarization |
+
+## RunPod Deployment Notes
+
+Target images for RunPod template:
+- `ghcr.io/lukefind/bulk-transcribe-worker:main-amd64` (amd64)
+- `ghcr.io/lukefind/bulk-transcribe-worker:main-arm64` (arm64)
+
+### Per-arch Build and Push
+
+If you need separate architecture tags instead of a multi-arch manifest:
+
+```bash
+# AMD64
+docker build -f worker/Dockerfile \
+  --build-arg BUILD_COMMIT=$(git rev-parse --short HEAD) \
+  --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --platform linux/amd64 \
+  -t ghcr.io/lukefind/bulk-transcribe-worker:main-amd64 .
+
+docker push ghcr.io/lukefind/bulk-transcribe-worker:main-amd64
+
+# ARM64
+docker build -f worker/Dockerfile \
+  --build-arg BUILD_COMMIT=$(git rev-parse --short HEAD) \
+  --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --platform linux/arm64 \
+  -t ghcr.io/lukefind/bulk-transcribe-worker:main-arm64 .
+
+docker push ghcr.io/lukefind/bulk-transcribe-worker:main-arm64
+```
+
+### Multi-arch Manifest (Optional)
+
+```bash
+docker manifest create ghcr.io/lukefind/bulk-transcribe-worker:latest \
+  --amend ghcr.io/lukefind/bulk-transcribe-worker:main-amd64 \
+  --amend ghcr.io/lukefind/bulk-transcribe-worker:main-arm64
+
+docker manifest push ghcr.io/lukefind/bulk-transcribe-worker:latest
+```
+
+**Note**: If the RunPod template expects `:main-amd64`, ensure that specific tag is pushed.
