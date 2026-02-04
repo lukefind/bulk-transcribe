@@ -8926,10 +8926,22 @@
             sourceSelect.innerHTML = '<option value="">Select speaker to remove...</option>';
             targetSelect.innerHTML = '<option value="">Select speaker to keep...</option>';
             
-            // Add speaker options
-            for (const speaker of reviewTimeline.speakers) {
+            // Get number map for display
+            const numberMap = reviewState.speakerNumberMap || {};
+            
+            // Build list with assigned numbers for sorting
+            const speakersWithNumbers = reviewTimeline.speakers.map((speaker, idx) => {
+                const assignedNum = numberMap[speaker.id] ?? (idx + 1);
+                return { speaker, assignedNum };
+            });
+            
+            // Sort by assigned number
+            speakersWithNumbers.sort((a, b) => a.assignedNum - b.assignedNum);
+            
+            // Add speaker options in number order
+            for (const { speaker, assignedNum } of speakersWithNumbers) {
                 const label = getSpeakerDisplayLabel(speaker);
-                const optionHtml = `<option value="${speaker.id}">${label} (${speaker.id})</option>`;
+                const optionHtml = `<option value="${speaker.id}">Speaker ${assignedNum}: ${label}</option>`;
                 sourceSelect.innerHTML += optionHtml;
                 targetSelect.innerHTML += optionHtml;
             }
