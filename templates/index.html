@@ -8989,11 +8989,25 @@
             // Push undo snapshot before merge
             pushUndoSnapshot('merge_speakers', `Merge ${sourceLabel} into ${targetLabel}`);
             
+            // Ensure perInput structure exists for current input
+            if (!reviewState.perInput) reviewState.perInput = {};
+            if (!reviewState.perInput[reviewSelectedInputId]) {
+                reviewState.perInput[reviewSelectedInputId] = { chunkEdits: {} };
+            }
+            if (!reviewState.perInput[reviewSelectedInputId].chunkEdits) {
+                reviewState.perInput[reviewSelectedInputId].chunkEdits = {};
+            }
+            const chunkEdits = reviewState.perInput[reviewSelectedInputId].chunkEdits;
+            
             // Perform merge
-            // 1. Reassign all chunks from source to target
+            // 1. Reassign all chunks from source to target AND record in chunkEdits
             for (const chunk of reviewTimeline.chunks) {
                 if (chunk.speaker_id === sourceId) {
                     chunk.speaker_id = targetId;
+                    // Record the speaker change in chunkEdits for persistence
+                    const cid = chunk.chunk_id;
+                    if (!chunkEdits[cid]) chunkEdits[cid] = {};
+                    chunkEdits[cid].speaker_id = targetId;
                 }
             }
             
