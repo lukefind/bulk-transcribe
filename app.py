@@ -4505,21 +4505,32 @@ def api_export_review_md(job_id):
     # Format as markdown
     lines = []
     for chunk in timeline.chunks:
+        # Handle both object and dict access patterns
+        def get_attr(obj, attr, default=''):
+            if hasattr(obj, attr):
+                return getattr(obj, attr, default)
+            elif isinstance(obj, dict):
+                return obj.get(attr, default)
+            return default
+        
         # Respect hallucination visibility
-        cid = chunk.chunk_id if hasattr(chunk, 'chunk_id') else chunk.get('chunk_id', '')
+        cid = get_attr(chunk, 'chunk_id', '')
         is_dismissed = chunk_edits.get(cid, {}).get('hallucinationDismissed')
-        has_warning = chunk.hallucination_warning if hasattr(chunk, 'hallucination_warning') else chunk.get('hallucination_warning')
+        has_warning = get_attr(chunk, 'hallucination_warning')
         if (not include_hallucinations) and has_warning and not is_dismissed:
             continue
 
-        speaker = next((s for s in timeline.speakers if s.id == chunk.speaker_id), None)
-        label = speaker.label if speaker else chunk.speaker_id or 'Speaker'
+        speaker_id = get_attr(chunk, 'speaker_id', '')
+        speaker = next((s for s in timeline.speakers if s.id == speaker_id), None)
+        label = speaker.label if speaker else speaker_id or 'Speaker'
 
-        mins, secs = divmod(int(chunk.start), 60)
+        start_time = get_attr(chunk, 'start', 0) or 0
+        mins, secs = divmod(int(start_time), 60)
         hours, mins = divmod(mins, 60)
         timestamp = f'{hours:02d}:{mins:02d}:{secs:02d}' if hours else f'{mins:02d}:{secs:02d}'
 
-        lines.append(f'[{timestamp}] {label}: {chunk.text}')
+        text = get_attr(chunk, 'text', '')
+        lines.append(f'[{timestamp}] {label}: {text}')
 
     content = '\n\n'.join(lines)
     
@@ -4568,16 +4579,26 @@ def api_export_review_txt(job_id):
     # Format as plain text
     lines = []
     for chunk in timeline.chunks:
+        # Handle both object and dict access patterns
+        def get_attr(obj, attr, default=''):
+            if hasattr(obj, attr):
+                return getattr(obj, attr, default)
+            elif isinstance(obj, dict):
+                return obj.get(attr, default)
+            return default
+        
         # Respect hallucination visibility
-        cid = chunk.chunk_id if hasattr(chunk, 'chunk_id') else chunk.get('chunk_id', '')
+        cid = get_attr(chunk, 'chunk_id', '')
         is_dismissed = chunk_edits.get(cid, {}).get('hallucinationDismissed')
-        has_warning = chunk.hallucination_warning if hasattr(chunk, 'hallucination_warning') else chunk.get('hallucination_warning')
+        has_warning = get_attr(chunk, 'hallucination_warning')
         if (not include_hallucinations) and has_warning and not is_dismissed:
             continue
 
-        speaker = next((s for s in timeline.speakers if s.id == chunk.speaker_id), None)
-        label = speaker.label if speaker else chunk.speaker_id or 'Speaker'
-        lines.append(f'{label}: {chunk.text}')
+        speaker_id = get_attr(chunk, 'speaker_id', '')
+        speaker = next((s for s in timeline.speakers if s.id == speaker_id), None)
+        label = speaker.label if speaker else speaker_id or 'Speaker'
+        text = get_attr(chunk, 'text', '')
+        lines.append(f'{label}: {text}')
     
     content = '\n\n'.join(lines)
     
